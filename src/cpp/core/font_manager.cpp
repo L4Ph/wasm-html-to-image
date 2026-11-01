@@ -519,6 +519,34 @@ void SatoruFontManager::scanFontFaces(const std::string& css) {
     std::string_view css_sv = css;
     if (!contains_ascii_ci(css_sv, "@font-face")) return;
 
+    // What a big stylesheet (the default web font's, over 100 KB of @font-face blocks) scanned to, kept by its text: every
+    // render of a page starts a new instance and is handed the same stylesheet again.
+    using ScannedFace = std::pair<font_request, font_face_source>;
+    struct ScanMemo {
+        size_t hash = 0;
+        size_t size = 0;
+        std::vector<ScannedFace> faces;
+    };
+    constexpr size_t kMemoMinSize = 4096;
+    constexpr size_t kMemoSlots = 4;
+    static thread_local std::vector<ScanMemo> memo;
+
+    auto add_face = [this](const font_request& req, const font_face_source& src) {
+        auto& sources = m_fontFaces[req];
+        for (const auto& existing_src : sources)
+            if (existing_src.url == src.url) return;
+        sources.push_back(src);
+    };
+    const bool memoise = css.size() >= kMemoMinSize;
+    const size_t css_hash = memoise ? std::hash<std::string_view>{}(css_sv) : 0;
+    if (memoise)
+        for (const ScanMemo& m : memo)
+            if (m.hash == css_hash && m.size == css.size()) {
+                for (const ScannedFace& f : m.faces) add_face(f.first, f.second);
+                return;
+            }
+    std::vector<ScannedFace> scanned;
+
     size_t pos = 0;
 
     while (true) {
@@ -638,20 +666,15 @@ void SatoruFontManager::scanFontFaces(const std::string& css) {
                     req.weight = w;
                     req.slant = slant;
 
-                    auto& sources = m_fontFaces[req];
-                    bool duplicate = false;
-                    for (const auto& existing_src : sources) {
-                        if (existing_src.url == src.url) {
-                            duplicate = true;
-                            break;
-                        }
-                    }
-                    if (!duplicate) {
-                        sources.push_back(src);
-                    }
+                    add_face(req, src);
+                    if (memoise) scanned.emplace_back(req, src);
                 }
             }
         }
+    }
+    if (memoise) {
+        if (memo.size() >= kMemoSlots) memo.erase(memo.begin());
+        memo.push_back(ScanMemo{css_hash, css.size(), std::move(scanned)});
     }
 }
 
