@@ -94,9 +94,6 @@ const { data } = await render({
 ```
 
 The theme names are the type `MermaidTheme` and the list `MERMAID_THEMES`, both importable from `wasm-html-to-image` ([Themes](#4-themes)). An unknown theme name throws an error that lists the names you can use. `onWarning` is called for `render` on the worker pool (`/workers`) too.
-
-The former `renderMermaidWith` and `bindRenderMermaid` were merged into `render({ mermaid })` and removed. Replace `renderMermaidWith(render, source, options)` with `render({ mermaid: { source, ...options } })`.
-
 `mermaidToHtml(source, options)` returns an HTML string with one diagram, for when you want a page.
 
 ---

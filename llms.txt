@@ -203,7 +203,6 @@ const webp = await render({ mermaid: { source: "sequenceDiagram\n  A->>B: hi", t
 - **Diagram types**: flowchart / graph (subgraphs, swimlane), sequence, state, class, ER, requirement, gantt, pie, xychart, quadrant, journey, timeline, mindmap, kanban, gitGraph, block, C4, packet, sankey, treemap, radar, architecture, and more. An unsupported or broken source is drawn as a one-line error box (never throws; `onWarning` reports it).
 - **Markdown / CLI**: ` ```mermaid ` fences in Markdown input are drawn as diagrams; the CLI takes a `.mmd` / `.mermaid` file or `--mermaid` (`--mermaid-theme`, `--mermaid-mode`, `--mermaid-directives`).
 - **Inside HTML**: `<div class="mermaid">…source…</div>` or `<pre class="mermaid">…</pre>` in the page passed to `render({ value })` is drawn as a diagram, laid out as a block among the other elements (this is what `renderMermaid` itself builds). Configure it with CSS on the element: `--mermaid-theme: nord;` (a theme above), `--mermaid-accent: #f60;`, `--mermaid-mode: recover;`, `--mermaid-directives: on;`, `--mermaid-max-lines`, `--mermaid-max-bytes`; without a theme the colours are derived from the element's `color` only, so on a dark page set a theme (`dark`, `nord`, ...). Write the source as text (escape `<` and `&`).
-- **Removed APIs**: `renderMermaidWith` and `bindRenderMermaid` no longer exist; call `render({ mermaid: { source } })`.
 
 ## Options Reference (`RenderOptions`)
 

@@ -94,9 +94,6 @@ const { data } = await render({
 ```
 
 テーマ名の型 `MermaidTheme` と一覧 `MERMAID_THEMES` は、`wasm-html-to-image` から import できます（[テーマ](#4-テーマ)）。存在しないテーマ名を渡すと、使える名前を並べたエラーになります。`onWarning` は、ワーカープール（`/workers`）の `render` でも呼ばれます。
-
-以前の `renderMermaidWith` と `bindRenderMermaid` は、`render({ mermaid })` に統合して削除しました。`renderMermaidWith(render, source, options)` は `render({ mermaid: { source, ...options } })` に置き換えてください。
-
 HTML ページとして使いたいときは、`mermaidToHtml(source, options)` が、図を 1 つ含む HTML 文字列を返します。
 
 ---
