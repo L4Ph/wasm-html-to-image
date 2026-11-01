@@ -136,6 +136,11 @@ export interface HtmlToImageOptions extends RenderOptions {
    */
   mermaid?: MermaidInput;
   /**
+   * Internal (used by `mermaid`): size the image to the `.mermaid` element of the page, plus this padding on each side, instead of
+   * `width`, which is then only the width the page is laid out at to load its fonts. Instance pipeline only.
+   */
+  fitContent?: number;
+  /**
    * Run the page's scripts before rendering (Node only; `single` entry point and the CLI's `--js`).
    * The page is loaded into jsdom (optional dependency `jsdom`), its scripts run, and the resulting
    * DOM is rendered. `true` waits for `load` plus 1 s; pass `{ timeout, settleMs, waitFor }` to tune it.

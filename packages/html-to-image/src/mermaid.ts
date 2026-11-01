@@ -161,6 +161,12 @@ export async function renderMermaidInput(
   const value = mermaidToHtml(input.source, { ...input, raster });
   const listen = mermaidListen(input.onWarning, rest);
   let width = options.width;
+  if (width === undefined && raster) {
+    // one pass: the page is laid out wide to load its fonts, and the image is drawn as wide as the diagram in it
+    const drawn = await render({ ...rest, ...listen, value, width: PROBE_WIDTH, format, fitContent: padding });
+    // an image as wide as the probe page was not fitted (the engine cannot, or the diagram is that wide): draw it the long way
+    if (drawn.width !== PROBE_WIDTH) return drawn;
+  }
   if (width === undefined) {
     // laid out wide first to learn the diagram's size; an SVG with a transparent page needs nothing more than that width
     // changed in its first tag, so that one render is the answer (a raster image has to be drawn at its own width)

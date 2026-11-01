@@ -95,6 +95,7 @@ export interface Orchestration {
   diagnostics: boolean;
   onDiagnostics: HtmlToImageOptions["onDiagnostics"];
   onLayout: HtmlToImageOptions["onLayout"];
+  fitContent: HtmlToImageOptions["fitContent"];
   resolveResource: ResolveResourceHook | undefined;
   mediaType: "screen" | "print";
   textToPaths: boolean | undefined;
@@ -172,6 +173,7 @@ export function createOrchestration(
     diagnostics = false,
     onDiagnostics,
     onLayout,
+    fitContent,
     resolveResource,
     mediaType = "screen",
     textToPaths,
@@ -351,6 +353,7 @@ export function createOrchestration(
     diagnostics,
     onDiagnostics,
     onLayout,
+    fitContent,
     resolveResource,
     mediaType,
     textToPaths,
@@ -644,7 +647,7 @@ export async function tryRunHtmlInstance(
     animation,
     animationFrames,
     animationLoop,
-    width,
+    width: pageWidth,
     height,
     baseUrl,
     fontMap,
@@ -671,6 +674,7 @@ export async function tryRunHtmlInstance(
   const loadImage = module.converter_load_image;
   if (typeof loadImage !== "function")
     throw loggedBinding("converter_load_image");
+  let width = pageWidth;
   const sInst = module.satoru_create_instance();
   try {
     const resolveStart = now();
@@ -678,7 +682,7 @@ export async function tryRunHtmlInstance(
       module,
       sInst,
       htmls,
-      width,
+      pageWidth,
       height,
       baseUrl,
       fontMap ?? defaultFontMap,
@@ -688,6 +692,17 @@ export async function tryRunHtmlInstance(
     );
     addTime("resolveResources", now() - resolveStart);
     emitLog(LogLevel.Info, "resources resolved");
+
+    // Fit to the content: the page was laid out at `pageWidth` to load what it needs; the image is as wide as the diagram in it
+    // (plus the padding), which the layout says. No second pass over the resources.
+    if (orch.fitContent !== undefined && typeof module.satoru_layout_json === "function") {
+      const page = Array.isArray(htmls) ? htmls[0] : htmls;
+      const boxes = JSON.parse(
+        module.satoru_layout_json(sInst, page, pageWidth, height ?? 0, orch.mediaTypeInt),
+      ) as LayoutBox[];
+      const box = boxes.find((b) => /(^|\s)mermaid(\s|$)/.test(b.c));
+      if (box) width = Math.ceil(box.w + 2 * orch.fitContent);
+    }
 
     if (orch.onLayout && typeof module.satoru_layout_json === "function") {
       const page = Array.isArray(htmls) ? htmls[0] : htmls;

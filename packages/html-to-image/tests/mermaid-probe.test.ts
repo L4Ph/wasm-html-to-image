@@ -10,11 +10,12 @@ function page(width: number, extra = ""): string {
   );
 }
 
-function fakeEngine(extra = "") {
-  const calls: Array<{ width?: number; format?: string }> = [];
+function fakeEngine(extra = "", fits = false) {
+  const calls: Array<{ width?: number; format?: string; fit?: number }> = [];
   const render = async (input: HtmlToImageOptions) => {
-    calls.push({ width: input.width, format: input.format });
-    const width = input.width ?? 800;
+    calls.push({ width: input.width, format: input.format, fit: input.fitContent });
+    // an engine that fits to the content draws the diagram (300 wide) and its padding
+    const width = fits && input.fitContent !== undefined ? 300 + 2 * input.fitContent : (input.width ?? 800);
     return input.format === "svg"
       ? { data: page(width, extra), width, height: 152, format: "svg" as const }
       : { data: new Uint8Array([1, 2, 3]), width, height: 152, format: input.format ?? ("png" as const) };
@@ -34,10 +35,18 @@ describe("render({ mermaid }): the probe render", () => {
     expect(out.data).toBe(page(332));
   });
 
-  it("is followed by a render at the diagram's width for a raster image", async () => {
+  it("is one render for a raster image when the engine fits the image to the diagram", async () => {
+    const { render, calls } = fakeEngine("", true);
+    const out = await draw(render, "flowchart TD\nA-->B", { format: "png", padding: 10 });
+    expect(calls).toEqual([{ width: 4096, format: "png", fit: 10 }]);
+    expect(out.width).toBe(320);
+  });
+
+  it("is followed by a render at the diagram's width for a raster image when the engine does not fit", async () => {
     const { render, calls } = fakeEngine();
     const out = await draw(render, "flowchart TD\nA-->B", { format: "png" });
     expect(calls.map((c) => [c.width, c.format])).toEqual([
+      [4096, "png"],
       [4096, "svg"],
       [332, "png"],
     ]);
@@ -68,10 +77,10 @@ describe("render({ mermaid }): the options", () => {
     const seen: HtmlToImageOptions[] = [];
     const render = (async (input: HtmlToImageOptions) => {
       seen.push(input);
-      return { data: input.format === "svg" ? page(input.width ?? 800) : new Uint8Array([1]), width: input.width ?? 800, height: 152, format: input.format ?? "png" };
+      return { data: input.format === "svg" ? page(input.width ?? 800) : new Uint8Array([1]), width: input.fitContent !== undefined ? 300 + 2 * input.fitContent : (input.width ?? 800), height: 152, format: input.format ?? "png" };
     }) as never;
     await renderMermaidInput(render, { ...mermaidRenderOptions("flowchart TD\nA-->B", { format: "png" }), css: "p{}", fontMap: { serif: "x" } });
-    expect(seen).toHaveLength(2);
+    expect(seen).toHaveLength(1);
     for (const o of seen) {
       expect(o.css).toBe("p{}");
       expect(o.fontMap).toEqual({ serif: "x" });
@@ -79,19 +88,19 @@ describe("render({ mermaid }): the options", () => {
     }
   });
 
-  it("tells onWarning once for a message that comes back in each pass, and still calls the caller's onLog", async () => {
+  it("tells onWarning once for a message, passes it to the caller's onLog too, and still calls the caller's onLog", async () => {
     const warnings: string[] = [];
     const logs: string[] = [];
     const render = (async (input: HtmlToImageOptions) => {
       input.onLog?.(2, "[MERMAID_RECOVERED] fixed a keyword");
-      return { data: input.format === "svg" ? page(input.width ?? 800) : new Uint8Array([1]), width: input.width ?? 800, height: 152, format: input.format ?? "png" };
+      return { data: input.format === "svg" ? page(input.width ?? 800) : new Uint8Array([1]), width: input.fitContent !== undefined ? 300 + 2 * input.fitContent : (input.width ?? 800), height: 152, format: input.format ?? "png" };
     }) as never;
     await renderMermaidInput(render, {
       ...mermaidRenderOptions("flowchart TD\nA-->B", { format: "png", onWarning: (w) => warnings.push(w.code + ":" + w.message) }),
       onLog: (_l, t) => logs.push(t),
     });
     expect(warnings).toEqual(["MERMAID_RECOVERED:fixed a keyword"]);
-    expect(logs).toHaveLength(2);
+    expect(logs).toHaveLength(1);
   });
 
   it("raises a quieter log level to warnings so the messages arrive", () => {
