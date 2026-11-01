@@ -82,13 +82,15 @@ LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vec
 
     // groups: the chain of enclosing groups of a group (innermost first), and the deepest group two groups share
     const int ngroups = (int)group_parent.size();
-    auto chain_of = [&](int g) {
-        std::vector<int> c;
-        for (; g >= 0 && g < ngroups; g = group_parent[g]) c.push_back(g);
-        return c;
-    };
+    // computed once: the group code asks for a chain millions of times on a big graph, and a vector built each time is what a
+    // wasm build spends its time on
+    std::vector<std::vector<int>> chain_table(ngroups);
+    for (int g0 = 0; g0 < ngroups; g0++)
+        for (int g = g0; g >= 0 && g < ngroups; g = group_parent[g]) chain_table[g0].push_back(g);
+    const std::vector<int> no_chain;
+    auto chain_of = [&](int g) -> const std::vector<int>& { return g >= 0 && g < ngroups ? chain_table[g] : no_chain; };
     auto common_group = [&](int a, int b) {
-        auto ca = chain_of(a), cb = chain_of(b);
+        const auto& ca = chain_of(a), &cb = chain_of(b);
         for (int g : ca)
             if (std::find(cb.begin(), cb.end(), g) != cb.end()) return g;
         return -1;
@@ -137,7 +139,7 @@ LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vec
     auto sep = [&](const LN& a, const LN& b) {
         double gap = ::mermaid::sep(a, b);
         if (ngroups == 0 || a.group == b.group) return gap;
-        auto ca = chain_of(a.group), cb = chain_of(b.group);
+        const auto& ca = chain_of(a.group), &cb = chain_of(b.group);
         int diff = 0;
         for (int g : ca) diff += std::find(cb.begin(), cb.end(), g) == cb.end();
         int starting = 0;  // frames that begin at b: in a left-right graph their title bar sits on b's near side
@@ -350,7 +352,7 @@ LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vec
         for (int g = 0; g < ngroups; g++) order[g] = g;
         std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return chain_of(a).size() > chain_of(b).size(); });
         auto member = [&](const LN& v, int g) {
-            auto c = chain_of(v.group);
+            const auto& c = chain_of(v.group);
             return std::find(c.begin(), c.end(), g) != c.end();
         };
         // A push moves part of one row, so a frame can stretch over the rows it was not pushed in and ask for more room on the
@@ -381,7 +383,7 @@ LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vec
                         double xl = x.b - x.bw / 2, xh = x.b + x.bw / 2;
                         // a node in another group (not one that encloses g) brings that group's frame padding along
                         if (x.group >= 0) {
-                            auto enclosing = chain_of(g);
+                            const auto& enclosing = chain_of(g);
                             if (std::find(enclosing.begin(), enclosing.end(), x.group) == enclosing.end()) xl -= kFramePad, xh += kFramePad;
                         }
                         if (xh <= lo || xl >= hi) continue;
@@ -390,7 +392,7 @@ LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vec
                         // rows go the same way, or its frame would stretch from the old place to the new one and still meet g's
                         int other = -1;
                         if (x.group >= 0) {
-                            auto enclosing = chain_of(g), cx = chain_of(x.group);
+                            const auto& enclosing = chain_of(g), &cx = chain_of(x.group);
                             for (auto it = cx.rbegin(); it != cx.rend(); ++it)
                                 if (std::find(enclosing.begin(), enclosing.end(), *it) == enclosing.end()) {
                                     other = *it;
@@ -432,7 +434,7 @@ LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vec
                     if (gmax[g] < 0) continue;
                     for (int h = g + 1; h < ngroups; h++) {
                         if (gmax[h] < 0 || gmax[g] < gmin[h] || gmax[h] < gmin[g]) continue;
-                        auto cg = chain_of(g), ch = chain_of(h);
+                        const auto& cg = chain_of(g), &ch = chain_of(h);
                         if (std::find(cg.begin(), cg.end(), h) != cg.end() || std::find(ch.begin(), ch.end(), g) != ch.end()) continue;
                         if (ghi[g] <= glo[h] || ghi[h] <= glo[g]) continue;
                         int right = (glo[g] + ghi[g]) / 2 > (glo[h] + ghi[h]) / 2 ? g : h, leftg = right == g ? h : g;
@@ -473,16 +475,16 @@ LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vec
             int bad = 0;
             for (int g = 0; g < ngroups; g++) {
                 if (gmax[g] < 0) continue;
-                auto cg = chain_of(g);
+                const auto& cg = chain_of(g);
                 for (int h = g + 1; h < ngroups; h++) {
                     if (gmax[h] < 0 || gmax[g] < gmin[h] || gmax[h] < gmin[g]) continue;
-                    auto ch = chain_of(h);
+                    const auto& ch = chain_of(h);
                     if (std::find(cg.begin(), cg.end(), h) != cg.end() || std::find(ch.begin(), ch.end(), g) != ch.end()) continue;
                     if (ghi[g] > glo[h] && ghi[h] > glo[g]) bad++;
                 }
                 for (const LN& x : ln) {
                     if (x.layer < gmin[g] || x.layer > gmax[g]) continue;
-                    auto cx = chain_of(x.group);
+                    const auto& cx = chain_of(x.group);
                     if (std::find(cx.begin(), cx.end(), g) != cx.end()) continue;
                     if (x.b + x.bw / 2 > glo[g] && x.b - x.bw / 2 < ghi[g]) bad++;
                 }
@@ -530,7 +532,7 @@ LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vec
                 // a frame of v's that the left neighbour is not in brings its title bar along when it is on this side
                 double bar = 0;
                 if (horiz && v.group >= 0) {
-                    auto cl = chain_of(ln[rw[j - 1]].group);
+                    const auto& cl = chain_of(ln[rw[j - 1]].group);
                     for (int g : chain_of(v.group))
                         if (std::find(cl.begin(), cl.end(), g) == cl.end()) bar += kFrameHeader;
                 }
@@ -540,13 +542,13 @@ LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vec
                 for (int g : chain_of(v.group)) {
                     double edge = 1e18;
                     for (const LN& u : ln) {
-                        auto cu = chain_of(u.group);
+                        const auto& cu = chain_of(u.group);
                         if (&u != &v && std::find(cu.begin(), cu.end(), g) != cu.end()) edge = std::min(edge, u.b - u.bw / 2);
                     }
                     want = edge > 1e17 ? v.b : std::max(want, edge + v.bw / 2);
                 }
                 bool clear = true;
-                auto own = chain_of(v.group);
+                const auto& own = chain_of(v.group);
                 for (int g = 0; g < ngroups && clear; g++) {
                     if (gmax[g] < 0 || (int)l < gmin[g] || (int)l > gmax[g] || std::find(own.begin(), own.end(), g) != own.end()) continue;
                     if (want + v.bw / 2 > glo[g] && want - v.bw / 2 < ghi[g]) clear = false;
@@ -734,16 +736,89 @@ LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vec
         };
         auto overlap = [](const Box& a, const Box& b) { return a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1; };
         auto box_of = [&](size_t e, Pt c) { return Box{c.x - edges[e].label_w / 2, c.y - edges[e].label_h / 2, c.x + edges[e].label_w / 2, c.y + edges[e].label_h / 2}; };
+        // Every candidate spot is judged against all the edges, nodes and other labels. A grid keeps that to the ones near the
+        // spot (a graph of a thousand labels would otherwise look at every segment a thousand times over).
+        struct Seg {
+            Pt a, b;
+            size_t edge;
+        };
+        std::vector<Seg> segs;
+        for (size_t f = 0; f < edges.size(); f++)
+            for (size_t i = 0; i + 1 < res.points[f].size(); i++) segs.push_back({res.points[f][i], res.points[f][i + 1], f});
+        double gx0 = 1e18, gy0 = 1e18, gx1 = -1e18, gy1 = -1e18;
+        auto reach = [&](double x, double y) {
+            gx0 = std::min(gx0, x), gy0 = std::min(gy0, y), gx1 = std::max(gx1, x), gy1 = std::max(gy1, y);
+        };
+        for (int v = 0; v < n; v++) reach(res.center[v].x - nodes[v].w / 2, res.center[v].y - nodes[v].h / 2), reach(res.center[v].x + nodes[v].w / 2, res.center[v].y + nodes[v].h / 2);
+        for (const Seg& sg : segs) reach(sg.a.x, sg.a.y), reach(sg.b.x, sg.b.y);
+        for (size_t e = 0; e < edges.size(); e++)
+            if (edges[e].label_w > 0) {
+                Box lb = box_of(e, res.label_center[e]);
+                reach(lb.x0, lb.y0), reach(lb.x1, lb.y1);
+            }
+        const double margin = 200;  // a candidate spot lies on an edge, so near the others; spots outside the grid are clamped in
+        gx0 -= margin, gy0 -= margin, gx1 += margin, gy1 += margin;
+        double cell = 120;
+        while (((gx1 - gx0) / cell + 1) * ((gy1 - gy0) / cell + 1) > 4e5) cell *= 2;
+        const int gnx = (int)((gx1 - gx0) / cell) + 1, gny = (int)((gy1 - gy0) / cell) + 1;
+        auto span = [&](double lo, double hi, double origin, int count, int& c0, int& c1) {
+            c0 = std::max(0, std::min(count - 1, (int)std::floor((lo - origin) / cell)));
+            c1 = std::max(0, std::min(count - 1, (int)std::floor((hi - origin) / cell)));
+        };
+        std::vector<std::vector<int>> seg_cells((size_t)gnx * gny), node_cells((size_t)gnx * gny), label_cells((size_t)gnx * gny);
+        auto put = [&](std::vector<std::vector<int>>& g, double x0_, double y0_, double x1_, double y1_, int id) {
+            int a0, a1, b0, b1;
+            span(x0_, x1_, gx0, gnx, a0, a1);
+            span(y0_, y1_, gy0, gny, b0, b1);
+            for (int cy = b0; cy <= b1; cy++)
+                for (int cx = a0; cx <= a1; cx++) g[(size_t)cy * gnx + cx].push_back(id);
+        };
+        auto take = [&](std::vector<std::vector<int>>& g, double x0_, double y0_, double x1_, double y1_, int id) {
+            int a0, a1, b0, b1;
+            span(x0_, x1_, gx0, gnx, a0, a1);
+            span(y0_, y1_, gy0, gny, b0, b1);
+            for (int cy = b0; cy <= b1; cy++)
+                for (int cx = a0; cx <= a1; cx++) {
+                    auto& v = g[(size_t)cy * gnx + cx];
+                    v.erase(std::remove(v.begin(), v.end(), id), v.end());
+                }
+        };
+        for (size_t k = 0; k < segs.size(); k++)
+            put(seg_cells, std::min(segs[k].a.x, segs[k].b.x), std::min(segs[k].a.y, segs[k].b.y), std::max(segs[k].a.x, segs[k].b.x), std::max(segs[k].a.y, segs[k].b.y), (int)k);
+        for (int v = 0; v < n; v++) put(node_cells, res.center[v].x - nodes[v].w / 2, res.center[v].y - nodes[v].h / 2, res.center[v].x + nodes[v].w / 2, res.center[v].y + nodes[v].h / 2, v);
+        for (size_t f = 0; f < edges.size(); f++)
+            if (edges[f].label_w > 0) {
+                Box lb = box_of(f, res.label_center[f]);
+                put(label_cells, lb.x0, lb.y0, lb.x1, lb.y1, (int)f);
+            }
+        std::vector<unsigned> seen_seg(segs.size(), 0), seen_node(n, 0), seen_label(edges.size(), 0);
+        unsigned stamp = 0;
         auto cost = [&](size_t e, Pt c) {
             Box r = box_of(e, c);
             double total = 0;
-            for (size_t f = 0; f < edges.size(); f++) {
-                if (f != e)
-                    for (size_t i = 0; i + 1 < res.points[f].size(); i++) total += hits(res.points[f][i], res.points[f][i + 1], r) ? 1 : 0;
-                if (f != e && edges[f].label_w > 0 && overlap(r, box_of(f, res.label_center[f]))) total += 10;
-            }
-            for (int v = 0; v < n; v++)
-                if (overlap(r, Box{res.center[v].x - nodes[v].w / 2, res.center[v].y - nodes[v].h / 2, res.center[v].x + nodes[v].w / 2, res.center[v].y + nodes[v].h / 2})) total += 10;
+            ++stamp;
+            int a0, a1, b0, b1;
+            span(r.x0, r.x1, gx0, gnx, a0, a1);
+            span(r.y0, r.y1, gy0, gny, b0, b1);
+            for (int cy = b0; cy <= b1; cy++)
+                for (int cx = a0; cx <= a1; cx++) {
+                    const size_t at = (size_t)cy * gnx + cx;
+                    for (int k : seg_cells[at]) {
+                        if (seen_seg[k] == stamp) continue;
+                        seen_seg[k] = stamp;
+                        if (segs[k].edge != e && hits(segs[k].a, segs[k].b, r)) total += 1;
+                    }
+                    for (int f : label_cells[at]) {
+                        if (seen_label[f] == stamp) continue;
+                        seen_label[f] = stamp;
+                        if ((size_t)f != e && overlap(r, box_of(f, res.label_center[f]))) total += 10;
+                    }
+                    for (int v : node_cells[at]) {
+                        if (seen_node[v] == stamp) continue;
+                        seen_node[v] = stamp;
+                        if (overlap(r, Box{res.center[v].x - nodes[v].w / 2, res.center[v].y - nodes[v].h / 2, res.center[v].x + nodes[v].w / 2, res.center[v].y + nodes[v].h / 2})) total += 10;
+                    }
+                }
             return total;
         };
         for (size_t e = 0; e < edges.size(); e++) {
@@ -759,6 +834,11 @@ LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vec
                     double k = cost(e, c) + 0.001 * (std::fabs(c.x - res.label_center[e].x) + std::fabs(c.y - res.label_center[e].y));
                     if (k < best_cost) best_cost = k, best = c;
                 }
+            }
+            if (best.x != res.label_center[e].x || best.y != res.label_center[e].y) {
+                Box was = box_of(e, res.label_center[e]), now = box_of(e, best);
+                take(label_cells, was.x0, was.y0, was.x1, was.y1, (int)e);
+                put(label_cells, now.x0, now.y0, now.x1, now.y1, (int)e);
             }
             res.label_center[e] = best;
         }

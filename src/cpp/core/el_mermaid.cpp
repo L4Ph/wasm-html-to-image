@@ -6,6 +6,8 @@
 #include <cstring>
 #include <list>
 #include <set>
+#include <string>
+#include <unordered_map>
 
 #include "container_skia.h"
 #include "el_svg.h"
@@ -37,16 +39,39 @@ void collect_plain_text(const std::list<std::shared_ptr<element>>& list, std::st
     }
 }
 
+// What one diagram's measuring has already worked out. The same labels are measured over and over (every wrap, every size
+// pass of the layout), and each character costs a face lookup and a font; the fonts do not change while one diagram is drawn.
+struct MeasureCache {
+    std::unordered_map<std::string, double> strings;                    // whole text at one size, weight and family
+    std::unordered_map<unsigned long long, double> glyphs;              // one character at one size, weight and family
+};
+
 // Text width from the fonts the engine has loaded; a character no face covers counts as an estimate.
-double measure_with_fonts(SatoruContext* ctx, const std::string& text, double size, int weight, bool mono) {
+double measure_with_fonts(SatoruContext* ctx, MeasureCache& cache, const std::string& text, double size, int weight, bool mono) {
+    char head[48];
+    std::snprintf(head, sizeof head, "%d|%d|%.3f|", mono ? 1 : 0, weight, size);
+    std::string key = head + text;
+    if (auto it = cache.strings.find(key); it != cache.strings.end()) return it->second;
     bool fake_bold = false;
-    auto faces = ctx->get_typefaces(mono ? "monospace" : "sans-serif", weight, SkFontStyle::kUpright_Slant, fake_bold);
+    std::vector<sk_sp<SkTypeface>> faces;
+    bool have_faces = false;
     double w = 0;
     const char* p = text.c_str();
     while (*p) {
         const char* start = p;
         char32_t cp = satoru::decode_utf8_char(&p);
         if (cp == 0) break;
+        // character (21 bits), weight (10), family (1), size in eighths (up to 12 bits): no two of them share a bit
+        unsigned long long gk = (unsigned long long)cp | ((unsigned long long)(weight & 0x3FF) << 21) | ((mono ? 1ull : 0ull) << 31) |
+                                ((unsigned long long)(size * 8.0 + 0.5) & 0xFFFFFull) << 32;
+        if (auto it = cache.glyphs.find(gk); it != cache.glyphs.end()) {
+            w += it->second;
+            continue;
+        }
+        if (!have_faces) {
+            faces = ctx->get_typefaces(mono ? "monospace" : "sans-serif", weight, SkFontStyle::kUpright_Slant, fake_bold);
+            have_faces = true;
+        }
         sk_sp<SkTypeface> face;
         for (auto& f : faces)
             if (f && f->unicharToGlyph((SkUnichar)cp) != 0) {
@@ -54,13 +79,17 @@ double measure_with_fonts(SatoruContext* ctx, const std::string& text, double si
                 break;
             }
         if (!face) face = ctx->fontManager.findTypefaceForCodepoint((SkUnichar)cp);
+        double cw;
         if (!face) {
-            w += size * (cp < 0x80 ? 0.55 : 1.0);
-            continue;
+            cw = size * (cp < 0x80 ? 0.55 : 1.0);
+        } else {
+            SkFont font(face, (SkScalar)size);
+            cw = font.measureText(start, (size_t)(p - start), SkTextEncoding::kUTF8);
         }
-        SkFont font(face, (SkScalar)size);
-        w += font.measureText(start, (size_t)(p - start), SkTextEncoding::kUTF8);
+        cache.glyphs[gk] = cw;
+        w += cw;
     }
+    cache.strings[key] = w;
     return w;
 }
 
@@ -118,8 +147,9 @@ void el_mermaid::ensure_svg() {
     else if (m == "recover") opt.mode = mermaid::Options::Mode::Recover;
     if (skia) {
         SatoruContext* ctx = &skia->get_context();
-        opt.measure = [ctx](const std::string& text, double size, int weight, bool mono) {
-            return measure_with_fonts(ctx, text, size, weight, mono);
+        auto cache = std::make_shared<MeasureCache>();
+        opt.measure = [ctx, cache](const std::string& text, double size, int weight, bool mono) {
+            return measure_with_fonts(ctx, *cache, text, size, weight, mono);
         };
     }
 
