@@ -949,6 +949,13 @@ int main() {
 
     // --- quadrantChart ---
     {
+        // names, titles and axis labels may be quoted; the quotes are not drawn. Two points close together keep their labels apart
+        std::string q = svg_of("quadrantChart\n  title \"T\"\n  x-axis \"Low\" --> \"High\"\n  \"Dark Mode\": [0.30, 0.50]\n  \"Export\": [0.32, 0.46]");
+        check(has(q, ">Dark Mode<") && has(q, ">Export<") && has(q, ">Low<") && has(q, ">T<") && !has(q, "&quot;"), "quadrant/quotes_not_drawn");
+        auto y_of = [&](const std::string& name) { size_t at = q.find(">" + name + "<"); return std::atof(q.c_str() + q.rfind(" y=\"", at) + 4); };
+        check(std::abs(y_of("Dark Mode") - y_of("Export")) > 12, "quadrant/labels_apart");
+    }
+    {
         std::string s = svg_of("quadrantChart\n  title Reach\n  x-axis Low --> High\n  y-axis Cold --> Hot\n  quadrant-1 Expand\n  quadrant-3 Rethink\n  A: [0.3, 0.6]\n  B: [0.9, 0.1]");
         check(has(s, ">Reach<") && has(s, ">Low<") && has(s, ">High<") && has(s, ">Cold<") && has(s, ">Hot<"), "quadrant/titles_and_axes");
         check(has(s, ">Expand<") && has(s, ">Rethink<"), "quadrant/quadrant_names");
