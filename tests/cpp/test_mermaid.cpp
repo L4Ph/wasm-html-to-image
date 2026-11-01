@@ -137,6 +137,24 @@ int main() {
                     if (std::min(fr[i][2], fr[j][2]) - std::max(fr[i][0], fr[j][0]) > 0.5 && std::min(fr[i][3], fr[j][3]) - std::max(fr[i][1], fr[j][1]) > 0.5) return false;
             return true;
         };
+        // no two nodes are drawn on one another
+        auto nodes_apart = [](const std::string& svg) {
+            std::vector<std::array<double, 4>> rs;
+            for (size_t at = svg.find("class=\"node\""); at != std::string::npos; at = svg.find("class=\"node\"", at + 1)) {
+                auto num = [&](const char* key, size_t from) { return std::atof(svg.c_str() + svg.find(key, from) + std::strlen(key)); };
+                size_t r = svg.find("<rect", at);
+                if (r == std::string::npos) continue;
+                double x = num("x=\"", r), y = num("y=\"", r), w = num("width=\"", r), h = num("height=\"", r);
+                rs.push_back({x, y, x + w, y + h});
+            }
+            for (size_t i = 0; i < rs.size(); i++)
+                for (size_t j = i + 1; j < rs.size(); j++)
+                    if (std::min(rs[i][2], rs[j][2]) - std::max(rs[i][0], rs[j][0]) > 1 && std::min(rs[i][3], rs[j][3]) - std::max(rs[i][1], rs[j][1]) > 1) return false;
+            return true;
+        };
+        // the first member of an edgeless-looking frame is not drawn back onto the member after it (issue 26: one of the two was invisible)
+        check(nodes_apart(svg_of("graph LR\n  Start --- Parallel\n  subgraph Parallel [ ]\n    A\n    B\n  end\n  Parallel --- C")), "layout/members_apart_lr");
+        check(nodes_apart(svg_of("graph TB\n  Start --- P\n  subgraph P [ ]\n    b0\n    b1\n    b2\n  end\n  P --- C")), "layout/members_apart_tb_three");
         check(frames_apart(svg_of("flowchart TB\nsubgraph G0[\"G0\"]\n  n2\nend\nsubgraph G1[\"G1\"]\n  n1\n  n3\nend\nn1 --> n3\nn2 --> n3\nn0 --> n2")), "layout/frames_apart_padding");
         check(frames_apart(svg_of("flowchart TB\nsubgraph G0[\"G0\"]\n  n2\n  n3\nend\nsubgraph G1[\"G1\"]\n  n0\n  n4\nend\nn3 --> n2\nn3 --> n1\nn3 --> n4\nn0 --> n2")), "layout/frames_apart_unit_mismatch");
         check(frames_apart(svg_of("flowchart TB\nsubgraph G0[\"G0\"]\n  n1\n  n2\nend\nsubgraph G1[\"G1\"]\n  n0\n  n3\n  n4\nend\nn1 --> n0\nn3 --> n4\nn2 --> n3\nn2 --> n1")), "layout/frames_apart_different_rows");

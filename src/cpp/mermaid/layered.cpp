@@ -635,6 +635,8 @@ LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vec
                         if (&u != &v && std::find(cu.begin(), cu.end(), g) != cu.end()) edge = std::min(edge, u.b - u.bw / 2);
                     }
                     want = edge > 1e17 ? v.b : std::max(want, edge + v.bw / 2);
+                    // drawn back means to the left only: a member after it in the row would otherwise push it onto itself
+                    want = std::min(want, v.b);
                 }
                 bool clear = true;
                 const auto& own = chain_of(v.group);
