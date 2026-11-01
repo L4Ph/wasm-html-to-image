@@ -64,6 +64,14 @@ Returns a `string` for `svg` format, and `Uint8Array` for all other formats (`pn
 | `css`           | `string`                                  |         -          | Additional custom CSS string injected before discovery |
 | `mediaType`     | `"screen" \| "print"`                     |     `"screen"`     | Target media type for CSS `@media` rules               |
 | `textToPaths`   | `boolean`                                 |       `true`       | Outline text as SVG paths                              |
+| `userAgent`     | `string`                                  |  Chrome's UA       | User-Agent for resource fetches (Web font CSS, ...)    |
+
+### Running scripts (`javascript`) and Mermaid (`mermaid`)
+
+| Option | Type | Description |
+| ------ | ---- | ----------- |
+| `javascript` | `boolean \| { timeout?: number, settleMs?: number, waitFor?: string }` | Run the page's `<script>`s in jsdom before rendering (Node.js `single` entry and the CLI's `--js`; needs the optional dependency `jsdom`). `true` waits 1 s after `load`. `timeout` bounds the whole phase (default 10000 ms), `settleMs` is the wait after `load` (default 1000 ms), `waitFor` is a CSS selector to wait for (replaces `settleMs`). jsdom has no layout and is not a sandbox: use it with trusted pages only |
+| `mermaid` | `{ source, theme?, padding?, background?, accent?, mode?, directives?, onWarning?, maxLines?, maxSourceBytes? }` | Draw a Mermaid diagram (instead of `value`), as an image sized to the diagram. See [Mermaid conversion](./mermaid.md) |
 
 ### Rendering untrusted HTML (`limits`)
 
@@ -112,3 +120,5 @@ Fetched resources are cached in-process (up to 256 entries / 64 MiB, least-recen
 | `pdfMargin` | `{ top?: number, right?: number, bottom?: number, left?: number }` | - | Page margin settings (in px or pt) |
 | `pdfHeader` | `string` | - | HTML header template for each page (`{{pageNumber}}`, `{{totalPages}}` supported) |
 | `pdfFooter` | `string` | - | HTML footer template for each page (`{{pageNumber}}`, `{{totalPages}}` supported) |
+| `pdfBackground` | `string` | - | Background of the whole PDF page, margins included (`#rrggbb` or `#rrggbbaa`). Without it the document's `background` covers only the content area, so a dark page shows white margins |
+| `pdfSkipRunning` | `number` | `0` | How many leading pages are printed without header and footer (a cover, a contents page) |

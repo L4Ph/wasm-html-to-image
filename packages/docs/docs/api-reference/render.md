@@ -94,6 +94,14 @@ export interface RenderResult<T = Uint8Array | string> {
 | `css`           | `string`                                  |         -          | 追加で挿入するカスタム CSS 文字列                                     |
 | `mediaType`     | `"screen" \| "print"`                     |     `"screen"`     | CSS の `@media` ルール評価対象                                        |
 | `textToPaths`   | `boolean`                                 |       `true`       | SVG 出力時にテキストをパス（アウトライン）へ変換するか                |
+| `userAgent`     | `string`                                  |  Chrome の UA      | リソース取得（Web フォントの CSS など）に使う User-Agent              |
+
+### スクリプトの実行 (`javascript`) と Mermaid (`mermaid`)
+
+| オプション   | 型                                                       | 説明 |
+| ------------ | -------------------------------------------------------- | ---- |
+| `javascript` | `boolean \| { timeout?: number, settleMs?: number, waitFor?: string }` | ページの `<script>` を jsdom で実行してから描画する（Node.js の `single` 入口と CLI の `--js`。任意依存の `jsdom` が要る）。`true` は `load` の後 1 秒待つ。`timeout` は全体の上限（既定 10000 ms）、`settleMs` は `load` の後の待ち時間（既定 1000 ms）、`waitFor` は待つ CSS セレクタ（指定すると `settleMs` の代わりになる）。jsdom にはレイアウトも安全な隔離もないので、信頼できるページだけに使う |
+| `mermaid`    | `{ source, theme?, padding?, background?, accent?, mode?, directives?, onWarning?, maxLines?, maxSourceBytes? }` | Mermaid の図を描く（`value` の代わり）。図の大きさに合わせた画像になる。詳しくは [Mermaid 変換](./mermaid.md) |
 
 ### 高度な制御 & 診断
 
@@ -154,3 +162,5 @@ await render({
 | `pdfMargin`   | `{ top?: number, right?: number, bottom?: number, left?: number }` | - | 各ページの余白設定（px または pt） |
 | `pdfHeader`   | `string` | - | 全ページのヘッダーに配置する HTML テンプレート（`{{pageNumber}}`, `{{totalPages}}` 利用可） |
 | `pdfFooter`   | `string` | - | 全ページのフッターに配置する HTML テンプレート（`{{pageNumber}}`, `{{totalPages}}` 利用可） |
+| `pdfBackground` | `string` | - | ページ全体（余白を含む）の背景色（`#rrggbb` または `#rrggbbaa`）。指定しないと、文書の `background` は内容の領域だけに付き、暗いページの余白が白く残る |
+| `pdfSkipRunning` | `number` | `0` | 先頭の何ページを、ヘッダーとフッターなしで出力するか（表紙や目次ページ用） |

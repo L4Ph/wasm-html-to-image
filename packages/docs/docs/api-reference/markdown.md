@@ -92,6 +92,29 @@ const { data } = await render({
 });
 ```
 
+### 3. オプション（`MarkdownOptions`）
+
+`markdownToHtml()` と `markdownToDocument()` の第 2 引数です。
+
+| オプション | 型 | 既定値 | 説明 |
+| :--- | :--- | :--- | :--- |
+| `template` | `string \| MarkdownTemplate` | なし | 組み込みテンプレートの名前、または自作のテンプレート（[カスタムテンプレート](#カスタムテンプレート)）。フロントマターの `template:` より優先 |
+| `settings` | `DocumentSettings` | なし | フロントマターより優先する文書設定（`title`、`author`、`accent`、`font`、`page_size`、`cover`、`stamp` など） |
+| `theme` | `"light" \| "dark"` | `"light"` | 組み込みスタイルシートの配色 |
+| `css` | `string` | なし | 組み込みスタイルシートの後に追加する CSS |
+| `stylesheet` | `string` | なし | 組み込みスタイルシートを丸ごと置き換える（`theme` は無視される） |
+| `paged` | `boolean` | `false` | PDF 向け。`padding` が全ページの `@page` 余白になり、2 ページ目以降も上下の余白が保たれる |
+| `padding` | `number` | `32` | 記事の周りの余白（px） |
+| `maxWidth` | `number` | なし | 記事の最大幅（px）。省略すると表示幅いっぱい |
+| `title` | `string` | フロントマターの `title` | 文書の `<title>` |
+| `toc` | `boolean \| { depth?: number, title?: string }` | PDF（`paged`）では有効 | 目次。`depth` は 1〜6（既定 3）、`title` は目次の見出し（既定 `Contents`、空文字で省略） |
+| `highlight` | `boolean` | `true` | 言語名の付いたコードブロックをシンタックスハイライトする |
+| `mermaid` | `boolean` | `true` | ` ```mermaid ` を図として描く。`false` で通常のコードブロック |
+| `frontMatter` | `boolean` | `true` | 先頭の YAML フロントマターを取り除き、`title` を読む |
+| `math` | `MathRenderer` | なし | `$…$` / `$$…$$` の数式を組版する。`wasm-html-to-image/markdown-math` の `katexMath()` を渡す。なければ `$` は普通の文字（[KaTeX](#katex-数式組版-markdown-math)） |
+
+`markdownToDocument()` は `{ html, settings, renderOptions }` を返します。`settings` は実際に適用された設定（テンプレートの既定値 < フロントマター < オプション）、`renderOptions` は `render()` に展開して渡す PDF 用オプション（ヘッダー、フッター、`pdfTitle`、`pdfAuthor`、`pdfBackground`、`pdfSkipRunning`）です。`markdownStylesheet()` は組み込みスタイルシートの CSS だけを返します。
+
 ---
 
 ## 組み込みテンプレート

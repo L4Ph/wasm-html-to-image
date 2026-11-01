@@ -7,6 +7,7 @@
 - **HTML to Image**: Render HTML strings, arrays (multi-page PDF), or remote URLs directly to PNG, JPEG, WebP, AVIF, RAW, ThumbHash, SVG, or vector PDF.
 - **Image Optimization & Conversion**: Direct image-to-image resizing, cropping, and format re-encoding (e.g., JPEG to WebP/AVIF, GIF to animated WebP) without HTML layout overhead.
 - **Mermaid Diagrams**: `renderMermaid(source, { format, theme })` / `render({ mermaid: { source } })` draw flowchart, sequence, state, class, ER, gantt, pie, quadrant, mindmap and many more Mermaid diagrams as SVG or any image format, without mermaid.js or a browser.
+- **Markdown to PDF / Image**: `wasm-html-to-image/markdown` turns GitHub-flavoured Markdown into a styled page; with a template (report, book, paper, ...), cover, table of contents, bookmarks, running header/footer, code highlighting, KaTeX math and Mermaid diagrams it becomes a PDF. The CLI does it in one command (`npx wasm-html-to-image report.md -o report.pdf`).
 - **Universal Runtime**: Runs seamlessly on Node.js (>=20), Cloudflare Workers, Vercel Edge Runtime, Browsers, Deno, and CLI.
 - **Zero Heavy Dependencies**: NO Puppeteer, Chromium, Playwright, or node-canvas required.
 
@@ -34,6 +35,8 @@ Choose the appropriate import based on runtime and use case:
 | `wasm-html-to-image/react` | React (JSX) | Directly render React element trees. |
 | `wasm-html-to-image/preact` | Preact (JSX) | Directly render Preact element trees. |
 | `wasm-html-to-image/tailwind` | Tailwind CSS | UnoCSS / Tailwind v4 utilities as CSS (`createCSS`), `tw="..."` → `class` (`convertTw`), `@theme` / `@apply` (`tailwind`). |
+| `wasm-html-to-image/markdown` | Any (pure JS) | Markdown to a styled page / PDF document: `markdownToHtml`, `markdownToDocument`, `listTemplates`, `defineTemplate`. |
+| `wasm-html-to-image/markdown-math` | Any | `katexMath()` renderer for `$…$` / `$$…$$` in Markdown (needs the optional dependency `katex`). |
 | `wasm-html-to-image/index` | High-throughput servers | Manual WASM module reuse via `loadHtmlToImageModule()` and `htmlToImage()`. |
 
 ---
@@ -204,6 +207,47 @@ const webp = await render({ mermaid: { source: "sequenceDiagram\n  A->>B: hi", t
 - **Markdown / CLI**: ` ```mermaid ` fences in Markdown input are drawn as diagrams; the CLI takes a `.mmd` / `.mermaid` file or `--mermaid` (`--mermaid-theme`, `--mermaid-mode`, `--mermaid-directives`).
 - **Inside HTML**: `<div class="mermaid">…source…</div>` or `<pre class="mermaid">…</pre>` in the page passed to `render({ value })` is drawn as a diagram, laid out as a block among the other elements (this is what `renderMermaid` itself builds). Configure it with CSS on the element: `--mermaid-theme: nord;` (a theme above), `--mermaid-accent: #f60;`, `--mermaid-mode: recover;`, `--mermaid-directives: on;`, `--mermaid-max-lines`, `--mermaid-max-bytes`; without a theme the colours are derived from the element's `color` only, so on a dark page set a theme (`dark`, `nord`, ...). Write the source as text (escape `<` and `&`).
 
+### 8. Markdown to PDF / Image, and the CLI
+
+```typescript
+import { writeFile } from "node:fs/promises";
+import { render } from "wasm-html-to-image";
+import { markdownToDocument, markdownToHtml, listTemplates } from "wasm-html-to-image/markdown";
+
+const md = `---
+title: Quarterly Report
+author: Taro Yamada
+template: report
+accent: "#2563eb"
+stamp: Confidential
+---
+
+# Summary
+
+Sales rose **15.2%**. A diagram works too:
+
+\`\`\`mermaid
+graph LR
+  A --> B
+\`\`\`
+`;
+
+// PDF: `paged: true` for page margins, then spread `renderOptions` (header, footer, title, author, background)
+const { html, renderOptions } = markdownToDocument(md, { paged: true });
+const { data } = await render({ value: html, format: "pdf", ...renderOptions });
+await writeFile("report.pdf", data);
+
+// a single image: markdownToHtml
+const png = await render({ value: markdownToHtml("# Hello", { theme: "dark", maxWidth: 800 }), width: 900, format: "png" });
+```
+
+- **Templates**: `default`, `report`, `proposal`, `book`, `paper`, `compact`, `manual`, `minutes`, `letter`, `slides`, `invoice` (`listTemplates()`); `defineTemplate({ extends: "report", ... })` for your own. Pick one with the `template` option or the front matter `template:`.
+- **Front matter** (YAML): `title`, `subtitle`, `author`, `date`, `template`, `accent`, `font`, `page_size`, `margin`, `orientation`, `cover`, `stamp`, `header` / `footer` (`{{pageNumber}}`, `{{totalPages}}`, `{{title}}`, `{{chapter}}`, ...), `toc`, `toc_depth`, `numbering`, `footnotes`, `mermaid_theme`, ... Precedence: template defaults < front matter < `settings` / options.
+- **Options** (`markdownToDocument(md, options)`): `template`, `settings`, `theme` (`"light"` | `"dark"`), `css`, `stylesheet`, `paged` (PDF), `padding`, `maxWidth`, `title`, `toc` (`false` | `{ depth, title }`; on by default for PDF), `highlight`, `mermaid` (`false` keeps code blocks), `frontMatter`, `math` (pass `katexMath()` from `wasm-html-to-image/markdown-math`).
+- **PDF extras** (render options): bookmarks are built from the headings (`pdfOutline: false` to drop them); `pdfTitle`, `pdfAuthor`, `pdfSubject`, `pdfKeywords`, `pdfCreator`, `pdfProducer`, `pdfMargin`, `pdfHeader`, `pdfFooter` (`{{pageNumber}}`, `{{totalPages}}`), `pdfBackground`, `pdfSkipRunning`; `colorSpace: "cmyk"` for print.
+- **Markdown syntax**: GFM, callouts (`> [!NOTE]`), figure captions from image titles, `<!-- pagebreak -->`, footnotes, highlighted code, Mermaid fences, `$…$` math.
+- **CLI** (`npx wasm-html-to-image <input> -o <output>`): the input is an HTML file, a URL, an image, Markdown (`.md`, or `--markdown` for inline text / stdin), or Mermaid (`.mmd`, or `--mermaid`); the format comes from the `-o` extension or `-f`. Common flags: `-w/--width`, `-h/--height`, `-q/--quality`, `--scale`, `--dpi`, `--color-space`, `--base-url`, `--font <path|Family=path>` (repeatable), `--animation <ms>` (`--animation-fps`, `--animation-loop`), `--js` / `--js-wait` (run page scripts in jsdom; trusted pages only). Markdown / PDF flags: `--template <name|file>`, `--list-templates`, `--page-size`, `--accent`, `--body-font`, `--stamp`, `--cover` / `--no-cover`, `--no-toc`, `--toc-depth`, `--no-outline`, `--no-math`, `--markdown-theme`, `--markdown-css`.
+
 ## Options Reference (`RenderOptions`)
 
 | Option | Type | Default | Description |
@@ -220,8 +264,24 @@ const webp = await render({ mermaid: { source: "sequenceDiagram\n  A->>B: hi", t
 | `fallbackFonts` | `(Uint8Array \| Buffer)[]` | - | Inlined custom font binaries for air-gapped / offline rendering |
 | `fonts` | `Record<string, Uint8Array \| Buffer>` | - | Font family mapping dictionary |
 | `timeout` | `number` | `10000` | Timeout in milliseconds for resource loading |
-
-Additional extension keys exist (e.g. `baseUrl`, `fit`, `animation`); see the type definitions for the full list.
+| `baseUrl` | `string` | - | Base URL for resolving relative resources |
+| `fit` | `"contain" \| "cover" \| "fill"` | - | Resize strategy (with `width` / `height`) |
+| `colorSpace` / `dpi` | `"srgb" \| "cmyk"` / `number` | `"srgb"` / `96 × scale` | `cmyk` output for `pdf` / `tiff`; resolution written into `tiff` |
+| `animation` | `{ duration, fps?, loop? }` | - | Sample `@keyframes` into animated WebP / APNG / GIF |
+| `css` | `string` | - | Extra CSS added to the page |
+| `mediaType` | `"screen" \| "print"` | `"screen"` | Media type for `@media` |
+| `textToPaths` | `boolean` | `true` | Outline text as paths in SVG output |
+| `userAgent` | `string` | Chrome's | User-Agent for resource fetches |
+| `javascript` | `boolean \| { timeout?, settleMs?, waitFor? }` | - | Run the page's scripts in jsdom first (Node only, optional dependency `jsdom`; trusted pages only) |
+| `limits` | `RenderLimits` | - | Safety limits for untrusted HTML: `timeoutMs`, `maxResourceCount`, `maxTotalResourceBytes`, `allowedProtocols`, `confineFilesToBaseUrl`, ... |
+| `resolveResource` | `(url) => Promise<Uint8Array \| null>` | - | Intercept every resource fetch (return bytes, or `null` to skip) |
+| `logLevel` / `onLog` | `LogLevel` / `(level, message) => void` | silent | Log gate and receiver |
+| `diagnostics` / `onDiagnostics` | `boolean` / `(report) => void` | - | Collect a full diagnostics report |
+| `pdfTitle` `pdfAuthor` `pdfSubject` `pdfKeywords` `pdfCreator` `pdfProducer` | `string` | - | PDF metadata |
+| `pdfOutline` | `boolean` | `true` | PDF bookmarks from `h1`–`h6` |
+| `pdfMargin` / `pdfHeader` / `pdfFooter` | `{ top?, right?, bottom?, left? }` / `string` | - | Page margins; running header / footer HTML (`{{pageNumber}}`, `{{totalPages}}`) |
+| `pdfBackground` / `pdfSkipRunning` | `string` / `number` | - / `0` | Whole-page background colour; leading pages without header and footer |
+| `mermaid` | `{ source, ... }` | - | Draw a Mermaid diagram instead of `value` (section 7) |
 
 ---
 

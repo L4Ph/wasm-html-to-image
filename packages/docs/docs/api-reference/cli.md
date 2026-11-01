@@ -53,6 +53,9 @@ npx wasm-html-to-image <input> [options]
 | `--mermaid-theme <name>` | - | `light` | 図の配色（`light`、`dark`、`neutral`、`forest`、`nord`、`dracula`、`solarized-light`、`solarized-dark`、`rose-pine`、`sepia`） |
 | `--mermaid-mode <mode>` | - | `strict` | 壊れたソースの許容度: `strict`、`compat`、`recover` |
 | `--mermaid-directives` | - | 無効 | 本文の `%%{init}%%` と frontmatter の `config:` を反映 |
+| `--font <path>` | - | なし | ローカルのフォントファイルまたは glob（例: `'./fonts/*.woff2'`）。何度でも指定できる。`'Family=path'` は、そのファミリー名で登録する（例: `'Segoe UI=C:/Windows/Fonts/segoeui.ttf'`）。同じファミリーを太さごとに繰り返すと、`font-weight` に最も近いファイルが使われる |
+| `--js` | - | 無効 | 描画の前に、ページのスクリプトを jsdom で実行する（任意依存の `jsdom` が要る。信頼できるページだけに使う） |
+| `--js-wait <ms\|selector>` | - | `1000` | `--js` と一緒に使う。`load` の後に待つミリ秒、または出現を待つ CSS セレクタ |
 
 ---
 

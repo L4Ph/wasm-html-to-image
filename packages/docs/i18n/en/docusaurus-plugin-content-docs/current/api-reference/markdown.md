@@ -92,6 +92,29 @@ const { data } = await render({
 });
 ```
 
+### 3. Options (`MarkdownOptions`)
+
+The second argument of `markdownToHtml()` and `markdownToDocument()`.
+
+| Option | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `template` | `string \| MarkdownTemplate` | none | A bundled template by name, or your own (see Custom Templates). Wins over the front matter's `template:` |
+| `settings` | `DocumentSettings` | none | Document settings that override the front matter (`title`, `author`, `accent`, `font`, `page_size`, `cover`, `stamp`, ...) |
+| `theme` | `"light" \| "dark"` | `"light"` | Colour scheme of the built-in stylesheet |
+| `css` | `string` | none | Extra CSS appended after the built-in stylesheet |
+| `stylesheet` | `string` | none | Replace the built-in stylesheet entirely (`theme` is then ignored) |
+| `paged` | `boolean` | `false` | For PDF: `padding` becomes the `@page` margin on every page, so pages after the first keep their top and bottom margins |
+| `padding` | `number` | `32` | Space around the article, px |
+| `maxWidth` | `number` | none | Maximum width of the article, px; omitted means the full viewport width |
+| `title` | `string` | front matter `title` | `<title>` of the document |
+| `toc` | `boolean \| { depth?: number, title?: string }` | on for PDF (`paged`) | Table of contents. `depth` 1–6 (default 3); `title` is the heading above it (default `Contents`, empty leaves it out) |
+| `highlight` | `boolean` | `true` | Syntax-highlight code blocks that name a language |
+| `mermaid` | `boolean` | `true` | Draw ` ```mermaid ` as diagrams; `false` leaves them as code blocks |
+| `frontMatter` | `boolean` | `true` | Strip a leading YAML front matter block and read its `title` |
+| `math` | `MathRenderer` | none | Typeset `$…$` / `$$…$$`: pass `katexMath()` from `wasm-html-to-image/markdown-math`. Without it a dollar sign is just text |
+
+`markdownToDocument()` returns `{ html, settings, renderOptions }`. `settings` is what applied (template defaults < front matter < options); `renderOptions` are the PDF options to spread into `render()` (header, footer, `pdfTitle`, `pdfAuthor`, `pdfBackground`, `pdfSkipRunning`). `markdownStylesheet()` returns just the CSS of the built-in stylesheet.
+
 ---
 
 ## Built-in Templates
