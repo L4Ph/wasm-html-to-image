@@ -268,7 +268,8 @@ bool render_state(const std::string& source, const Options& options, std::string
             case Kind::Choice: n.w = n.h = 26; break;
             case Kind::Fork: n.w = horizontal ? 6 : 60, n.h = horizontal ? 60 : 6; break;
             case Kind::State: {
-                n.title_lines = split_lines(n.name);
+                n.title_lines = wrap_lines(text, split_lines(n.name), kNodeFont, kNodeWeight, kWrapWidth);
+                n.desc = wrap_lines(text, n.desc, kEdgeFont, 400, kWrapWidth);
                 double w = text.block_width(n.title_lines, kNodeFont, kNodeWeight);
                 double h = n.title_lines.size() * lh;
                 if (!n.desc.empty()) {

@@ -236,7 +236,7 @@ bool render_block(const std::string& source, const Options& options, std::string
     double row_height = kH;
     for (auto& b : blocks) {
         if (b.space || b.group) continue;
-        b.lines = split_lines(b.label);
+        b.lines = wrap_lines(text, split_lines(b.label), kFont, 500, kWrapWidth);
         b.h = std::max(kH, b.lines.size() * kFont * kLineHeight + 24);
         if (b.shape == Shape::Circle) b.h = std::max(b.h, 64.0);
         row_height = std::max(row_height, b.h);
@@ -281,7 +281,7 @@ bool render_block(const std::string& source, const Options& options, std::string
     double top_cols = columns_of(-1), width = 80 * top_cols + (top_cols - 1) * kGap, inner = 0;
     for (auto& b : blocks) {
         if (b.space || b.group) continue;
-        b.lines = split_lines(b.label);
+        b.lines = wrap_lines(text, split_lines(b.label), kFont, 500, kWrapWidth);
     }
     for (int pass = 0; pass < 12; pass++) {
         inner = layout(-1, width);

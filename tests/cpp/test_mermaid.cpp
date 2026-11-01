@@ -168,6 +168,8 @@ int main() {
                   width_of(svg_of("erDiagram\n  A ||--o{ B : \"" + words + "\"")) < 500,
               "wrap/edge_labels_of_state_class_er");
         check(width_of(svg_of("mindmap\n  root((r))\n    " + words)) < 700, "wrap/mindmap_node");
+        check(width_of(svg_of("stateDiagram-v2\n  A: " + words + "\n  A --> B")) < 500, "wrap/state_description");
+        check(width_of(svg_of("block-beta\n  columns 2\n  a[\"" + words + "\"] b")) < 700, "wrap/block_label");
     }
     {
         std::string lab = svg_of("flowchart TD\n  A --\"Yes\"--> B\n  A --Maybe--> C\n  A -.near.-> D\n  A -- \"spaced\" --> E");
