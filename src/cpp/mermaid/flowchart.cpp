@@ -1101,6 +1101,7 @@ bool render_flowchart(const std::string& source, const Options& options, std::st
         if (!frames[gi].used) continue;
         Frame& f = frames[gi];
         f = {f.x0 - kFramePad, f.y0 - kFramePad - kHeader, f.x1 + kFramePad, f.y1 + kFramePad, true};
+        if (!g.swimlane) f.x1 = std::max(f.x1, f.x0 + std::ceil(text.width(g.groups[gi].title, kGroupFont, kGroupWeight)) + 24);  // the title fits in its bar
         int p = g.groups[gi].parent;
         if (p >= 0) grow(frames[p], f.x0, f.y0, f.x1, f.y1);
     }

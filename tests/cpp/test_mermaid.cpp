@@ -157,6 +157,9 @@ int main() {
         double x1 = 0, y1 = 0, x2 = 0, y2 = 0;
         check(dash != std::string::npos && pts != std::string::npos && std::sscanf(linked.c_str() + pts + 8, "%lf,%lf %lf,%lf", &x1, &y1, &x2, &y2) == 4 && std::abs(y1 - y2) < 3,
               "subgraph/empty_nested_edge_level");
+        // a title longer than its members is not cut off by the frame: the frame widens to hold it
+        const std::string long_title(60, 'W');
+        check(width_of(svg_of("flowchart TB\n  subgraph P[\"" + long_title + "\"]\n    A --> B\n  end")) > 400, "subgraph/title_widens_frame");
         check(count(nested, "class=\"subgraph\"") == 2 && has(nested, ">Empty<") && width_of(nested) < width_of(plain) + 160, "subgraph/empty_nested_beside_members");
     }
     {
