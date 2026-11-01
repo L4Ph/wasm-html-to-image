@@ -535,32 +535,49 @@ LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vec
         }
     };
     settle_frames();
+    auto violations = [&]() {
+        std::vector<double> glo, ghi;
+        bounds(glo, ghi);
+        int bad = 0;
+        for (int g = 0; g < ngroups; g++) {
+            if (gmax[g] < 0) continue;
+            const auto& cg = chain_of(g);
+            for (int h = g + 1; h < ngroups; h++) {
+                if (gmax[h] < 0 || gmax[g] < gmin[h] || gmax[h] < gmin[g]) continue;
+                const auto& ch = chain_of(h);
+                if (std::find(cg.begin(), cg.end(), h) != cg.end() || std::find(ch.begin(), ch.end(), g) != ch.end()) continue;
+                if (ghi[g] > glo[h] && ghi[h] > glo[g]) bad++;
+            }
+            for (const LN& x : ln) {
+                if (x.layer < gmin[g] || x.layer > gmax[g]) continue;
+                const auto& cx = chain_of(x.group);
+                if (std::find(cx.begin(), cx.end(), g) != cx.end()) continue;
+                if (x.b + x.bw / 2 > glo[g] && x.b - x.bw / 2 < ghi[g]) bad++;
+            }
+        }
+        return bad;
+    };
+    // how many pairs of frames side by side meet, so that a move which makes the frame of the moved node meet another is refused
+    auto frames_meeting = [&]() {
+        std::vector<double> flo, fhi;
+        bounds(flo, fhi);
+        int meet = 0;
+        for (int g = 0; g < ngroups; g++) {
+            if (gmax[g] < 0) continue;
+            const auto& cg = chain_of(g);
+            for (int h = g + 1; h < ngroups; h++) {
+                if (gmax[h] < 0 || gmax[g] < gmin[h] || gmax[h] < gmin[g]) continue;
+                const auto& ch = chain_of(h);
+                if (std::find(cg.begin(), cg.end(), h) != cg.end() || std::find(ch.begin(), ch.end(), g) != ch.end()) continue;
+                if (fhi[g] > flo[h] && fhi[h] > flo[g]) meet++;
+            }
+        }
+        return meet;
+    };
     // The pushes left some nodes far from their neighbours (a frame went right, the nodes it left behind stayed). Move a node
     // toward the middle of its neighbours when that breaks no frame rule; a few passes, only for graphs small enough to check.
     if (ngroups > 0 && (double)ln.size() * ln.size() * (ngroups + 1) < 3e7) {
         const double pad_lo = kFramePad + (horiz ? kFrameHeader : 0), pad_hi = kFramePad;
-        auto violations = [&]() {
-            std::vector<double> glo, ghi;
-            bounds(glo, ghi);
-            int bad = 0;
-            for (int g = 0; g < ngroups; g++) {
-                if (gmax[g] < 0) continue;
-                const auto& cg = chain_of(g);
-                for (int h = g + 1; h < ngroups; h++) {
-                    if (gmax[h] < 0 || gmax[g] < gmin[h] || gmax[h] < gmin[g]) continue;
-                    const auto& ch = chain_of(h);
-                    if (std::find(cg.begin(), cg.end(), h) != cg.end() || std::find(ch.begin(), ch.end(), g) != ch.end()) continue;
-                    if (ghi[g] > glo[h] && ghi[h] > glo[g]) bad++;
-                }
-                for (const LN& x : ln) {
-                    if (x.layer < gmin[g] || x.layer > gmax[g]) continue;
-                    const auto& cx = chain_of(x.group);
-                    if (std::find(cx.begin(), cx.end(), g) != cx.end()) continue;
-                    if (x.b + x.bw / 2 > glo[g] && x.b - x.bw / 2 < ghi[g]) bad++;
-                }
-            }
-            return bad;
-        };
         int bad = violations();
         for (int pass = 0; pass < 12; pass++) {
             bool moved = false;
@@ -596,23 +613,6 @@ LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vec
         if (!horiz && (int)group_min_w.size() >= ngroups)
             for (int g = 0; g < ngroups; g++)
                 if (gmax[g] >= 0) ghi[g] = std::max(ghi[g], glo[g] + group_min_w[g]);
-        // how many pairs of frames side by side meet, so that a move which makes the frame of the moved node meet another is refused
-        auto frames_meeting = [&]() {
-            std::vector<double> flo, fhi;
-            bounds(flo, fhi);
-            int meet = 0;
-            for (int g = 0; g < ngroups; g++) {
-                if (gmax[g] < 0) continue;
-                const auto& cg = chain_of(g);
-                for (int h = g + 1; h < ngroups; h++) {
-                    if (gmax[h] < 0 || gmax[g] < gmin[h] || gmax[h] < gmin[g]) continue;
-                    const auto& ch = chain_of(h);
-                    if (std::find(cg.begin(), cg.end(), h) != cg.end() || std::find(ch.begin(), ch.end(), g) != ch.end()) continue;
-                    if (fhi[g] > flo[h] && fhi[h] > flo[g]) meet++;
-                }
-            }
-            return meet;
-        };
         for (size_t l = 0; l < L.size(); l++) {
             auto& rw = L[l];
             for (size_t j = 1; j < rw.size(); j++) {
@@ -649,6 +649,59 @@ LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vec
                     if (v.group >= 0 && frames_meeting() > before) v.b = was;
                 }
             }
+        }
+    }
+    // The pushes that cleared the frames made room for them when they were still wide; once the nodes were drawn together a frame
+    // can be left far to the right of the one before it. Move a whole frame, with its members, left as far as its rows allow when
+    // that makes no frame rule worse and leaves the edges no longer.
+    if (ngroups > 1 && (double)ln.size() * ln.size() * (ngroups + 1) < 3e7) {
+        auto edge_cost = [&]() {
+            double c = 0;
+            for (const LN& v : ln)
+                for (int w : v.down) c += std::abs(v.b - ln[w].b);
+            return c;
+        };
+        auto in_chain = [&](const LN& v, int g) {
+            const auto& c = chain_of(v.group);
+            return std::find(c.begin(), c.end(), g) != c.end();
+        };
+        std::vector<double> glo, ghi;
+        for (int round = 0; round < 3; round++) {
+            bounds(glo, ghi);
+            std::vector<int> order;
+            for (int g = 0; g < ngroups; g++)
+                if (gmax[g] >= 0) order.push_back(g);
+            std::sort(order.begin(), order.end(), [&](int x, int y) { return glo[x] < glo[y]; });
+            bool any = false;
+            for (int g : order) {
+                double room = 1e18;
+                for (auto& rw : L)
+                    for (size_t j = 0; j < rw.size(); j++) {
+                        if (!in_chain(ln[rw[j]], g)) continue;
+                        if (j == 0) continue;
+                        const LN& prev = ln[rw[j - 1]];
+                        if (in_chain(prev, g)) continue;
+                        room = std::min(room, ln[rw[j]].b - prev.b - sep(prev, ln[rw[j]]));
+                    }
+                if (room < 1.0 || room > 1e17) continue;
+                std::vector<double> was(ln.size());
+                for (size_t i = 0; i < ln.size(); i++) was[i] = ln[i].b;
+                const int bad_before = violations();
+                const int meet_before = frames_meeting();
+                const double cost_before = edge_cost();
+                // the whole way may run into another frame; then try half of it, and half of that
+                for (int attempt = 0; attempt < 6; attempt++, room /= 2) {
+                    if (room < 1.0) break;
+                    for (size_t i = 0; i < ln.size(); i++)
+                        if (in_chain(ln[i], g)) ln[i].b = was[i] - room;
+                    if (violations() <= bad_before && frames_meeting() <= meet_before && edge_cost() <= cost_before + 0.5) {
+                        any = true;
+                        break;
+                    }
+                    for (size_t i = 0; i < ln.size(); i++) ln[i].b = was[i];
+                }
+            }
+            if (!any) break;
         }
     }
     double min_b = 1e18;
