@@ -35,8 +35,9 @@ struct LayoutResult {
 };
 
 /// `group_parent[g]` is the enclosing group of group `g` (-1 at the top level); empty when no node has a group.
+/// `group_min_w[g]` (optional) is the least width of the frame of group `g`, e.g. for its title; used by top-down layouts.
 LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vector<LayoutEdge>& edges, Direction dir,
-                            const std::vector<int>& group_parent = {});
+                            const std::vector<int>& group_parent = {}, const std::vector<double>& group_min_w = {});
 
 }  // namespace mermaid
 

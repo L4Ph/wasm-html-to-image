@@ -43,7 +43,7 @@ double sep(const LN& a, const LN& b) {
 }  // namespace
 
 LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vector<LayoutEdge>& edges, Direction dir,
-                            const std::vector<int>& group_parent) {
+                            const std::vector<int>& group_parent, const std::vector<double>& group_min_w) {
     const int n = (int)nodes.size();
     const bool horiz = dir == Direction::LR || dir == Direction::RL;
     LayoutResult res;
@@ -319,6 +319,31 @@ LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vec
     std::vector<int> gmin(ngroups, 1 << 30), gmax(ngroups, -1);
     for (const LN& v : ln)
         for (int g : chain_of(v.group)) gmin[g] = std::min(gmin[g], v.layer), gmax[g] = std::max(gmax[g], v.layer);
+    // the box of every group along the breadth axis: its members with the padding of each frame, and wide enough for its title
+    // (group_min_w, top-down graphs only: in left-right ones the title runs along the layers)
+    auto bounds = [&](std::vector<double>& glo, std::vector<double>& ghi) {
+        const double lo_pad = kFramePad + (horiz ? kFrameHeader : 0), hi_pad = kFramePad;
+        glo.assign(ngroups, 1e18);
+        ghi.assign(ngroups, -1e18);
+        for (const LN& v : ln) {
+            int depth = 0;
+            for (int g : chain_of(v.group)) {
+                glo[g] = std::min(glo[g], v.b - v.bw / 2 - lo_pad - depth * lo_pad);
+                ghi[g] = std::max(ghi[g], v.b + v.bw / 2 + hi_pad + depth * hi_pad);
+                depth++;
+            }
+        }
+        if (horiz || (int)group_min_w.size() < ngroups) return;
+        std::vector<int> inner_first(ngroups);
+        for (int g = 0; g < ngroups; g++) inner_first[g] = g;
+        std::stable_sort(inner_first.begin(), inner_first.end(), [&](int a, int b) { return chain_of(a).size() > chain_of(b).size(); });
+        for (int g : inner_first) {
+            if (gmax[g] < 0) continue;
+            ghi[g] = std::max(ghi[g], glo[g] + group_min_w[g]);
+            int par = group_parent[g];
+            if (par >= 0 && gmax[par] >= 0) ghi[par] = std::max(ghi[par], ghi[g] + hi_pad);
+        }
+    };
     if (ngroups > 0) {
         const double pad_lo = kFramePad + (horiz ? kFrameHeader : 0), pad_hi = kFramePad;
         std::vector<int> order(ngroups);
@@ -339,16 +364,9 @@ LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vec
             for (size_t i = 0; i < ln.size(); i++) before[i] = ln[i].b;
             for (int g : order) {
                 if (gmax[g] < 0) continue;
-                double lo = 1e18, hi = -1e18;
-                for (const LN& v : ln)
-                    if (member(v, g)) {
-                        // each frame between the node and g's frame adds its own padding
-                        auto ch = chain_of(v.group);
-                        double levels = (double)(std::find(ch.begin(), ch.end(), g) - ch.begin());
-                        lo = std::min(lo, v.b - v.bw / 2 - levels * pad_lo), hi = std::max(hi, v.b + v.bw / 2 + levels * pad_hi);
-                    }
-                lo -= pad_lo;
-                hi += pad_hi;
+                std::vector<double> blo, bhi;
+                bounds(blo, bhi);
+                double lo = blo[g], hi = bhi[g];
                 for (int l = gmin[g]; l <= gmax[g]; l++) {
                     auto& row = L[l];
                     int first = -1;
@@ -408,9 +426,8 @@ LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vec
             // nodes in the rows say: a frame is the box of all its members, and one can pass over a place the other only
             // reaches in a different row. The one on the right moves, with all its members.
             {
-                std::vector<double> glo(ngroups, 1e18), ghi(ngroups, -1e18);
-                for (const LN& v : ln)
-                    { int depth = 0; for (int g : chain_of(v.group)) glo[g] = std::min(glo[g], v.b - v.bw / 2 - pad_lo - depth * pad_lo), ghi[g] = std::max(ghi[g], v.b + v.bw / 2 + pad_hi + depth * pad_hi), depth++; }
+                std::vector<double> glo, ghi;
+                bounds(glo, ghi);
                 for (int g = 0; g < ngroups; g++) {
                     if (gmax[g] < 0) continue;
                     for (int h = g + 1; h < ngroups; h++) {
@@ -427,16 +444,10 @@ LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vec
                             if (member(v, right)) v.b += d;
                         for (auto& rw : L)
                             for (size_t j = 1; j < rw.size(); j++) ln[rw[j]].b = std::max(ln[rw[j]].b, ln[rw[j - 1]].b + sep(ln[rw[j - 1]], ln[rw[j]]));
-                        for (const LN& v : ln)
-                            for (int k : chain_of(v.group)) glo[k] = 1e18, ghi[k] = -1e18;
-                        for (const LN& v : ln)
-                            { int depth = 0; for (int k : chain_of(v.group)) glo[k] = std::min(glo[k], v.b - v.bw / 2 - pad_lo - depth * pad_lo), ghi[k] = std::max(ghi[k], v.b + v.bw / 2 + pad_hi + depth * pad_hi), depth++; }
+                        bounds(glo, ghi);
                         if (ghi[leftg] > was_hi + 1e-6 || glo[leftg] < was_lo - 1e-6) {  // the push dragged the other group along: undo it
                             for (size_t k = 0; k < ln.size(); k++) ln[k].b = keep[k];
-                            for (const LN& v : ln)
-                                for (int k : chain_of(v.group)) glo[k] = 1e18, ghi[k] = -1e18;
-                            for (const LN& v : ln)
-                                { int depth = 0; for (int k : chain_of(v.group)) glo[k] = std::min(glo[k], v.b - v.bw / 2 - pad_lo - depth * pad_lo), ghi[k] = std::max(ghi[k], v.b + v.bw / 2 + pad_hi + depth * pad_hi), depth++; }
+                            bounds(glo, ghi);
                             continue;
                         }
                         moved = true;
@@ -457,15 +468,8 @@ LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vec
     if (ngroups > 0 && (double)ln.size() * ln.size() * (ngroups + 1) < 3e7) {
         const double pad_lo = kFramePad + (horiz ? kFrameHeader : 0), pad_hi = kFramePad;
         auto violations = [&]() {
-            std::vector<double> glo(ngroups, 1e18), ghi(ngroups, -1e18);
-            for (const LN& v : ln) {
-                int depth = 0;
-                for (int g : chain_of(v.group)) {
-                    glo[g] = std::min(glo[g], v.b - v.bw / 2 - pad_lo - depth * pad_lo);
-                    ghi[g] = std::max(ghi[g], v.b + v.bw / 2 + pad_hi + depth * pad_hi);
-                    depth++;
-                }
-            }
+            std::vector<double> glo, ghi;
+            bounds(glo, ghi);
             int bad = 0;
             for (int g = 0; g < ngroups; g++) {
                 if (gmax[g] < 0) continue;
@@ -515,6 +519,9 @@ LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vec
         std::vector<double> glo(ngroups, 1e18), ghi(ngroups, -1e18);
         for (const LN& v : ln)
             for (int g : chain_of(v.group)) glo[g] = std::min(glo[g], v.b - v.bw / 2 - kFramePad), ghi[g] = std::max(ghi[g], v.b + v.bw / 2 + kFramePad);
+        if (!horiz && (int)group_min_w.size() >= ngroups)
+            for (int g = 0; g < ngroups; g++)
+                if (gmax[g] >= 0) ghi[g] = std::max(ghi[g], glo[g] + group_min_w[g]);
         for (size_t l = 0; l < L.size(); l++) {
             auto& rw = L[l];
             for (size_t j = 1; j < rw.size(); j++) {

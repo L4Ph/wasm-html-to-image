@@ -906,7 +906,11 @@ bool render_flowchart(const std::string& source, const Options& options, std::st
         }
     }
     std::vector<int> group_parent;
-    for (const Group& gr : g.groups) group_parent.push_back(gr.parent);
+    std::vector<double> group_min_w;  // a frame is wide enough for its title (the drawing widens it the same way)
+    for (const Group& gr : g.groups) {
+        group_parent.push_back(gr.parent);
+        group_min_w.push_back(std::ceil(text.width(gr.title, kGroupFont, kGroupWeight)) + 24 + 4);
+    }
     LayoutResult lay;
     SwimResult swim;
     std::vector<std::string> lane_titles;
@@ -942,7 +946,7 @@ bool render_flowchart(const std::string& source, const Options& options, std::st
         std::vector<int> le_at;
         for (size_t i = 0; i < le.size(); i++)
             if (le[i].from >= 0 && le[i].to >= 0) le_in.push_back(le[i]), le_at.push_back((int)i);
-        LayoutResult in = layout_layered(ln, le_in, g.dir, group_parent);
+        LayoutResult in = layout_layered(ln, le_in, g.dir, group_parent, group_min_w);
         lay = in;
         lay.points.assign(le.size(), {});
         lay.label_center.assign(le.size(), Pt{0, 0});
