@@ -140,8 +140,10 @@ LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vec
         auto ca = chain_of(a.group), cb = chain_of(b.group);
         int diff = 0;
         for (int g : ca) diff += std::find(cb.begin(), cb.end(), g) == cb.end();
-        for (int g : cb) diff += std::find(ca.begin(), ca.end(), g) == ca.end();
-        return gap + diff * kFrameGap;
+        int starting = 0;  // frames that begin at b: in a left-right graph their title bar sits on b's near side
+        for (int g : cb) starting += std::find(ca.begin(), ca.end(), g) == ca.end();
+        diff += starting;
+        return gap + diff * kFrameGap + (horiz ? starting * kFrameHeader : 0);
     };
 
     // ── 4. order within the layers: barycentre sweeps, keeping the best ordering seen ──
