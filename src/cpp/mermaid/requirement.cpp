@@ -14,6 +14,7 @@ using litehtml::svgutil::trim;
 struct Item {
     std::string name, stereotype;
     std::vector<std::pair<std::string, std::string>> fields;  // label, value
+    std::vector<std::string> rows;  // the fields as drawn, a long one broken over several rows
     double w = 0, h = 0, head_h = 0;
 };
 
@@ -150,10 +151,13 @@ bool render_requirement(const std::string& source, const Options& options, std::
     for (size_t k = 0; k < items.size(); k++) {
         Item& it = items[k];
         double w = std::max(text.width(it.name, 13, 600), text.width(it.stereotype, 11, 400));
-        for (auto& f : it.fields) w = std::max(w, text.width(f.first + ": " + f.second, 12, 400));
+        // a long field (a requirement's text) breaks over rows instead of making the box as wide as the sentence
+        for (auto& f : it.fields)
+            for (const std::string& row : wrap_lines(text, {f.first + ": " + f.second}, 12, 400, kWrapWidth)) it.rows.push_back(row);
+        for (const std::string& row : it.rows) w = std::max(w, text.width(row, 12, 400));
         it.w = std::max(150.0, w + 2 * kPad);
         it.head_h = kHead;
-        it.h = kHead + (it.fields.empty() ? 8 : it.fields.size() * kRow + 12);
+        it.h = kHead + (it.rows.empty() ? 8 : it.rows.size() * kRow + 12);
         ln[k].w = it.w;
         ln[k].h = it.h;
     }
@@ -203,8 +207,8 @@ bool render_requirement(const std::string& source, const Options& options, std::
         body += "<rect x=\"" + num(x) + "\" y=\"" + num(y) + "\" width=\"" + num(it.w) + "\" height=\"" + num(it.head_h) + "\" fill=\"" + th.group_hdr + "\" stroke=\"" + th.border + "\" stroke-width=\"1\"/>\n";
         centered_text(body, th, {it.stereotype}, p.x, y + 14, 11, 400, th.text_sec);
         centered_text(body, th, {it.name}, p.x, y + 31, 13, 600, th.text);
-        for (size_t f = 0; f < it.fields.size(); f++)
-            aligned_text(body, th, {it.fields[f].first + ": " + it.fields[f].second}, x + kPad, y + it.head_h + 10 + f * kRow + kRow / 2, 12, 400, th.text, "start");
+        for (size_t f = 0; f < it.rows.size(); f++)
+            aligned_text(body, th, {it.rows[f]}, x + kPad, y + it.head_h + 10 + f * kRow + kRow / 2, 12, 400, th.text, "start");
         body += "</g>\n";
     }
     svg = svg_document(th, lay.width + 2 * kMargin, lay.height + 2 * kMargin, body);

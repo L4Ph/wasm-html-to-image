@@ -1,7 +1,7 @@
 {
   "flowchart@light": {
-    "width": 341,
-    "height": 798.35,
+    "width": 341.02,
+    "height": 798.66,
     "tags": {
       "svg": 2,
       "defs": 1,
@@ -23,8 +23,8 @@
     ]
   },
   "flowchart@dark": {
-    "width": 341,
-    "height": 798.35,
+    "width": 341.02,
+    "height": 798.66,
     "tags": {
       "svg": 2,
       "defs": 1,
@@ -46,7 +46,7 @@
     ]
   },
   "sequence@light": {
-    "width": 359.5,
+    "width": 360.18,
     "height": 487,
     "tags": {
       "svg": 2,
@@ -68,7 +68,7 @@
     ]
   },
   "sequence@dark": {
-    "width": 359.5,
+    "width": 360.18,
     "height": 487,
     "tags": {
       "svg": 2,
@@ -134,7 +134,7 @@
     ]
   },
   "class@light": {
-    "width": 314.75,
+    "width": 320.17,
     "height": 328.3,
     "tags": {
       "svg": 2,
@@ -156,7 +156,7 @@
     ]
   },
   "class@dark": {
-    "width": 314.75,
+    "width": 320.17,
     "height": 328.3,
     "tags": {
       "svg": 2,
@@ -178,7 +178,7 @@
     ]
   },
   "er@light": {
-    "width": 215,
+    "width": 222.12,
     "height": 458.6,
     "tags": {
       "svg": 2,
@@ -200,7 +200,7 @@
     ]
   },
   "er@dark": {
-    "width": 215,
+    "width": 222.12,
     "height": 458.6,
     "tags": {
       "svg": 2,
@@ -222,7 +222,7 @@
     ]
   },
   "requirement@light": {
-    "width": 276,
+    "width": 278.36,
     "height": 368.3,
     "tags": {
       "svg": 2,
@@ -242,7 +242,7 @@
     ]
   },
   "requirement@dark": {
-    "width": 276,
+    "width": 278.36,
     "height": 368.3,
     "tags": {
       "svg": 2,
@@ -433,7 +433,7 @@
     ]
   },
   "pie@light": {
-    "width": 358,
+    "width": 358.12,
     "height": 298,
     "tags": {
       "svg": 2,
@@ -453,7 +453,7 @@
     ]
   },
   "pie@dark": {
-    "width": 358,
+    "width": 358.12,
     "height": 298,
     "tags": {
       "svg": 2,
@@ -551,7 +551,7 @@
     ]
   },
   "radar@light": {
-    "width": 529,
+    "width": 530.77,
     "height": 422,
     "tags": {
       "svg": 2,
@@ -569,7 +569,7 @@
     ]
   },
   "radar@dark": {
-    "width": 529,
+    "width": 530.77,
     "height": 422,
     "tags": {
       "svg": 2,
@@ -848,7 +848,7 @@
     ]
   },
   "gitgraph@light": {
-    "width": 576,
+    "width": 582.58,
     "height": 242,
     "tags": {
       "svg": 2,
@@ -871,7 +871,7 @@
     ]
   },
   "gitgraph@dark": {
-    "width": 576,
+    "width": 582.58,
     "height": 242,
     "tags": {
       "svg": 2,
@@ -1012,7 +1012,7 @@
     ]
   },
   "treeview@light": {
-    "width": 169,
+    "width": 171.28,
     "height": 170,
     "tags": {
       "svg": 2,
@@ -1028,7 +1028,7 @@
     ]
   },
   "treeview@dark": {
-    "width": 169,
+    "width": 171.28,
     "height": 170,
     "tags": {
       "svg": 2,
@@ -1135,7 +1135,7 @@
     ]
   },
   "railroad@light": {
-    "width": 495,
+    "width": 504.04,
     "height": 838,
     "tags": {
       "svg": 2,
@@ -1154,7 +1154,7 @@
     ]
   },
   "railroad@dark": {
-    "width": 495,
+    "width": 504.04,
     "height": 838,
     "tags": {
       "svg": 2,
@@ -1173,7 +1173,7 @@
     ]
   },
   "eventmodeling@light": {
-    "width": 1068,
+    "width": 1094.46,
     "height": 424,
     "tags": {
       "svg": 2,
@@ -1199,7 +1199,7 @@
     ]
   },
   "eventmodeling@dark": {
-    "width": 1068,
+    "width": 1094.46,
     "height": 424,
     "tags": {
       "svg": 2,
@@ -1225,7 +1225,7 @@
     ]
   },
   "usecase@light": {
-    "width": 800,
+    "width": 834.73,
     "height": 542.7,
     "tags": {
       "svg": 2,
@@ -1258,7 +1258,7 @@
     ]
   },
   "usecase@dark": {
-    "width": 800,
+    "width": 834.73,
     "height": 542.7,
     "tags": {
       "svg": 2,
@@ -1290,7 +1290,7 @@
     ]
   },
   "swimlane@light": {
-    "width": 1256,
+    "width": 1298.08,
     "height": 368,
     "tags": {
       "svg": 2,
@@ -1310,7 +1310,7 @@
     ]
   },
   "swimlane@dark": {
-    "width": 1256,
+    "width": 1298.08,
     "height": 368,
     "tags": {
       "svg": 2,
@@ -1330,7 +1330,7 @@
     ]
   },
   "agentflow@light": {
-    "width": 401,
+    "width": 405.22,
     "height": 598.55,
     "tags": {
       "svg": 2,
@@ -1350,7 +1350,7 @@
     ]
   },
   "agentflow@dark": {
-    "width": 401,
+    "width": 405.22,
     "height": 598.55,
     "tags": {
       "svg": 2,
@@ -1442,8 +1442,8 @@
     ]
   },
   "accessibility@light": {
-    "width": 448,
-    "height": 147.5,
+    "width": 448.03,
+    "height": 147.51,
     "tags": {
       "svg": 2,
       "defs": 1,
@@ -1463,8 +1463,8 @@
     ]
   },
   "accessibility@dark": {
-    "width": 448,
-    "height": 147.5,
+    "width": 448.03,
+    "height": 147.51,
     "tags": {
       "svg": 2,
       "defs": 1,
@@ -1484,7 +1484,7 @@
     ]
   },
   "init-theme@light": {
-    "width": 443,
+    "width": 451.52,
     "height": 116.91,
     "tags": {
       "svg": 2,
@@ -1503,7 +1503,7 @@
     ]
   },
   "init-theme@dark": {
-    "width": 443,
+    "width": 451.52,
     "height": 116.91,
     "tags": {
       "svg": 2,
@@ -1522,7 +1522,7 @@
     ]
   },
   "frontmatter@light": {
-    "width": 350,
+    "width": 364.44,
     "height": 116.91,
     "tags": {
       "svg": 2,
@@ -1542,7 +1542,7 @@
     ]
   },
   "frontmatter@dark": {
-    "width": 350,
+    "width": 364.44,
     "height": 116.91,
     "tags": {
       "svg": 2,
@@ -1562,7 +1562,7 @@
     ]
   },
   "typo@light": {
-    "width": 357,
+    "width": 362.09,
     "height": 116.91,
     "tags": {
       "svg": 2,
@@ -1580,7 +1580,7 @@
     ]
   },
   "typo@dark": {
-    "width": 357,
+    "width": 362.09,
     "height": 116.91,
     "tags": {
       "svg": 2,
@@ -1598,7 +1598,7 @@
     ]
   },
   "case@light": {
-    "width": 373,
+    "width": 375.73,
     "height": 116.91,
     "tags": {
       "svg": 2,
@@ -1616,7 +1616,7 @@
     ]
   },
   "case@dark": {
-    "width": 373,
+    "width": 375.73,
     "height": 116.91,
     "tags": {
       "svg": 2,

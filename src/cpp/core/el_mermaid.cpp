@@ -83,8 +83,9 @@ double measure_with_fonts(SatoruContext* ctx, MeasureCache& cache, const std::st
         if (!face) {
             cw = size * (cp < 0x80 ? 0.55 : 1.0);
         } else {
-            SkFont font(face, (SkScalar)size);
-            cw = font.measureText(start, (size_t)(p - start), SkTextEncoding::kUTF8);
+            // the font as the text is drawn: a variable face (Noto Sans JP) is a Thin one until the weight is set on its axis
+            std::unique_ptr<SkFont> font(ctx->fontManager.createSkFont(face, (float)size, weight));
+            cw = font ? font->measureText(start, (size_t)(p - start), SkTextEncoding::kUTF8) : size * 0.55;
         }
         cache.glyphs[gk] = cw;
         w += cw;

@@ -1009,6 +1009,9 @@ int main() {
         check(count(s, "class=\"edge\"") == 2 && has(s, ">&lt;&lt;satisfies&gt;&gt;<") && has(s, ">&lt;&lt;contains&gt;&gt;<"), "requirement/relations");
         check(has(s, "stroke-dasharray=\"6 4\""), "requirement/dashed_except_contains");
         std::string e1, e2;
+        // a long text breaks over rows, so the box stays narrow and the text stays inside it
+        std::string long_text = svg_of("requirementDiagram\n  requirement r {\n    id: 1\n    text: The database shall store authentication secrets using Argon2id hashing at every layer of the stack.\n    risk: high\n    verifymethod: test\n  }");
+        check(std::atof(long_text.c_str() + long_text.find("viewBox=\"0 0 ") + 13) < 300 && !has(long_text, "hashing at every layer of the stack") && has(long_text, "authentication"), "requirement/long_text_wraps");
         check(!render("requirementDiagram\n  a - satisfies -> b", e1, e2), "requirement/error_unknown_item");
         check(!render("requirementDiagram\n  requirement r {\n id: 1", e1, e2), "requirement/error_unclosed");
         check(!render("requirementDiagram", e1, e2), "requirement/error_empty");
