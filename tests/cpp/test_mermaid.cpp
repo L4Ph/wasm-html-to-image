@@ -144,6 +144,10 @@ int main() {
         check(frames_apart(svg_of("flowchart LR\nsubgraph G0[\"G0\"]\n  n5\n  n9\nend\nsubgraph G1[\"G1\"]\n  n0\n  n6\nend\nsubgraph G2[\"G2\"]\n  n1\n  n3\n  n4\n  n7\n  n8\nend\n"
                                   "n8 --> n6\nn9 --> n1\nn0 --> n9\nn8 --> n5\nn5 --> n7\nn0 --> n9\nn3 --> n8\nn6 --> n2\nn0 --> n5\nn0 --> n3\nn6 --> n9")),
               "layout/frames_apart_pushes_undo_each_other");
+        // moving nodes one at a time (pulling each toward its neighbours) left two frames meeting that only moving a whole frame clears
+        check(frames_apart(svg_of("flowchart LR\nsubgraph G0[\"Group0\"]\n  n5\n  n10\nend\nsubgraph G1[\"Group1\"]\n  n1\nend\nsubgraph G2[\"Group2\"]\n  n3\n  n8\n  n11\nend\nsubgraph G3[\"Group3\"]\n  n2\n  n9\nend\n"
+                                  "n4 --> n3\nn11 --> n10\nn11 --> n8\nn8 --> n3\nn10 --> n0\nn2 --> n12\nn1 --> n2\nn3 --> n0\nn6 --> n11\nn7 --> n9\nn9 --> n2\nn6 --> n2")),
+              "layout/frames_apart_after_node_moves");
         // a frame wide because of its title keeps the frame beside it clear (the layout counts the title as the frame's width)
         check(frames_apart(svg_of("flowchart TB\nsubgraph A[\"" + std::string(50, 'A') + "\"]\n  a1 --> a2\nend\nsubgraph B[\"B\"]\n  b1 --> b2\nend\na1 --> b1")), "layout/frames_apart_long_title");
         // rows clustered at different moments used to leave two groups in opposite order, which stretched one frame across the other
