@@ -100,6 +100,22 @@ function diagramSize(svg: string): { width: number; height: number } | undefined
   return m ? { width: Number(m[1]), height: Number(m[2]) } : undefined;
 }
 
+/** The width the probe render lays the page out at: wider than any diagram the page itself would clip. */
+const PROBE_WIDTH = 4096;
+
+/**
+ * The SVG of a page rendered at {@link PROBE_WIDTH}, made the SVG of the same page rendered at `width`: the two differ only in
+ * the width of the outermost `<svg>` (the diagram sits at the page's left edge and paints nothing else). Undefined when that
+ * does not hold, for instance with a page background, which is painted across the whole width.
+ */
+function refit(svg: string, width: number): string | undefined {
+  const root = /<svg\b[^>]*>/.exec(svg);
+  if (!root || !root[0].includes(`width="${PROBE_WIDTH}"`)) return undefined;
+  const rest = svg.slice(root.index + root[0].length);
+  if (rest.includes(`"${PROBE_WIDTH}"`)) return undefined;
+  return svg.slice(0, root.index) + root[0].replace(`width="${PROBE_WIDTH}"`, `width="${width}"`) + rest;
+}
+
 /**
  * Render a Mermaid diagram with the given render function. The page is first laid out wide to learn the
  * diagram's size, then rendered at exactly that width (unless `width` is given), so the result has no
@@ -114,32 +130,35 @@ export async function renderMermaidWith(
   const padding = options.padding ?? 16;
   const raster = format !== "svg";
   const value = mermaidToHtml(source, { ...options, raster });
+  // the engine reports repairs and errors through its log; the page is laid out more than once, and each pass draws the
+  // diagram again, so each message is passed on once
+  const onWarning = options.onWarning;
+  const told = new Set<string>();
+  const listen = onWarning
+    ? {
+        logLevel: LogLevel.Warning,
+        onLog: (_level: LogLevel, text: string) => {
+          const m = /^\[(MERMAID_ERROR|MERMAID_RECOVERED)\]\s*(.*)$/.exec(text);
+          if (m && !told.has(text)) {
+            told.add(text);
+            onWarning({ code: m[1] as MermaidWarning["code"], message: m[2] });
+          }
+        },
+      }
+    : {};
   let width = options.width;
   if (width === undefined) {
-    const probe = await render({ value, width: 4096, format: "svg" });
+    // laid out wide first to learn the diagram's size; an SVG with a transparent page needs nothing more than that width
+    // changed in its first tag, so that one render is the answer (a raster image has to be drawn at its own width)
+    const probe = await render({ value, width: PROBE_WIDTH, format: "svg", ...listen });
     const size = typeof probe.data === "string" ? diagramSize(probe.data) : undefined;
     width = size ? Math.ceil(size.width + 2 * padding) : 800;
+    if (!raster && size && width <= PROBE_WIDTH && options.background === undefined) {
+      const fitted = refit(probe.data as string, width);
+      if (fitted !== undefined) return { ...probe, data: fitted, width };
+    }
   }
-  // the engine reports repairs and errors through its log; the probe above is a throw-away render, so only this one is listened to
-  const onWarning = options.onWarning;
-  const told = new Set<string>(); // the page is laid out more than once, and each pass draws the diagram again
-  return render({
-    value,
-    width,
-    format,
-    ...(onWarning
-      ? {
-          logLevel: LogLevel.Warning,
-          onLog: (_level: LogLevel, text: string) => {
-            const m = /^\[(MERMAID_ERROR|MERMAID_RECOVERED)\]\s*(.*)$/.exec(text);
-            if (m && !told.has(text)) {
-              told.add(text);
-              onWarning({ code: m[1] as MermaidWarning["code"], message: m[2] });
-            }
-          },
-        }
-      : {}),
-  });
+  return render({ value, width, format, ...listen });
 }
 
 /** The shape of `renderMermaid` in each entry point: SVG text by default, bytes for the other formats. */
