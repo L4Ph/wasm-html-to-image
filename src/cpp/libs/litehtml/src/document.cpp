@@ -83,7 +83,21 @@ document::ptr document::createFromString(
 
 	if (master_styles != "")
 	{
-		doc->m_master_css.parse_css_stylesheet(master_styles, "", doc, nullptr, nullptr, true, 0);
+		// The master stylesheet is the same text for every document and holds no at-rule (nothing that refers to the document),
+		// and parsing it took most of a small page's time to build. Parse it once and give each document a copy.
+		static thread_local string parsed_text;
+		static thread_local css parsed_css;
+		static thread_local bool have_parsed = false;
+		if (!have_parsed || parsed_text != master_styles)
+		{
+			css fresh;
+			fresh.parse_css_stylesheet(master_styles, "", doc, nullptr, nullptr, true, 0);
+			fresh.sort_selectors();
+			parsed_css = fresh;
+			parsed_text = master_styles;
+			have_parsed = true;
+		}
+		doc->m_master_css = parsed_css;
 		// Quirks mode (no DOCTYPE): tables do not inherit text-align, font and white-space
 		// from their ancestors (WebKit/Blink quirks.css), e.g. <center><table> keeps cells
 		// left-aligned.
@@ -93,8 +107,8 @@ document::ptr document::createFromString(
 				string("table { text-align: left; font-size: medium; line-height: normal;"
 				       " font-weight: normal; font-style: normal; white-space: normal; }"),
 				"", doc, nullptr, nullptr, true, 0);
+			doc->m_master_css.sort_selectors();
 		}
-		doc->m_master_css.sort_selectors();
 	}
 	if (user_styles != "")
 	{
