@@ -2,6 +2,7 @@
 #define SATORU_FONT_MANAGER_H
 
 #include <map>
+#include <memory>
 #include <set>
 #include <string>
 #include <string_view>
@@ -98,7 +99,8 @@ class SatoruFontManager : public satoru::IFontManager {
         std::string unicode_range;
         std::vector<std::pair<uint32_t, uint32_t>> ranges;
     };
-    std::map<font_request, std::vector<font_face_source>> m_fontFaces;
+    // Shared, so that replaying a remembered scan (scanFontFaces) copies pointers, not the strings of every face.
+    std::map<font_request, std::vector<std::shared_ptr<const font_face_source>>> m_fontFaces;
 
     sk_sp<SkTypeface> m_defaultTypeface;
     std::vector<sk_sp<SkTypeface>> m_fallbackTypefaces;

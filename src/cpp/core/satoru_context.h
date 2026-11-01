@@ -34,7 +34,7 @@ enum class CssChangeKind {
 // litehtml ignores @font-face, and the font manager scans the font CSS text itself, so the
 // (often huge: a Google Fonts CSS holds a rule per unicode-range subset) @font-face rules are
 // dropped from the CSS that every document creation tokenizes and parses.
-inline std::string strip_font_face_rules(const std::string& css) {
+inline std::string strip_font_face_rules_uncached(const std::string& css) {
     static const char kRule[] = "@font-face";
     if (css.find(kRule) == std::string::npos) return css;
     std::string out;
@@ -76,6 +76,19 @@ inline std::string strip_font_face_rules(const std::string& css) {
         }
         out.push_back(css[i++]);
     }
+    return out;
+}
+
+// Every render builds a new context and is handed the same default web font stylesheet (111 KB), so the result for a large
+// stylesheet is remembered by its text: the scan is a per-character loop that costs about a millisecond in wasm.
+inline std::string strip_font_face_rules(const std::string& css) {
+    if (css.size() < 4096) return strip_font_face_rules_uncached(css);
+    static thread_local std::vector<std::pair<std::string, std::string>> memo;
+    for (const auto& e : memo)
+        if (e.first == css) return e.second;
+    std::string out = strip_font_face_rules_uncached(css);
+    if (memo.size() >= 4) memo.erase(memo.begin());
+    memo.emplace_back(css, out);
     return out;
 }
 

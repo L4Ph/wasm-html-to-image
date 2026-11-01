@@ -463,7 +463,8 @@ bool SatoruFontManager::loadFont(const char* name, const uint8_t* data, int size
             if (url && *url) {
                 for (const auto& entry : m_fontFaces) {
                     if (entry.first.family == cleaned) {
-                        for (const auto& src : entry.second) {
+                        for (const auto& src_ptr : entry.second) {
+                            const font_face_source& src = *src_ptr;
                             if (src.url == url) {
                                 // Keep the width of the file itself, it is needed to
                                 // pick a face for a given font-stretch.
@@ -521,7 +522,7 @@ void SatoruFontManager::scanFontFaces(const std::string& css) {
 
     // What a big stylesheet (the default web font's, over 100 KB of @font-face blocks) scanned to, kept by its text: every
     // render of a page starts a new instance and is handed the same stylesheet again.
-    using ScannedFace = std::pair<font_request, font_face_source>;
+    using ScannedFace = std::pair<font_request, std::shared_ptr<const font_face_source>>;
     struct ScanMemo {
         size_t hash = 0;
         size_t size = 0;
@@ -531,10 +532,10 @@ void SatoruFontManager::scanFontFaces(const std::string& css) {
     constexpr size_t kMemoSlots = 4;
     static thread_local std::vector<ScanMemo> memo;
 
-    auto add_face = [this](const font_request& req, const font_face_source& src) {
+    auto add_face = [this](const font_request& req, const std::shared_ptr<const font_face_source>& src) {
         auto& sources = m_fontFaces[req];
         for (const auto& existing_src : sources)
-            if (existing_src.url == src.url) return;
+            if (existing_src->url == src->url) return;
         sources.push_back(src);
     };
     const bool memoise = css.size() >= kMemoMinSize;
@@ -651,13 +652,13 @@ void SatoruFontManager::scanFontFaces(const std::string& css) {
             }
 
             if (!best_url.empty() && best_score >= 0) {
-                font_face_source src;
-                src.url = std::string(best_url);
+                auto src = std::make_shared<font_face_source>();
+                src->url = std::string(best_url);
 
                 if (std::string_view range_value = css_property_value(body_sv, "unicode-range");
                     !range_value.empty()) {
-                    src.unicode_range = trim(range_value);
-                    parseUnicodeRange(src.unicode_range, src.ranges);
+                    src->unicode_range = trim(range_value);
+                    parseUnicodeRange(src->unicode_range, src->ranges);
                 }
 
                 for (int w : weights) {
@@ -697,7 +698,8 @@ std::vector<std::string> SatoruFontManager::getFontUrls(
 
         auto it = m_fontFaces.find(req);
         if (it != m_fontFaces.end()) {
-            for (const auto& src : it->second) {
+            for (const auto& src_ptr : it->second) {
+                const font_face_source& src = *src_ptr;
                 if (std::find(urls.begin(), urls.end(), src.url) != urls.end()) continue;
 
                 bool needed = true;
@@ -723,7 +725,9 @@ std::vector<std::string> SatoruFontManager::getFontUrls(
             if (entry.first.family == cleanedFamily && entry.first.slant == slant) {
                 if (entry.first.weight == weight) continue;  // Already checked
 
-                for (const auto& src : entry.second) {
+                for (const auto& src_ptr : entry.second) {
+
+                    const font_face_source& src = *src_ptr;
                     if (std::find(urls.begin(), urls.end(), src.url) == urls.end()) {
                         bool needed = true;
                         if (usedCodepoints && !src.unicode_range.empty()) {
@@ -758,7 +762,8 @@ bool SatoruFontManager::hasFontFaceSource(const std::string& family, const std::
     std::string cleanedFamily = cleanName(family);
     for (const auto& entry : m_fontFaces) {
         if (entry.first.family != cleanedFamily) continue;
-        for (const auto& src : entry.second) {
+        for (const auto& src_ptr : entry.second) {
+            const font_face_source& src = *src_ptr;
             if (src.url == url) return true;
         }
     }
@@ -805,7 +810,8 @@ std::set<char32_t> SatoruFontManager::uncoveredCodepoints(
                 if (is_fallback_index_family(req.family)) continue;
                 auto cached = m_typefaceCache.find(req.family);
                 bool familyLoaded = cached != m_typefaceCache.end() && !cached->second.empty();
-                for (const auto& src : srcs) {
+                for (const auto& src_ptr : srcs) {
+                    const font_face_source& src = *src_ptr;
                     if (src.ranges.empty()) {
                         // unicode-range 指定の無い @font-face は全域請求。
                         // family 未読み込みの間は通常経路の取得を待つ。
@@ -1134,7 +1140,8 @@ std::string SatoruFontManager::generateFontFaceCSS() const {
 
     for (const auto& entry : m_fontFaces) {
         const auto& req = entry.first;
-        for (const auto& src : entry.second) {
+        for (const auto& src_ptr : entry.second) {
+            const font_face_source& src = *src_ptr;
             std::string key =
                 req.family + std::to_string(req.weight) + std::to_string((int)req.slant) + src.url;
             if (seen_urls.count(key)) continue;

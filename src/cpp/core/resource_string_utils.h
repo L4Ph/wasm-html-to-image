@@ -93,7 +93,24 @@ inline bool contains_weight_marker(const std::string& url, const char* a, const 
  * Does NOT handle font-family inside @font-face where properties appear
  * on the same line — assumes each declaration ends with `;` or `}`.
  */
+inline std::string replace_font_family_names_uncached(const std::string& css, const std::string& name);
+
+// The same large stylesheet comes back for every render, so its result for a name is remembered (see strip_font_face_rules).
 inline std::string replace_font_family_names(const std::string& css, const std::string& name) {
+    if (css.size() < 4096) return replace_font_family_names_uncached(css, name);
+    struct Memo {
+        std::string css, name, out;
+    };
+    static thread_local std::vector<Memo> memo;
+    for (const auto& e : memo)
+        if (e.name == name && e.css == css) return e.out;
+    std::string out = replace_font_family_names_uncached(css, name);
+    if (memo.size() >= 8) memo.erase(memo.begin());
+    memo.push_back({css, name, out});
+    return out;
+}
+
+inline std::string replace_font_family_names_uncached(const std::string& css, const std::string& name) {
     std::string result;
     result.reserve(css.size());
     size_t pos = 0;
