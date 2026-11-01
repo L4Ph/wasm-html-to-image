@@ -46,6 +46,11 @@ jobs:
       - name: Run Unit Tests
         run: pnpm test
 
+      # Notation variants against the official Mermaid parser: fails on a gap or structure difference that is not in
+      # packages/mermaid-compare/scripts/notation-known-gaps.json
+      - name: Mermaid Notation Differential Test
+        run: pnpm --filter mermaid-compare notation-diff
+
       - name: Cache Playwright Browsers
         id: playwright-cache
         uses: actions/cache@v6

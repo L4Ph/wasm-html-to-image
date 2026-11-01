@@ -14,7 +14,9 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const args = process.argv.slice(2);
 const jsonOut = args.includes("--json") ? args[args.indexOf("--json") + 1] : null;
-const cli = args.find((a) => a.endsWith(".exe")) ?? path.join(ROOT, "build-host-tests/Release/mermaid_cli.exe");
+// the host build puts the CLI in Release/ with Visual Studio (.exe) and in the build folder itself with a single-config generator
+const cliCandidates = ["Release/mermaid_cli.exe", "Debug/mermaid_cli.exe", "mermaid_cli"].map((p) => path.join(ROOT, "build-host-tests", p));
+const cli = args.find((a) => a.endsWith(".exe") || a.endsWith("mermaid_cli")) ?? cliCandidates.find((p) => fs.existsSync(p)) ?? cliCandidates[0];
 
 const require = createRequire(path.join(ROOT, "package.json"));
 const jsdomDir = fs.readdirSync(path.join(ROOT, "node_modules/.pnpm")).find((d) => d.startsWith("jsdom@"));
