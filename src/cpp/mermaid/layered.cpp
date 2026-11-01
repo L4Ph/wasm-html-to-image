@@ -689,17 +689,25 @@ LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vec
                 const int bad_before = violations();
                 const int meet_before = frames_meeting();
                 const double cost_before = edge_cost();
-                // the whole way may run into another frame; then try half of it, and half of that
-                for (int attempt = 0; attempt < 6; attempt++, room /= 2) {
-                    if (room < 1.0) break;
+                // the whole way may run into another frame: look for the farthest shift that is still allowed
+                auto try_shift = [&](double d) {
                     for (size_t i = 0; i < ln.size(); i++)
-                        if (in_chain(ln[i], g)) ln[i].b = was[i] - room;
-                    if (violations() <= bad_before && frames_meeting() <= meet_before && edge_cost() <= cost_before + 0.5) {
-                        any = true;
-                        break;
+                        if (in_chain(ln[i], g)) ln[i].b = was[i] - d;
+                    return violations() <= bad_before && frames_meeting() <= meet_before && edge_cost() <= cost_before + 0.5;
+                };
+                double ok = 0, hi = room;
+                if (try_shift(hi)) {
+                    ok = hi;
+                } else {
+                    for (int step = 0; step < 8 && hi - ok >= 1.0; step++) {
+                        const double mid = (ok + hi) / 2;
+                        if (try_shift(mid)) ok = mid;
+                        else hi = mid;
                     }
-                    for (size_t i = 0; i < ln.size(); i++) ln[i].b = was[i];
                 }
+                for (size_t i = 0; i < ln.size(); i++)
+                    ln[i].b = in_chain(ln[i], g) ? was[i] - ok : was[i];
+                if (ok >= 1.0) any = true;
             }
             if (!any) break;
         }
