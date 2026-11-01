@@ -41,7 +41,11 @@ PDF では、図がページをまたいで分断されず、文字は選択で�
 </div>
 ```
 
-`<pre class="mermaid">` でも同じです。要素の文字列が図のソースになります。色はページの CSS から決まります（[CSS からの指定](#3-css-からの指定)）。
+`<pre class="mermaid">` でも同じです。要素の文字列が図のソースになります。色や動作はページの CSS から決まります（[CSS からの指定](#3-css-からの指定)）。
+
+- ソースはテキストとして書きます。`<` と `&` はエスケープしてください（`A --&gt; B`）。
+- テーマを指定しないと、色は要素の `color` だけから決まり、ページの背景は見ません。暗い背景のページでは、`--mermaid-theme: dark;`（または `nord` など）を指定してください。
+- ほかの要素とは、ブロックとして並びます。
 
 ### コマンドラインから
 
@@ -78,6 +82,20 @@ const { data: png } = await renderMermaid("graph LR\n  A --> B", {
 | `/edge-light` | `renderMermaid` は無い。`render({ mermaid: { source, ... }, format }, wasm)` で描く |
 
 `renderMermaid(source, options)` は、`render({ mermaid: { source, ...options }, format, width })` の別名です。どの入口の `render` でも、`mermaid` に `{ source, theme, padding, mode, directives, accent, background, onWarning, ... }` を渡せば、図が描けます。`width` と `format` は `render` のオプションで、それ以外のオプション（`fontMap`、`limits`、`onLog` など）は、そのまま描画に渡ります。
+
+```typescript
+import { render } from "wasm-html-to-image";
+
+// render の呼び出しごとにテーマを選べる
+const { data } = await render({
+  mermaid: { source: "graph LR\n  A --> B", theme: "nord", accent: "#ff79c6" },
+  format: "png",
+});
+```
+
+テーマ名の型 `MermaidTheme` と一覧 `MERMAID_THEMES` は、`wasm-html-to-image` から import できます（[テーマ](#4-テーマ)）。存在しないテーマ名を渡すと、使える名前を並べたエラーになります。`onWarning` は、ワーカープール（`/workers`）の `render` でも呼ばれます。
+
+以前の `renderMermaidWith` と `bindRenderMermaid` は、`render({ mermaid })` に統合して削除しました。`renderMermaidWith(render, source, options)` は `render({ mermaid: { source, ...options } })` に置き換えてください。
 
 HTML ページとして使いたいときは、`mermaidToHtml(source, options)` が、図を 1 つ含む HTML 文字列を返します。
 
@@ -120,6 +138,7 @@ HTML ページとして使いたいときは、`mermaidToHtml(source, options)` 
 | `--mermaid-label-fill` | 辺のラベルの背景 |
 | `--mermaid-mode` | `compat` または `recover` |
 | `--mermaid-directives` | `on` で `%%{init}%%` と frontmatter を反映 |
+| `--mermaid-max-lines` / `--mermaid-max-bytes` | 行数 / ソースの大きさ（バイト）の上限。`0` で無制限（[大きさの上限](#7-大きさの上限)） |
 
 ```html
 <style>

@@ -20,7 +20,7 @@ It is implemented in pure JavaScript with no Node.js platform dependencies, runn
 - **Smart Page Break Handling**: Avoids orphan headings (`break-after: avoid`) and prevents breaking code blocks and tables across page boundaries.
 - **YAML Front Matter**: Parses document metadata (`title`, `subtitle`, `author`, `date`, `template`, `stamp`, `cover`, `accent`, etc.).
 - **Syntax Highlighting**: Built-in highlight.js covering 20+ programming languages.
-- **Mermaid diagrams**: ` ```mermaid ` blocks (flowchart, sequence, state, class, ER, bar/line chart) are drawn inside the engine.
+- **Mermaid diagrams**: ` ```mermaid ` blocks are drawn inside the engine (flowchart, sequence, state, class, ER, Gantt, pie and more: over 30 kinds; see the [list](./mermaid.md#6-supported-diagrams)).
 - **KaTeX Mathematical Typesetting (`/markdown-math`)**: High-accuracy rendering for inline `$…$` and display `$$…$$` equations.
 
 ---

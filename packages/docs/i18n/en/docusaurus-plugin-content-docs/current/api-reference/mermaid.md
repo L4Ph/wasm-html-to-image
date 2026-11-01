@@ -41,7 +41,11 @@ In a PDF a diagram is never split across pages, and its text stays selectable ve
 </div>
 ```
 
-`<pre class="mermaid">` works the same. The element's text is the diagram source. Colours come from the page's CSS ([CSS control](#3-css-control)).
+`<pre class="mermaid">` works the same. The element's text is the diagram source. Colours and behaviour come from the page's CSS ([CSS control](#3-css-control)).
+
+- Write the source as text: escape `<` and `&` (`A --&gt; B`).
+- Without a theme the colours come from the element's `color` only; the page background is not looked at. On a dark page set `--mermaid-theme: dark;` (or `nord`, ...).
+- The diagram sits among the other elements as a block.
 
 ### From the command line
 
@@ -78,6 +82,20 @@ The output is sized to the diagram (plus the padding). `data` is a string for `f
 | `/edge-light` | No `renderMermaid`; draw with `render({ mermaid: { source, ... }, format }, wasm)` |
 
 `renderMermaid(source, options)` is shorthand for `render({ mermaid: { source, ...options }, format, width })`. The `render` of every entry takes `mermaid: { source, theme, padding, mode, directives, accent, background, onWarning, ... }`. `width` and `format` are render options, and the other options (`fontMap`, `limits`, `onLog`, ...) reach the drawing as they are.
+
+```typescript
+import { render } from "wasm-html-to-image";
+
+// the theme can be chosen on every call of render
+const { data } = await render({
+  mermaid: { source: "graph LR\n  A --> B", theme: "nord", accent: "#ff79c6" },
+  format: "png",
+});
+```
+
+The theme names are the type `MermaidTheme` and the list `MERMAID_THEMES`, both importable from `wasm-html-to-image` ([Themes](#4-themes)). An unknown theme name throws an error that lists the names you can use. `onWarning` is called for `render` on the worker pool (`/workers`) too.
+
+The former `renderMermaidWith` and `bindRenderMermaid` were merged into `render({ mermaid })` and removed. Replace `renderMermaidWith(render, source, options)` with `render({ mermaid: { source, ...options } })`.
 
 `mermaidToHtml(source, options)` returns an HTML string with one diagram, for when you want a page.
 
@@ -120,6 +138,7 @@ A `<div class="mermaid">` or a Markdown diagram takes its colours and behaviour 
 | `--mermaid-label-fill` | Background behind edge labels |
 | `--mermaid-mode` | `compat` or `recover` |
 | `--mermaid-directives` | `on` honours `%%{init}%%` and frontmatter |
+| `--mermaid-max-lines` / `--mermaid-max-bytes` | Most lines / largest source in bytes. `0` lifts the limit ([Size limits](#7-size-limits)) |
 
 ```html
 <style>
