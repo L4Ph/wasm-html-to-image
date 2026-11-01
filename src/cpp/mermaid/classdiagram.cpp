@@ -268,7 +268,7 @@ bool render_class(const std::string& source, const Options& options, std::string
         le[k].from = flipped[k] ? r.b : r.a;
         le[k].to = flipped[k] ? r.a : r.b;
         if (!r.label.empty()) {
-            label_lines[k] = split_lines(r.label);
+            label_lines[k] = wrap_lines(text, split_lines(r.label), kEdgeFont, kEdgeWeight, kWrapWidth);
             le[k].label_w = text.block_width(label_lines[k], kEdgeFont, kEdgeWeight) + 16;
             le[k].label_h = label_lines[k].size() * kEdgeFont * kLineHeight + 16;
         }

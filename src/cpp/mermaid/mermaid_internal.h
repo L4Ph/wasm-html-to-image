@@ -20,6 +20,7 @@ struct Pt {
 /// Fixed sizes of the drawing (px), the same scale as the reference renderer so diagrams look alike.
 namespace metrics {
 constexpr double kNodeFont = 13;
+constexpr double kWrapWidth = 200;  // a label wider than this wraps (Mermaid's wrappingWidth)
 constexpr int kNodeWeight = 500;
 constexpr double kEdgeFont = 11;
 constexpr int kEdgeWeight = 400;
@@ -174,6 +175,39 @@ struct Text {
         return w;
     }
 };
+
+/// Lines of @p lines broken so that none is wider than @p max_w: at a space when there is one, anywhere otherwise (CJK, a long
+/// word). Mermaid wraps flowchart labels at 200 px too (`wrappingWidth`), so a long label grows the node downward, not sideways.
+inline std::vector<std::string> wrap_lines(const Text& text, const std::vector<std::string>& lines, double size, int weight, double max_w) {
+    std::vector<std::string> out;
+    for (const std::string& s : lines) {
+        if (text.width(s, size, weight) <= max_w) {
+            out.push_back(s);
+            continue;
+        }
+        std::string cur;
+        for (size_t i = 0; i < s.size();) {
+            unsigned char c = (unsigned char)s[i];
+            size_t len = c >= 0xF0 ? 4 : c >= 0xE0 ? 3 : c >= 0xC0 ? 2 : 1;
+            std::string ch = s.substr(i, len);
+            i += len;
+            if (!cur.empty() && text.width(cur + ch, size, weight) > max_w) {
+                size_t sp = len == 1 && ch != " " ? cur.rfind(' ') : std::string::npos;
+                if (sp != std::string::npos) {
+                    out.push_back(cur.substr(0, sp));
+                    cur = cur.substr(sp + 1) + ch;
+                } else {
+                    out.push_back(cur);
+                    cur = ch == " " ? "" : ch;
+                }
+            } else {
+                cur += ch;
+            }
+        }
+        if (!cur.empty()) out.push_back(cur);
+    }
+    return out;
+}
 
 /// Escaped text for a `<text>`.
 inline std::string text_content(const std::string& s) { return esc(s); }

@@ -291,7 +291,7 @@ bool render_state(const std::string& source, const Options& options, std::string
         le[k].from = d.edges[k].from;
         le[k].to = d.edges[k].to;
         if (!d.edges[k].label.empty()) {
-            label_lines[k] = split_lines(d.edges[k].label);
+            label_lines[k] = wrap_lines(text, split_lines(d.edges[k].label), kEdgeFont, kEdgeWeight, kWrapWidth);
             le[k].label_w = text.block_width(label_lines[k], kEdgeFont, kEdgeWeight) + 16;
             le[k].label_h = label_lines[k].size() * kEdgeFont * kLineHeight + 16;
         }

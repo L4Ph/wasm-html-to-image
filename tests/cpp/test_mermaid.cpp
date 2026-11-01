@@ -154,6 +154,22 @@ int main() {
         check(count(nested, "class=\"subgraph\"") == 2 && has(nested, ">Empty<") && width_of(nested) < width_of(plain) + 160, "subgraph/empty_nested_beside_members");
     }
     {
+        // a long label wraps (at 200 px, as Mermaid does) instead of making the node, the edge label or the whole picture wide
+        std::string longtext(60, 'x');
+        std::string words;
+        for (int i = 0; i < 40; i++) words += "word ";
+        auto width_of = [](const std::string& s) { return std::atof(s.c_str() + s.find("viewBox=\"0 0 ") + 13); };
+        std::string jp;
+        for (int i = 0; i < 80; i++) jp += "\xe3\x81\x82";  // あ x 80
+        check(width_of(svg_of("flowchart TD\n  A[\"" + jp + "\"] --> B")) < 500, "wrap/flowchart_cjk_node");
+        check(width_of(svg_of("flowchart TD\n  A[\"" + words + "\"] --> B")) < 500, "wrap/flowchart_words_node");
+        check(width_of(svg_of("flowchart TD\n  A -->|" + words + "| B")) < 500, "wrap/flowchart_edge_label");
+        check(width_of(svg_of("stateDiagram-v2\n  A --> B: " + words)) < 500 && width_of(svg_of("classDiagram\n  A --> B : " + words)) < 500 &&
+                  width_of(svg_of("erDiagram\n  A ||--o{ B : \"" + words + "\"")) < 500,
+              "wrap/edge_labels_of_state_class_er");
+        check(width_of(svg_of("mindmap\n  root((r))\n    " + words)) < 700, "wrap/mindmap_node");
+    }
+    {
         std::string lab = svg_of("flowchart TD\n  A --\"Yes\"--> B\n  A --Maybe--> C\n  A -.near.-> D\n  A -- \"spaced\" --> E");
         check(!has(lab, "ERROR") && has(lab, ">Yes<") && has(lab, ">Maybe<") && has(lab, ">near<") && has(lab, ">spaced<") && !has(lab, "&quot;"), "edge/compact_and_quoted_labels");
     }

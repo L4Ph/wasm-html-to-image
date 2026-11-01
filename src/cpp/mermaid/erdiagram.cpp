@@ -303,7 +303,7 @@ bool render_er(const std::string& source, const Options& options, std::string& s
         le[k].from = d.rels[k].a;
         le[k].to = d.rels[k].b;
         if (!d.rels[k].label.empty()) {
-            label_lines[k] = split_lines(d.rels[k].label);
+            label_lines[k] = wrap_lines(text, split_lines(d.rels[k].label), kEdgeFont, kEdgeWeight, kWrapWidth);
             le[k].label_w = text.block_width(label_lines[k], kEdgeFont, kEdgeWeight) + 16;
             le[k].label_h = label_lines[k].size() * kEdgeFont * kLineHeight + 16;
         }

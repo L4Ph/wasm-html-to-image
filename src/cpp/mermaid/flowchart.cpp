@@ -735,7 +735,7 @@ bool parse(const std::string& source, Graph& g, std::string& error) {
 void size_nodes(Graph& g, const Text& text) {
     using namespace metrics;
     for (Node& n : g.nodes) {
-        n.lines = split_lines(n.label);
+        n.lines = wrap_lines(text, split_lines(n.label), kNodeFont, kNodeWeight, kWrapWidth);
         if (n.phantom) {  // wide enough that its frame holds the subgraph's title
             n.w = std::max(60.0, std::ceil(text.block_width({n.label}, kGroupFont, kGroupWeight)) - 8);
             n.h = 24;
@@ -900,7 +900,7 @@ bool render_flowchart(const std::string& source, const Options& options, std::st
         le[i].from = slot[g.edges[i].from];
         le[i].to = slot[g.edges[i].to];
         if (!g.edges[i].label.empty()) {
-            label_lines[i] = split_lines(g.edges[i].label);
+            label_lines[i] = wrap_lines(text, split_lines(g.edges[i].label), kEdgeFont, kEdgeWeight, kWrapWidth);
             le[i].label_w = text.block_width(label_lines[i], kEdgeFont, kEdgeWeight) + 16;
             le[i].label_h = label_lines[i].size() * kEdgeFont * kLineHeight + 16;
         }

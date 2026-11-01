@@ -123,7 +123,7 @@ bool render_mindmap(const std::string& source, const Options& options, std::stri
         bool root = k == 0;
         double size = root ? 15 : 13;
         int weight = root ? 600 : 500;
-        n.lines = split_lines(n.text);
+        n.lines = wrap_lines(text, split_lines(n.text), size, weight, kWrapWidth);
         double w = text.block_width(n.lines, size, weight) + (root ? 40 : 28);
         double h = n.lines.size() * size * kLineHeight + (root ? 24 : 16);
         if (n.shape == Shape::Circle || (root && n.shape == Shape::Default)) w = std::max(w, h * 1.3);
