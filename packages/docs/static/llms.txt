@@ -6,6 +6,7 @@
 ## Core Capabilities
 - **HTML to Image**: Render HTML strings, arrays (multi-page PDF), or remote URLs directly to PNG, JPEG, WebP, AVIF, RAW, ThumbHash, SVG, or vector PDF.
 - **Image Optimization & Conversion**: Direct image-to-image resizing, cropping, and format re-encoding (e.g., JPEG to WebP/AVIF, GIF to animated WebP) without HTML layout overhead.
+- **Mermaid Diagrams**: `renderMermaid(source, { format, theme })` / `render({ mermaid: { source } })` draw flowchart, sequence, state, class, ER, gantt, pie, quadrant, mindmap and many more Mermaid diagrams as SVG or any image format, without mermaid.js or a browser.
 - **Universal Runtime**: Runs seamlessly on Node.js (>=20), Cloudflare Workers, Vercel Edge Runtime, Browsers, Deno, and CLI.
 - **Zero Heavy Dependencies**: NO Puppeteer, Chromium, Playwright, or node-canvas required.
 
@@ -180,6 +181,28 @@ app.get("/ogp", async (req, res) => {
 ```
 
 ---
+
+### 7. Mermaid Diagrams (no browser, no DOM, no mermaid.js)
+
+The engine parses and draws Mermaid itself (own layout, SVG output). Use `renderMermaid` or `render({ mermaid })`:
+
+```typescript
+import { render, renderMermaid } from "wasm-html-to-image";
+
+// SVG string by default; sized to the diagram plus `padding` (16 px)
+const { data: svg } = await renderMermaid("graph LR\n  A --> B");
+
+// any other format gives bytes; theme / mode / accent / background / padding are options
+const { data: png } = await renderMermaid("flowchart TD\n  A --> B", { format: "png", theme: "dark" });
+
+// the same through render() on every entry (`edge-light` has no renderMermaid, so use this there: render({ ... }, wasm))
+const webp = await render({ mermaid: { source: "sequenceDiagram\n  A->>B: hi", theme: "nord" }, format: "webp" });
+```
+
+- **Options** (`mermaid: { source, ... }` or the second argument of `renderMermaid`): `theme` (`light`, `dark`, `neutral`, `forest`, `nord`, `dracula`, `solarized-light`, `solarized-dark`, `rose-pine`, `sepia`), `padding`, `background`, `accent`, `mode` (`"strict"` default, `"compat"`, `"recover"` repairs a misspelt keyword), `directives` (honour `%%{init}%%` and frontmatter `config:`), `onWarning` (`MERMAID_ERROR` / `MERMAID_RECOVERED`), `maxLines`, `maxSourceBytes`. `width` and `format` are the render options (`width` defaults to the diagram's width). Other render options (`fontMap`, `limits`, `onLog`, ...) apply as for a page.
+- **Diagram types**: flowchart / graph (subgraphs, swimlane), sequence, state, class, ER, requirement, gantt, pie, xychart, quadrant, journey, timeline, mindmap, kanban, gitGraph, block, C4, packet, sankey, treemap, radar, architecture, and more. An unsupported or broken source is drawn as a one-line error box (never throws; `onWarning` reports it).
+- **Markdown / CLI**: ` ```mermaid ` fences in Markdown input are drawn as diagrams; the CLI takes a `.mmd` / `.mermaid` file or `--mermaid` (`--mermaid-theme`, `--mermaid-mode`, `--mermaid-directives`).
+- **Removed APIs**: `renderMermaidWith` and `bindRenderMermaid` no longer exist; call `render({ mermaid: { source } })`.
 
 ## Options Reference (`RenderOptions`)
 
