@@ -450,6 +450,63 @@ LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vec
             if (!moved) break;
         }
     }
+    // The pushes left some nodes far from their neighbours (a frame went right, the nodes it left behind stayed). Move a node
+    // toward the middle of its neighbours when that breaks no frame rule; a few passes, only for graphs small enough to check.
+    if (ngroups > 0 && (double)ln.size() * ln.size() * (ngroups + 1) < 3e7) {
+        const double pad_lo = kFramePad + (horiz ? kFrameHeader : 0), pad_hi = kFramePad;
+        auto violations = [&]() {
+            std::vector<double> glo(ngroups, 1e18), ghi(ngroups, -1e18);
+            for (const LN& v : ln) {
+                int depth = 0;
+                for (int g : chain_of(v.group)) {
+                    glo[g] = std::min(glo[g], v.b - v.bw / 2 - pad_lo - depth * pad_lo);
+                    ghi[g] = std::max(ghi[g], v.b + v.bw / 2 + pad_hi + depth * pad_hi);
+                    depth++;
+                }
+            }
+            int bad = 0;
+            for (int g = 0; g < ngroups; g++) {
+                if (gmax[g] < 0) continue;
+                auto cg = chain_of(g);
+                for (int h = g + 1; h < ngroups; h++) {
+                    if (gmax[h] < 0 || gmax[g] < gmin[h] || gmax[h] < gmin[g]) continue;
+                    auto ch = chain_of(h);
+                    if (std::find(cg.begin(), cg.end(), h) != cg.end() || std::find(ch.begin(), ch.end(), g) != ch.end()) continue;
+                    if (ghi[g] > glo[h] && ghi[h] > glo[g]) bad++;
+                }
+                for (const LN& x : ln) {
+                    if (x.layer < gmin[g] || x.layer > gmax[g]) continue;
+                    auto cx = chain_of(x.group);
+                    if (std::find(cx.begin(), cx.end(), g) != cx.end()) continue;
+                    if (x.b + x.bw / 2 > glo[g] && x.b - x.bw / 2 < ghi[g]) bad++;
+                }
+            }
+            return bad;
+        };
+        int bad = violations();
+        for (int pass = 0; pass < 12; pass++) {
+            bool moved = false;
+            for (auto& rw : L)
+                for (size_t j = 0; j < rw.size(); j++) {
+                    LN& v = ln[rw[j]];
+                    double sum = 0;
+                    int cnt = 0;
+                    for (int w : v.up) sum += ln[w].b, cnt++;
+                    for (int w : v.down) sum += ln[w].b, cnt++;
+                    if (!cnt) continue;
+                    double lo = j ? ln[rw[j - 1]].b + sep(ln[rw[j - 1]], v) : -1e18;
+                    double hi = j + 1 < rw.size() ? ln[rw[j + 1]].b - sep(v, ln[rw[j + 1]]) : 1e18;
+                    double to = std::max(lo, std::min(hi, sum / cnt));
+                    if (std::abs(to - v.b) < 1.0) continue;
+                    double was = v.b;
+                    v.b = to;
+                    int now = violations();
+                    if (now > bad) v.b = was;
+                    else bad = now, moved = true;
+                }
+            if (!moved) break;
+        }
+    }
     // A node with no edge has nothing to line up with, but every push of a group in its row moved it along; draw it back
     // up to its left neighbour, as long as that does not put it inside the frame of a group that spans its layer.
     if (ngroups > 0) {
@@ -460,11 +517,29 @@ LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vec
             auto& rw = L[l];
             for (size_t j = 1; j < rw.size(); j++) {
                 LN& v = ln[rw[j]];
-                if (!v.up.empty() || !v.down.empty() || v.group >= 0) continue;
-                double want = std::min(v.b, ln[rw[j - 1]].b + sep(ln[rw[j - 1]], v));
+                if (!v.up.empty() || !v.down.empty()) continue;
+                // a frame of v's that the left neighbour is not in brings its title bar along when it is on this side
+                double bar = 0;
+                if (horiz && v.group >= 0) {
+                    auto cl = chain_of(ln[rw[j - 1]].group);
+                    for (int g : chain_of(v.group))
+                        if (std::find(cl.begin(), cl.end(), g) == cl.end()) bar += kFrameHeader;
+                }
+                double want = std::min(v.b, ln[rw[j - 1]].b + sep(ln[rw[j - 1]], v) + bar);
+                // drawn back, a member must not go past the other members of its frames: the frame would grow to that side
+                // and meet the frames over there
+                for (int g : chain_of(v.group)) {
+                    double edge = 1e18;
+                    for (const LN& u : ln) {
+                        auto cu = chain_of(u.group);
+                        if (&u != &v && std::find(cu.begin(), cu.end(), g) != cu.end()) edge = std::min(edge, u.b - u.bw / 2);
+                    }
+                    want = edge > 1e17 ? v.b : std::max(want, edge + v.bw / 2);
+                }
                 bool clear = true;
+                auto own = chain_of(v.group);
                 for (int g = 0; g < ngroups && clear; g++) {
-                    if (gmax[g] < 0 || (int)l < gmin[g] || (int)l > gmax[g] || std::find(chain_of(v.group).begin(), chain_of(v.group).end(), g) != chain_of(v.group).end()) continue;
+                    if (gmax[g] < 0 || (int)l < gmin[g] || (int)l > gmax[g] || std::find(own.begin(), own.end(), g) != own.end()) continue;
                     if (want + v.bw / 2 > glo[g] && want - v.bw / 2 < ghi[g]) clear = false;
                 }
                 if (clear) v.b = want;

@@ -172,6 +172,14 @@ int main() {
         check(width_of(svg_of("block-beta\n  columns 2\n  a[\"" + words + "\"] b")) < 700, "wrap/block_label");
     }
     {
+        auto width_of = [](const std::string& s) { return std::atof(s.c_str() + s.find("viewBox=\"0 0 ") + 13); };
+        // an edgeless member of a frame stays beside its neighbours instead of going to the far end of the row (was 1030)
+        const std::string e4 =
+            "flowchart TB\n  net((\"inet\"))\n  subgraph H[\"H\"]\n    subgraph D[\"D\"]\n      a[\"a\"]\n      b[\"b\"]\n      c[\"c\"]\n      d[\"d\"]\n    end\n"
+            "    u[\"UTM\"]\n    subgraph PC[\"PC\"]\n      p1[\"P1\"]\n      p2[\"P2\"]\n    end\n    net --- u\n    u --- p2\n    u --- d\n  end\n";
+        check(width_of(svg_of(e4)) < 800, "layout/edgeless_member_stays_near");
+    }
+    {
         std::string lab = svg_of("flowchart TD\n  A --\"Yes\"--> B\n  A --Maybe--> C\n  A -.near.-> D\n  A -- \"spaced\" --> E");
         check(!has(lab, "ERROR") && has(lab, ">Yes<") && has(lab, ">Maybe<") && has(lab, ">near<") && has(lab, ">spaced<") && !has(lab, "&quot;"), "edge/compact_and_quoted_labels");
     }
