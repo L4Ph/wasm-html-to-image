@@ -117,48 +117,62 @@ function refit(svg: string, width: number): string | undefined {
 }
 
 /**
- * Render a Mermaid diagram with the given render function. The page is first laid out wide to learn the
- * diagram's size, then rendered at exactly that width (unless `width` is given), so the result has no
- * stray margin.
+ * The log options that pass the engine's Mermaid messages on to `onWarning`. The engine reports repairs and errors through its
+ * log; the page is laid out more than once and each pass draws the diagram again, so each message is passed on once.
  */
-export async function renderMermaidWith(
-  render: RenderFn,
-  source: string,
-  options: MermaidOptions = {},
-): Promise<RenderResult<Uint8Array | string>> {
-  const format = options.format ?? "svg";
-  const padding = options.padding ?? 16;
-  const raster = format !== "svg";
-  const value = mermaidToHtml(source, { ...options, raster });
-  // the engine reports repairs and errors through its log; the page is laid out more than once, and each pass draws the
-  // diagram again, so each message is passed on once
-  const onWarning = options.onWarning;
+export function mermaidListen(
+  onWarning: MermaidOptions["onWarning"],
+  base: Pick<HtmlToImageOptions, "logLevel" | "onLog"> = {},
+): Pick<HtmlToImageOptions, "logLevel" | "onLog"> {
+  if (!onWarning) return {};
   const told = new Set<string>();
-  const listen = onWarning
-    ? {
-        logLevel: LogLevel.Warning,
-        onLog: (_level: LogLevel, text: string) => {
-          const m = /^\[(MERMAID_ERROR|MERMAID_RECOVERED)\]\s*(.*)$/.exec(text);
-          if (m && !told.has(text)) {
-            told.add(text);
-            onWarning({ code: m[1] as MermaidWarning["code"], message: m[2] });
-          }
-        },
+  return {
+    logLevel: Math.max(base.logLevel ?? LogLevel.Warning, LogLevel.Warning),
+    onLog: (level: LogLevel, text: string) => {
+      base.onLog?.(level, text);
+      const m = /^\[(MERMAID_ERROR|MERMAID_RECOVERED)\]\s*(.*)$/.exec(text);
+      if (m && !told.has(text)) {
+        told.add(text);
+        onWarning({ code: m[1] as MermaidWarning["code"], message: m[2] });
       }
-    : {};
+    },
+  };
+}
+
+/** What `render({ mermaid })` takes: the diagram's source and how to draw it. `width` and `format` are the render options'. */
+export interface MermaidInput extends Omit<MermaidOptions, "format" | "width"> {
+  /** The Mermaid source. */
+  source: string;
+}
+
+/**
+ * Render the Mermaid diagram of `options.mermaid` with `render`, which draws a page (`htmlToImage` with its module applied).
+ * The page is first laid out wide to learn the diagram's size, then rendered at exactly that width (unless `width` is
+ * given), so the result has no stray margin. The other render options (fonts, limits, logging, ...) reach both passes.
+ */
+export async function renderMermaidInput(
+  render: RenderFn,
+  options: HtmlToImageOptions & { mermaid: MermaidInput },
+): Promise<RenderResult<Uint8Array | string>> {
+  const { mermaid: input, ...rest } = options;
+  const format = options.format ?? "svg";
+  const padding = input.padding ?? 16;
+  const raster = format !== "svg";
+  const value = mermaidToHtml(input.source, { ...input, raster });
+  const listen = mermaidListen(input.onWarning, rest);
   let width = options.width;
   if (width === undefined) {
     // laid out wide first to learn the diagram's size; an SVG with a transparent page needs nothing more than that width
     // changed in its first tag, so that one render is the answer (a raster image has to be drawn at its own width)
-    const probe = await render({ value, width: PROBE_WIDTH, format: "svg", ...listen });
+    const probe = await render({ ...rest, ...listen, value, width: PROBE_WIDTH, format: "svg" });
     const size = typeof probe.data === "string" ? diagramSize(probe.data) : undefined;
     width = size ? Math.ceil(size.width + 2 * padding) : 800;
-    if (!raster && size && width <= PROBE_WIDTH && options.background === undefined) {
+    if (!raster && size && width <= PROBE_WIDTH && input.background === undefined) {
       const fitted = refit(probe.data as string, width);
       if (fitted !== undefined) return { ...probe, data: fitted, width };
     }
   }
-  return render({ value, width, format, ...listen });
+  return render({ ...rest, ...listen, value, width, format });
 }
 
 /** The shape of `renderMermaid` in each entry point: SVG text by default, bytes for the other formats. */
@@ -167,7 +181,8 @@ export interface RenderMermaid {
   (source: string, options: MermaidOptions): Promise<RenderResult<Uint8Array | string>>;
 }
 
-/** Bind {@link renderMermaidWith} to an entry point's `render`. */
-export function bindRenderMermaid(render: RenderFn): RenderMermaid {
-  return ((source: string, options?: MermaidOptions) => renderMermaidWith(render, source, options)) as RenderMermaid;
+/** `renderMermaid(source, options)` as a call of an entry point's `render`: `render({ mermaid: { source, ... }, format, width })`. */
+export function mermaidRenderOptions(source: string, options: MermaidOptions = {}): HtmlToImageOptions & { mermaid: MermaidInput } {
+  const { format, width, ...rest } = options;
+  return { mermaid: { ...rest, source }, format, width };
 }

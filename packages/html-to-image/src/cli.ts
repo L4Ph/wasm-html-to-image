@@ -2,7 +2,8 @@
 import { program } from "commander";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { render, renderMermaidWith, type OutputFormat } from "./single.js";
+import { render, type OutputFormat } from "./single.js";
+import { mermaidRenderOptions } from "./mermaid.js";
 import {
   buildRenderOptions,
   inferFormat,
@@ -218,13 +219,13 @@ program
         const source = await loadMermaidSource(input, options);
         const widthGiven = program.getOptionValueSource("width") === "cli";
         let broken = false;
-        const drawn = await renderMermaidWith((o) => render(o), source, {
+        const drawn = await render(mermaidRenderOptions(source, {
           ...mermaidOptionsFromFlags(flags, widthGiven),
           onWarning: (w) => {
             if (w.code === "MERMAID_ERROR") broken = true;
             console.warn(`wasm-html-to-image: ${w.code}: ${w.message}`);
           },
-        });
+        }));
         await fs.writeFile(outputPath, typeof drawn.data === "string" ? drawn.data : Buffer.from(drawn.data));
         console.log(`Successfully rendered to ${outputPath}`);
         // the file holds the error box; a script still needs to know the diagram did not parse

@@ -10,10 +10,10 @@ export type {
 } from "./core.js";
 export { render } from "./workerd.js";
 import { render as workerdRender } from "./workerd.js";
-import { bindRenderMermaid, type RenderMermaid } from "./mermaid.js";
-export { MERMAID_THEMES, mermaidToHtml, renderMermaidWith } from "./mermaid.js";
-export type { MermaidOptions, MermaidTheme, MermaidWarning } from "./mermaid.js";
-export const renderMermaid: RenderMermaid = bindRenderMermaid((options) => workerdRender(options));
+import { mermaidRenderOptions, type RenderMermaid } from "./mermaid.js";
+export { MERMAID_THEMES, mermaidToHtml } from "./mermaid.js";
+export type { MermaidInput, MermaidOptions, MermaidTheme, MermaidWarning } from "./mermaid.js";
+export const renderMermaid: RenderMermaid = ((source, options) => workerdRender(mermaidRenderOptions(source, options))) as RenderMermaid;
 
 export const setLimit = (_limit: number): void => {};
 export const close = () => {};

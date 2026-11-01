@@ -75,7 +75,9 @@ The output is sized to the diagram (plus the padding). `data` is a string for `f
 | `wasm-html-to-image/single` (and `wasm-html-to-image` on Node.js and similar) | Yes |
 | `wasm-html-to-image/workers` | Yes (drawn on the worker pool) |
 | `/workerd` (on Cloudflare Workers `wasm-html-to-image` resolves here too) | Yes, bound to the bundled WASM |
-| `/edge-light` | Build it with `bindRenderMermaid((options) => render(options, wasm))`; `renderMermaidWith((options) => render(options, wasm), source, options)` works too |
+| `/edge-light` | No `renderMermaid`; draw with `render({ mermaid: { source, ... }, format }, wasm)` |
+
+`renderMermaid(source, options)` is shorthand for `render({ mermaid: { source, ...options }, format, width })`. The `render` of every entry takes `mermaid: { source, theme, padding, mode, directives, accent, background, onWarning, ... }`. `width` and `format` are render options, and the other options (`fontMap`, `limits`, `onLog`, ...) reach the drawing as they are.
 
 `mermaidToHtml(source, options)` returns an HTML string with one diagram, for when you want a page.
 
@@ -340,7 +342,7 @@ The playground's "Mermaid" tab switches the sample (one per diagram type, 33 in 
 | :--- | :--- |
 | Node.js, Bun, Deno | `wasm-html-to-image` or `/single`. On Deno and Bun, the Markdown import and the `javascript` option are limited (see [Compatibility](../compatibility.md)) |
 | Cloudflare Workers (workerd) | `wasm-html-to-image/workerd` exports a `renderMermaid` bound to the bundled WASM; `wasm-html-to-image` resolves there too |
-| Vercel Edge and the like (edge-light) | Build it with `bindRenderMermaid((options) => render(options, wasm))`. `renderMermaidWith` and `mermaidToHtml` are on the same entry |
+| Vercel Edge and the like (edge-light) | Draw with `render({ mermaid: { source }, format: "png" }, wasm)`. `mermaidToHtml` is on the same entry |
 
 A diagram is drawn straight through Skia's SVG, so no DOM is needed. On workerd the smoke test in `packages/e2e-cloudflare` (`/mermaid`) checks that a PNG comes out. edge-light is covered by type and output tests only; it has not been run on the real runtime.
 

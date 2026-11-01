@@ -22,7 +22,7 @@ import {
   loadPrecompiledModule,
   type HtmlToImageModule,
 } from "./loader.js";
-import { bindRenderMermaid, type RenderMermaid } from "./mermaid.js";
+import { mermaidRenderOptions, type RenderMermaid } from "./mermaid.js";
 import {
   htmlToImage,
   type HtmlToImageOptions,
@@ -89,7 +89,7 @@ export async function render(
   return htmlToImage(await getDefaultModule(wasm ?? htmlToImageWasm), options);
 }
 
-export type { MermaidOptions, MermaidTheme, MermaidWarning, RenderFn, RenderMermaid } from "./mermaid.js";
-export { MERMAID_THEMES, bindRenderMermaid, mermaidToHtml, renderMermaidWith } from "./mermaid.js";
+export type { MermaidInput, MermaidOptions, MermaidTheme, MermaidWarning, RenderFn, RenderMermaid } from "./mermaid.js";
+export { MERMAID_THEMES, mermaidToHtml } from "./mermaid.js";
 /** Render a Mermaid diagram as SVG text (default) or an image, with the bundled WASM. */
-export const renderMermaid: RenderMermaid = bindRenderMermaid((options) => render(options));
+export const renderMermaid: RenderMermaid = ((source, options) => render(mermaidRenderOptions(source, options))) as RenderMermaid;

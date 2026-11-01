@@ -94,6 +94,6 @@ export async function render(
   return htmlToImage(await getDefaultModule(wasm), options);
 }
 
-export type { MermaidOptions, MermaidTheme, MermaidWarning, RenderFn, RenderMermaid } from "./mermaid.js";
-// Mermaid: `bindRenderMermaid((options) => render(options, wasm))` gives `renderMermaid(source, { format: "png" })`
-export { MERMAID_THEMES, bindRenderMermaid, mermaidToHtml, renderMermaidWith } from "./mermaid.js";
+export type { MermaidInput, MermaidOptions, MermaidTheme, MermaidWarning, RenderFn, RenderMermaid } from "./mermaid.js";
+// Mermaid: `render({ mermaid: { source: "graph LR; A --> B" }, format: "png" }, wasm)`
+export { MERMAID_THEMES, mermaidToHtml } from "./mermaid.js";

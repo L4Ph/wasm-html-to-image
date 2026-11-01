@@ -258,11 +258,16 @@ export function render(
   return getDefaultWorker().render(options);
 }
 
-import { bindRenderMermaid, type RenderMermaid } from "./mermaid.js";
-export { MERMAID_THEMES, mermaidToHtml, renderMermaidWith } from "./mermaid.js";
-export type { MermaidOptions, MermaidTheme, MermaidWarning } from "./mermaid.js";
+import { mermaidListen, mermaidRenderOptions, type RenderMermaid } from "./mermaid.js";
+export { MERMAID_THEMES, mermaidToHtml } from "./mermaid.js";
+export type { MermaidInput, MermaidOptions, MermaidTheme, MermaidWarning } from "./mermaid.js";
 /** Render a Mermaid diagram on the worker pool; see {@link RenderMermaid}. */
-export const renderMermaid: RenderMermaid = bindRenderMermaid((options) => render(options));
+export const renderMermaid: RenderMermaid = ((source, options) => {
+  const call = mermaidRenderOptions(source, options);
+  // a function nested in the options would not cross to the worker: the warnings come back through the log option, which does
+  const { onWarning, ...input } = call.mermaid;
+  return render({ ...call, mermaid: input, ...mermaidListen(onWarning, call) });
+}) as RenderMermaid;
 
 export const launchWorker = (): Promise<void[]> =>
   getDefaultWorker().launchWorker();

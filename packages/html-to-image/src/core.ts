@@ -1,5 +1,6 @@
 import type { HtmlToImageModule } from "./loader.js";
 import { buildFullSatoruOptions } from "./encode-args.js";
+import { renderMermaidInput, type MermaidInput } from "./mermaid.js";
 import { imageBytesFromUnknown, isImageInput, sniffImageFormat } from "./input.js";
 import { svgHasText, svgIntrinsicSize, svgPage } from "./svg-input.js";
 import {
@@ -129,6 +130,11 @@ export interface LayoutBox {
 }
 
 export interface HtmlToImageOptions extends RenderOptions {
+  /**
+   * Render a Mermaid diagram instead of `value` / `url`: `{ source, theme, padding, ... }` (see `MermaidInput`). The image is sized to the
+   * diagram unless `width` is given; `format` defaults to `"svg"`. The other options (fonts, limits, logging, ...) apply as for a page.
+   */
+  mermaid?: MermaidInput;
   /**
    * Run the page's scripts before rendering (Node only; `single` entry point and the CLI's `--js`).
    * The page is loaded into jsdom (optional dependency `jsdom`), its scripts run, and the resulting
@@ -318,6 +324,7 @@ export async function htmlToImage(
   module: HtmlToImageModule,
   options: HtmlToImageOptions,
 ): Promise<RenderResult<Uint8Array | string>> {
+  if (options.mermaid) return renderMermaidInput((o) => htmlToImage(module, o), { ...options, mermaid: options.mermaid });
   const orch = createOrchestration(module, options);
   const { format, width, emitLog, logged, loggedBinding } = orch;
   emitLog(LogLevel.Info, `render start: format=${format} width=${width}`);

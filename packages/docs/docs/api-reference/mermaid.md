@@ -75,7 +75,9 @@ const { data: png } = await renderMermaid("graph LR\n  A --> B", {
 | `wasm-html-to-image/single`（Node.js などでは `wasm-html-to-image` も） | あり |
 | `wasm-html-to-image/workers` | あり（ワーカープールで描画） |
 | `/workerd`（Cloudflare Workers では `wasm-html-to-image` もこちらに解決される） | あり（同梱の WASM に結びついている） |
-| `/edge-light` | `bindRenderMermaid((options) => render(options, wasm))` で作る。`renderMermaidWith((options) => render(options, wasm), source, options)` も使える |
+| `/edge-light` | `renderMermaid` は無い。`render({ mermaid: { source, ... }, format }, wasm)` で描く |
+
+`renderMermaid(source, options)` は、`render({ mermaid: { source, ...options }, format, width })` の別名です。どの入口の `render` でも、`mermaid` に `{ source, theme, padding, mode, directives, accent, background, onWarning, ... }` を渡せば、図が描けます。`width` と `format` は `render` のオプションで、それ以外のオプション（`fontMap`、`limits`、`onLog` など）は、そのまま描画に渡ります。
 
 HTML ページとして使いたいときは、`mermaidToHtml(source, options)` が、図を 1 つ含む HTML 文字列を返します。
 
@@ -340,7 +342,7 @@ agentflow-beta TB
 | :--- | :--- |
 | Node.js、Bun、Deno | `wasm-html-to-image` または `/single`。Deno と Bun では、Markdown の取り込みと `javascript` オプションに制限があります（[互換性](../compatibility.md)） |
 | Cloudflare Workers（workerd） | `wasm-html-to-image/workerd` が、同梱の WASM に結びついた `renderMermaid` を直接出します。`wasm-html-to-image` もここに解決されます |
-| Vercel Edge など（edge-light） | `bindRenderMermaid((options) => render(options, wasm))` で作ります。`renderMermaidWith` と `mermaidToHtml` も同じ入口にあります |
+| Vercel Edge など（edge-light） | `render({ mermaid: { source }, format: "png" }, wasm)` で描きます。`mermaidToHtml` も同じ入口にあります |
 
 図は Skia の SVG でそのまま描くので、DOM は要りません。workerd では、`packages/e2e-cloudflare` の煙テスト（`/mermaid`）で、PNG になるところまで確かめています。edge-light は型と出力のテストまでで、実際のランタイムでは動かしていません。
 

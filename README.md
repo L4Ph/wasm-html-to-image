@@ -181,7 +181,7 @@ interface RenderResult {
 | `wasm-html-to-image/preact` | Preact integration | Directly render Preact JSX element trees |
 | `wasm-html-to-image/tailwind` | Utility styling | UnoCSS / Tailwind v4 utilities (`createCSS`, `tailwind()`) |
 | `wasm-html-to-image/markdown` | Markdown input | GitHub-flavoured Markdown to a styled HTML page (`markdownToHtml`); pure JS, runs in browsers and Workers |
-| `wasm-html-to-image/single`, `/workers` | Mermaid diagrams | `renderMermaid(source, options)`: one diagram as an SVG string or an image (`renderMermaidWith` on `/workerd` and `/edge-light`) |
+| `wasm-html-to-image/single`, `/workers` | Mermaid diagrams | `renderMermaid(source, options)`: one diagram as an SVG string or an image (any entry's `render({ mermaid: { source } })` does the same) |
 | `wasm-html-to-image/markdown-math` | Maths in Markdown | KaTeX renderer for `markdownToHtml({ math })`: `$...$` and `$$...$$` (`katexMath`); pure JS, runs in browsers and Workers |
 
 ---
@@ -377,7 +377,7 @@ const { data: png } = await renderMermaid("graph LR\n  A --> B", { format: "png"
 - **Formats**: SVG (a string), PNG, WebP, JPEG, AVIF, JXL and PDF; the image is sized to the diagram.
 - **Input repair** (`mode`): `strict` (default) reports every mistake, with a "did you mean" hint for a near-miss keyword; `compat` also accepts a keyword in the wrong case, CRLF and unfinished `end` / `}`; `recover` also fixes a misspelt keyword and skips lines it cannot read.
 - **Warnings**: `onWarning` receives `MERMAID_ERROR` (the diagram did not parse; the image then shows an error box) and one `MERMAID_RECOVERED` per change the repair made. The CLI prints them on stderr and exits with status 1 for an unreadable diagram.
-- **Runtimes**: Node.js, Bun and Deno use `wasm-html-to-image` or `/single`; Cloudflare Workers get a bound `renderMermaid` from `/workerd`; on edge-light, `bindRenderMermaid((options) => render(options, wasm))` builds it. No DOM is needed.
+- **Runtimes**: Node.js, Bun and Deno use `wasm-html-to-image` or `/single`; Cloudflare Workers get a bound `renderMermaid` from `/workerd`; on edge-light, `render({ mermaid: { source } }, wasm)` draws it. No DOM is needed.
 - **Limits**: a diagram over 2000 lines or 200000 bytes is refused (`maxLines`, `maxSourceBytes`; `0` lifts them), because the layout of a big graph grows faster than its size.
 - `classDef` / `class` / `style` (flowchart, state, class, ER, block), `accTitle` / `accDescr` (they become the SVG `<title>` / `<desc>`), and, with `directives: true`, `%%{init}%%` and frontmatter `config:`.
 
