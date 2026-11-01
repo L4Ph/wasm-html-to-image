@@ -151,6 +151,12 @@ int main() {
         std::string plain = svg_of("flowchart TB\n  subgraph P[\"P\"]\n    A --> B\n  end\n  X --> A");
         std::string nested = svg_of("flowchart TB\n  subgraph P[\"P\"]\n    A --> B\n    subgraph E[\"Empty\"]\n    end\n  end\n  X --> A");
         auto width_of = [](const std::string& s) { return std::atof(s.c_str() + s.find("viewBox=\"0 0 ") + 13); };
+        // an edge to it from a member lower in the frame runs straight across instead of slanting up to the corner
+        std::string linked = svg_of("flowchart TB\n  subgraph P[\"P\"]\n    A --> B\n    B --> C\n    C --> D\n    subgraph E[\"Empty\"]\n    end\n    D -.-> E\n  end");
+        size_t dash = linked.find("stroke-dasharray"), pts = linked.rfind("points=\"", dash);
+        double x1 = 0, y1 = 0, x2 = 0, y2 = 0;
+        check(dash != std::string::npos && pts != std::string::npos && std::sscanf(linked.c_str() + pts + 8, "%lf,%lf %lf,%lf", &x1, &y1, &x2, &y2) == 4 && std::abs(y1 - y2) < 3,
+              "subgraph/empty_nested_edge_level");
         check(count(nested, "class=\"subgraph\"") == 2 && has(nested, ">Empty<") && width_of(nested) < width_of(plain) + 160, "subgraph/empty_nested_beside_members");
     }
     {

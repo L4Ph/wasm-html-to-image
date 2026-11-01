@@ -1036,6 +1036,20 @@ bool render_flowchart(const std::string& source, const Options& options, std::st
             }
             if (across_x) center[i] = {inner_hi_x + kNear + kPad + n.w / 2, inner_lo_y + kHead + kPad + n.h / 2};
             else center[i] = {inner_lo_x + kPad + n.w / 2, inner_hi_y + kNear + kHead + kPad + n.h / 2};
+            // level with the node it is connected to when the members' frame is long enough along that axis, so the edge runs
+            // straight across instead of slanting from the corner
+            for (const Edge& e : g.edges) {
+                int other = e.from == (int)i ? e.to : e.to == (int)i ? e.from : -1;
+                if (other < 0 || other == (int)i || !placed[other] || frames_up_to(other, anchor) < 0) continue;
+                if (across_x) {
+                    double lo_c = inner_lo_y + kHead + kPad + n.h / 2, hi_c = inner_hi_y - kPad - n.h / 2;
+                    if (hi_c > lo_c) center[i].y = std::max(lo_c, std::min(hi_c, center[other].y));
+                } else {
+                    double lo_c = inner_lo_x + kPad + n.w / 2, hi_c = inner_hi_x - kPad - n.w / 2;
+                    if (hi_c > lo_c) center[i].x = std::max(lo_c, std::min(hi_c, center[other].x));
+                }
+                break;
+            }
             placed[i] = 1;
         }
         lay.center = center;
