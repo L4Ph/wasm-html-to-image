@@ -68,7 +68,7 @@ bool render_requirement(const std::string& source, const Options& options, std::
                 return false;
             }
             std::string key = trim(line.substr(0, colon)), value = unquote(line.substr(colon + 1));
-            std::string label = key == "verifymethod" ? "Verification" : key == "docref" ? "Doc Ref" : key == "id" ? "Id" : capitalise(key);
+            std::string label = key == "verifymethod" ? "Verification" : key == "docref" ? "Doc Ref" : key == "id" ? "ID" : capitalise(key);
             items[open].fields.push_back({label, capitalise(key == "risk" || key == "verifymethod" ? value : value)});
             if (key == "text" || key == "id" || key == "type" || key == "docref") items[open].fields.back().second = value;
             continue;
