@@ -82,6 +82,7 @@ function e2eBackend(): Plugin {
 }
 
 export default defineConfig({
+  build: { rollupOptions: { input: { main: path.resolve(import.meta.dirname, "index.html"), qjs: path.resolve(import.meta.dirname, "qjs.html") } } },
   // Keep the WASM-adjacent modules out of esbuild pre-bundling: the loader
   // resolves glue/wasm URLs relative to its own module URL at runtime, which
   // must keep working in dev exactly as in the built output.
