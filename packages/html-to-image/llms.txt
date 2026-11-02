@@ -383,7 +383,7 @@ When prompting an AI agent to generate HTML/CSS templates for `wasm-html-to-imag
 
 ## Limitations & Unsupported Features (Do NOT Use)
 
-1. **NO JavaScript Execution**: `<script>` tags, DOM events (`onclick`, `onload`), and DOM manipulations do NOT run. Always generate fully static HTML markup.
+1. **No JavaScript by default**: `<script>` tags, DOM events (`onclick`, `onload`), and DOM manipulations do NOT run. Always generate fully static HTML markup. Only in Node.js, the `javascript` option (CLI `--js`) runs the page's scripts in jsdom and renders the resulting DOM (trusted pages only; scripts that need browser-only APIs or layout measurements will not behave as in a browser).
 2. **CSS Animation Is Sampled, Not Live**: `@keyframes` do not play by themselves and `transition` is not evaluated. Passing `animation: { duration, fps, loop }` (CLI: `--animation`) samples `opacity`, `transform` (`translate` / `rotate` / `scale`), and `color` / `background-color` keyframes into an animated WebP (`format: "webp"`), APNG (`"apng"`) or GIF (`"gif"`, 256-color dithered). Every @keyframes block of the document animates all elements its rule selects, each with its own timing (several animations per element via `animation: a 2s, b 3s` or `animation-name: a, b` are layered, the later one winning on shared properties; `translate`, `translateX` / `translateY`, `rotate` and `scale` are interpolated). Every other render is a static snapshot.
 3. **NO HTML5 Canvas Scripting**: `<canvas>` with `canvas.getContext('2d')` does not execute JavaScript. Use `<svg>` or CSS shapes instead.
 4. **NO Interactive State Styling**: Dynamic states like `:hover`, `:active`, and `:focus` do not trigger.
