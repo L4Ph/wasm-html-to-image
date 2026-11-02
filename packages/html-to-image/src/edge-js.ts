@@ -36,6 +36,13 @@ const DEFAULT_TIMEOUT = 10000;
 const DEFAULT_SETTLE_MS = 1000;
 const MEMORY_LIMIT = 256 * 1024 * 1024;
 const MAX_MODULES = 300;
+
+// a fetched body crosses into the page as base64, so binary data survives
+function toBase64(bytes: Uint8Array): string {
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 0x8000) s += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  return btoa(s);
+}
 // QuickJS recurses on the host's own stack, which is about 1 MB on V8: its limit must stop a runaway script first
 const STACK_LIMIT = 192 * 1024;
 
@@ -197,7 +204,7 @@ export async function runPageScriptsQuickJS(
         deferred.dispose();
       };
       const task: Promise<void> = fetch(new URL(vm.getString(target), baseUrl), { method: vm.getString(method) })
-        .then(async (r) => ({ status: r.status, url: r.url, headers: Object.fromEntries(r.headers), body: await r.text() }))
+        .then(async (r) => ({ status: r.status, url: r.url, headers: Object.fromEntries(r.headers), body: toBase64(new Uint8Array(await r.arrayBuffer())) }))
         .then(
           (o) => settle(true, JSON.stringify(o)),
           (e) => settle(false, String(e)),

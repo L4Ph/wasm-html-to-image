@@ -253,6 +253,12 @@
   g.fetch = function (input, init) {
     return __host.fetch(String((input && input.url) || input), (init && init.method) || "GET")
       .then(function (j) { return JSON.parse(j); })
+      .then(function (r) {
+        var bin = g.atob(r.body), u = new Uint8Array(bin.length);
+        for (var i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+        r.body = u;
+        return r;
+      })
       .then(function (r) { return new g.Response(r.body, { status: r.status, headers: r.headers, url: r.url }); });
   };
 

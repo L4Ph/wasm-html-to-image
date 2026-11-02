@@ -303,3 +303,30 @@ describe("javascript option, QuickJS engine: import.meta", () => {
     expect(out.html).toContain('data-u="http://h.test/p/x.png"');
   });
 });
+
+describe("javascript option, QuickJS engine: binary responses", () => {
+  it("fetch keeps bytes above 0x7f intact and still decodes UTF-8 text", async () => {
+    const server = createServer((req, res) => {
+      if (req.url === "/bytes") res.end(Buffer.from([0x80, 0xff, 0, 1, 0xfe]));
+      else res.end("é日本");
+    }).listen(0);
+    await new Promise((r) => server.once("listening", r));
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
+    try {
+      const out = await runPageScriptsQuickJS(
+        {
+          baseUrl: base,
+          html: page("", `(async () => {
+            const b = new Uint8Array(await (await fetch("/bytes")).arrayBuffer());
+            const t = await (await fetch("/text")).text();
+            document.body.setAttribute("data-r", Array.from(b).join(",") + "|" + t);
+          })();`),
+        },
+        { settleMs: 300 },
+      );
+      expect(out.html).toContain('data-r="128,255,0,1,254|é日本"');
+    } finally {
+      server.close();
+    }
+  });
+});
