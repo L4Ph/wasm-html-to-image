@@ -39,6 +39,7 @@ struct Doc {
     std::vector<Participant> ps;
     std::vector<Event> ev;
     std::vector<BoxGroup> boxes;
+    std::vector<std::pair<int, std::string>> links;  // actor link-menu entries (participant, label)
 };
 
 std::string lower(std::string s) {
@@ -123,14 +124,36 @@ bool parse(const std::string& text, Doc& d, std::string& error) {
             std::string r2;
             if (word(rest, "participant", r2) || word(rest, "actor", r2)) line = "participant " + r2;
         }
-        // `destroy X`, `link X: ...` and `links X: ...` need no drawing
+        // `destroy X` needs no drawing; `link`/`links` feed the actor menus drawn under the actor boxes
         if (word(line, "destroy", rest)) {
             find_or_add(d, rest);
             continue;
         }
-        if (word(line, "links", rest) || word(line, "link", rest)) {
-            find_or_add(d, trim(rest.substr(0, rest.find(':'))));
-            continue;
+        {
+            std::string lr;
+            bool plural = word(line, "links", lr);
+            if (plural || word(line, "link", lr)) {  // `link A: Label @ url`, or `links A: {"Label": "url", ...}`
+                size_t colon = lr.find(':');
+                int pi = find_or_add(d, trim(lr.substr(0, colon)));
+                std::string tail = colon == std::string::npos ? "" : trim(lr.substr(colon + 1));
+                if (plural) {  // the JSON form: every quoted key is a menu label
+                    for (size_t q = tail.find('"'); q != std::string::npos;) {
+                        size_t q2 = tail.find('"', q + 1);
+                        if (q2 == std::string::npos) break;
+                        size_t after = tail.find_first_not_of(" \t", q2 + 1);
+                        if (after != std::string::npos && tail[after] == ':') {
+                            std::string label = tail.substr(q + 1, q2 - q - 1);
+                            if (!label.empty()) d.links.push_back({pi, label});
+                        }
+                        q = tail.find('"', q2 + 1);
+                    }
+                } else {
+                    size_t at = tail.find(" @ ");
+                    std::string label = trim(at == std::string::npos ? tail : tail.substr(0, at));
+                    if (!label.empty()) d.links.push_back({pi, label});
+                }
+                continue;
+            }
         }
         if (word(line, "box", rest)) {
             in_box = true;
@@ -512,7 +535,13 @@ bool render_sequence(const std::string& source, const Options& options, std::str
         groups += rect(x0, -box_top, x1 - x0, bottom + hh + box_top + 8, mix(th.fg, th.bg, 5), th.border, 6);
         if (!b.label.empty()) centered_text(groups, th, {b.label}, (x0 + x1) / 2, -box_top / 2 - 2, metrics::kNodeFont, 600, th.text);
     }
-    std::string body = "<g transform=\"translate(" + num(margin - minx) + "," + num(margin + box_top) + ")\">\n" + groups + lifelines + frames + bars_svg + msgs + boxes + "</g>\n";
+    std::string menus;  // actor link menus hang under the top actor boxes, over the messages, as Mermaid draws them
+    {
+        std::map<int, int> row;
+        for (auto& [pi, label] : d.links)
+            aligned_text(menus, th, {label}, cx[pi] - w[pi] / 2, hh + 40 + row[pi]++ * 17, 14, 400, th.text, "start");
+    }
+    std::string body = "<g transform=\"translate(" + num(margin - minx) + "," + num(margin + box_top) + ")\">\n" + groups + lifelines + frames + bars_svg + msgs + boxes + menus + "</g>\n";
     svg = svg_document(th, maxx - minx + 2 * margin, bottom + hh + 2 * margin + box_top + (d.boxes.empty() ? 0 : 8), body);
     return true;
 }
