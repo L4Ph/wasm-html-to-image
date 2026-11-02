@@ -117,6 +117,8 @@ try {
 - `serialize()` is the current HTML; `toOptions(options)` gives render options you can pass to `render()` as they are.
 - The second argument of `createDOM` is the `javascript` option (`timeout` / `settleMs` / `waitFor`) plus `width` and `quickjsWasm`. `timeout` counts per call.
 
+**Speed**: with the QuickJS engine `settleMs` is an upper bound. With no timer pending that falls due within it and no request in flight the page can no longer change, so it finishes without using up the time. External `<script src>`s are requested all at once and only run in document order. `skip: (url) => boolean` fails the URLs a render does not need (analytics, ads, ...) without going to the network (a `<script>` gets its `error` event, a `fetch` rejects). On real sites these three take most of the time off.
+
 **Fetch limits (`limits`)**: for pages you do not control, restrict where the page's scripts may fetch from. It covers the page's own `fetch` / `XMLHttpRequest`, the `<script>`s and modules it loads, and the page itself given as `url`.
 
 ```ts

@@ -699,3 +699,72 @@ describe("createDOM: eval with arguments, and helpers to drive the page", () => 
     }
   });
 });
+
+describe("createDOM: speed", () => {
+  it("does not wait out the settle time when nothing is pending", async () => {
+    const started = Date.now();
+    const out = await runPageScriptsQuickJS({ html: page("<p id=p>0</p>", 'document.getElementById("p").textContent = "done";') }, { settleMs: 5000 });
+    expect(out.html).toContain(">done<");
+    expect(Date.now() - started).toBeLessThan(1500);
+  });
+
+  it("waits for the timers that fall inside the settle time, and only for those", async () => {
+    const html = page("", 'setTimeout(function () { document.body.setAttribute("data-soon", "1"); }, 150); setTimeout(function () { document.body.setAttribute("data-later", "1"); }, 4000);');
+    const started = Date.now();
+    const out = await runPageScriptsQuickJS({ html }, { settleMs: 1000 });
+    expect(out.html).toContain('data-soon="1"');
+    expect(out.html).not.toContain('data-later="1"'); // due after the settle time: not waited for
+    expect(Date.now() - started).toBeLessThan(1500);
+    const long = await runPageScriptsQuickJS({ html }, { settleMs: 5000, timeout: 8000 });
+    expect(long.html).toContain('data-later="1"');
+  }, 20_000);
+
+  it("waitForSelector gives up at once when nothing could still add the element", async () => {
+    const dom = await createDOM({ html: "<p>x</p>" }, { settleMs: 0, timeout: 8000 });
+    try {
+      const started = Date.now();
+      expect(await dom.waitForSelector("#never")).toBe(false);
+      expect(Date.now() - started).toBeLessThan(1500);
+    } finally {
+      dom.close();
+    }
+  });
+
+  it("requests external scripts together but runs them in document order", async () => {
+    const server = createServer((req, res) => {
+      const n = Number(/\/s(\d)\.js/.exec(req.url ?? "")?.[1]);
+      setTimeout(() => {
+        res.setHeader("content-type", "text/javascript");
+        res.end(`document.body.setAttribute("data-order", (document.body.getAttribute("data-order") || "") + "${n}");`);
+      }, 400);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    try {
+      const html = `<!doctype html><body><script src="${origin}/s1.js"></script><script src="${origin}/s2.js"></script><script src="${origin}/s3.js"></script><script src="${origin}/s4.js"></script></body>`;
+      const started = Date.now();
+      const out = await runPageScriptsQuickJS({ html }, { settleMs: 0 });
+      expect(out.html).toContain('data-order="1234"');
+      expect(Date.now() - started).toBeLessThan(1400); // one after another would take 4 x 400 ms
+    } finally {
+      server.close();
+    }
+  }, 20_000);
+
+  it("skip() keeps chosen requests off the network, the page itself excepted", async () => {
+    const server = createServer((_req, res) => res.end('document.body.setAttribute("data-ran", "1");'));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    try {
+      const html = `<!doctype html><body><script>var s = document.createElement("script"); s.src = "${origin}/analytics.js"; s.onerror = function () { document.body.setAttribute("data-err", "1"); }; document.head.appendChild(s); fetch("${origin}/track").then(function () { document.body.setAttribute("data-fetch", "ok"); }, function (e) { document.body.setAttribute("data-fetch", "blocked"); });</script></body>`;
+      const seen: string[] = [];
+      const out = await runPageScriptsQuickJS({ html }, { settleMs: 50, skip: (url: string) => (seen.push(url), url.includes("analytics") || url.includes("track")) } as never);
+      expect(out.html).toContain('data-err="1"');
+      expect(out.html).toContain('data-fetch="blocked"');
+      expect(out.html).not.toContain('data-ran');
+      expect(seen.some((u) => u.includes("analytics"))).toBe(true);
+    } finally {
+      server.close();
+    }
+  });
+});

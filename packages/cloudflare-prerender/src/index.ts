@@ -38,6 +38,21 @@ function checkTarget(raw: string | null, allowPrivate: boolean): URL | string {
   return u;
 }
 
+const TRACKER_HOSTS = [
+  "google-analytics.com", "googletagmanager.com", "googlesyndication.com", "doubleclick.net", "adservice.google.com",
+  "facebook.net", "hotjar.com", "clarity.ms", "segment.io", "segment.com", "mixpanel.com", "amplitude.com",
+  "fullstory.com", "sentry.io", "newrelic.com", "nr-data.net", "taboola.com", "outbrain.com", "criteo.com", "criteo.net",
+  "scorecardresearch.com",
+];
+function isTracker(raw: string): boolean {
+  try {
+    const host = new URL(raw).hostname.toLowerCase();
+    return TRACKER_HOSTS.some((t) => host === t || host.endsWith("." + t));
+  } catch {
+    return false;
+  }
+}
+
 const escapeAttr = (s: string) => s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;");
 
 /** Add `<base href>` so relative URLs in the returned HTML still point at the page, unless it has one. */
@@ -66,6 +81,7 @@ export default {
     const waitFor = q.get("wait") || undefined;
     const debug = q.get("debug") === "1";
     const addBase = q.get("base") !== "0";
+    const trackers = q.get("trackers") === "1";
 
     const cache = (caches as unknown as { default: Cache }).default;
     const cacheKey = new Request(url.toString());
@@ -80,6 +96,8 @@ export default {
           settleMs,
           timeout,
           waitFor,
+          // analytics, ads and the like are most of what a real page spends its time on; a render does not need them
+          skip: trackers ? undefined : isTracker,
           // the page's scripts, and what they load, get no further than the page itself may: checkTarget only saw the
           // first URL, a redirect or a script could still point inside
           limits: {

@@ -25,6 +25,7 @@ resources in it still resolve.
 | `wait` | | A CSS selector to wait for after the scripts start (up to `timeout`). |
 | `settle` | `1000` | Milliseconds to let timers and requests run after load, up to 5000 (ignored with `wait`). |
 | `timeout` | `10000` | Upper limit for the scripts, 1000–20000 ms. |
+| `trackers` | | `1` lets the page load analytics, ad and tracking scripts. They are skipped by default (a list of well-known hosts in `src/index.ts`): most of a real page's script time goes to them and a render does not need them. |
 | `base` | `1` | `0` leaves out the `<base href>`. |
 | `debug` | | `1` answers JSON instead: `{ url, finalUrl, html, logs }`, where `logs` are the page's console output, script errors, unhandled rejections and requests. Use it to find out why a page came back empty. Not cached. |
 

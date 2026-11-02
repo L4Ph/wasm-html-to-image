@@ -108,6 +108,12 @@ export interface CreateDOMOptions extends JavaScriptOptions, EdgeJavaScriptEngin
    * itself. Unlimited by default, so set it for pages you do not control (see {@link FetchLimits}).
    */
   limits?: FetchLimits;
+  /**
+   * Return true for a URL the page should not get: its request fails (and a script's `error` event fires) without
+   * going to the network. Analytics, ads and the like are most of what a real site spends its time on, and a render
+   * rarely needs them. The page itself (`source.url`) is never skipped.
+   */
+  skip?: (url: string) => boolean;
   /** Called for every {@link PageLogEntry} as it happens; they are also kept in {@link QuickJSDOM.logs}. */
   onLog?: (entry: PageLogEntry) => void;
   /** `window.innerWidth` of the page (default 800). */
@@ -213,9 +219,10 @@ export async function createDOM(
       // a listener's failure is not the page's
     }
   };
-  const loggedFetch = async (input: string | URL, init: RequestInit = {}): Promise<Response> => {
+  const loggedFetch = async (input: string | URL, init: RequestInit = {}, isPage = false): Promise<Response> => {
     const entry = { type: "request" as const, method: init.method ?? "GET", url: String(input) };
     try {
+      if (!isPage && opts.skip?.(entry.url)) throw new Error(`Skipped by the skip option: ${entry.url}`);
       const res = await guard.fetch(input, init);
       log({ ...entry, status: res.status });
       return res;
@@ -231,7 +238,7 @@ export async function createDOM(
   let baseUrl = source.baseUrl || "about:blank";
   if (source.url) {
     const res = await Promise.race([
-      loggedFetch(source.url),
+      loggedFetch(source.url, {}, true),
       sleep(timeout).then(() => {
         throw new Error(`Timed out loading ${source.url} for the \`javascript\` option (${timeout} ms).`);
       }),
@@ -387,17 +394,27 @@ export async function createDOM(
         const raw = call("__edgeNextScripts()");
         const list: { idx: number; src: string | null; text: string; module?: boolean }[] = typeof raw === "string" ? JSON.parse(raw) : [];
         if (!list.length || remaining() <= 0) return;
-        for (const s of list) {
+        // the external ones are all requested at once; they still run one by one, in document order
+        const sources = list.map((s) => {
+          if (!s.src) return undefined;
+          const name = new URL(s.src, baseUrl).href;
+          return loggedFetch(name, { signal: AbortSignal.timeout(Math.max(1, remaining())) })
+            .then(text)
+            .then(
+              (code) => ({ name, code }),
+              () => undefined,
+            );
+        });
+        for (const [i, s] of list.entries()) {
           let code = s.text;
           let name = "inline";
           if (s.src) {
-            name = new URL(s.src, baseUrl).href;
-            try {
-              code = await text(await loggedFetch(name, { signal: AbortSignal.timeout(Math.max(1, remaining())) }));
-            } catch {
+            const loaded = await sources[i];
+            if (!loaded) {
               call(`__edgeScriptEvent(${s.idx}, false)`);
               continue;
             }
+            ({ name, code } = loaded);
           }
           call(`__edgeSetCurrent(${s.idx})`);
           if (s.module) {
@@ -424,14 +441,22 @@ export async function createDOM(
     };
 
     // let the page run for `ms`, or until `waitFor` matches, and until its fetches are done
+    // Nothing can change the page unless a timer fires or a request answers (or a script is added, which a tick
+    // finds), so a page with neither pending is finished: waiting out the rest of the time would change nothing.
     const wait = async (ms: number, waitFor?: string) => {
       if (waitFor) {
-        while (remaining() > 0 && !call(`__edgeHas(${JSON.stringify(waitFor)})`)) await tick();
+        const found = () => !!call(`__edgeHas(${JSON.stringify(waitFor)})`);
+        while (remaining() > 0 && !found()) {
+          await tick();
+          if (inflight.size === 0 && timers.length === 0 && !found()) break; // it can no longer appear
+        }
         return;
       }
       const until = Date.now() + Math.min(ms, remaining());
-      while (Date.now() < until || (inflight.size > 0 && remaining() > 0)) {
-        if (remaining() <= 0) break;
+      let first = true;
+      while (remaining() > 0 && (Date.now() < until || inflight.size > 0)) {
+        if (!first && inflight.size === 0 && !timers.some((t) => t.at <= until)) break;
+        first = false;
         await tick();
       }
     };

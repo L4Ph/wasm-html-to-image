@@ -26,6 +26,11 @@ export interface JavaScriptOptions {
    * scripts' requests too; set this to give the scripts different limits.
    */
   limits?: FetchLimits;
+  /**
+   * QuickJS engine: return true for a URL the page should not get (analytics, ads, ...): the request fails without going
+   * to the network. Most of a real site's script time goes to those, and a render rarely needs them.
+   */
+  skip?: (url: string) => boolean;
 }
 
 /** What the script phase produced. */
