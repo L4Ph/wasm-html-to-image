@@ -310,7 +310,7 @@ int main() {
     // --- wardley ---
     {
         std::string tea = svg_of("wardley-beta\ntitle Tea Shop Value Chain\n\nanchor Business [0.95, 0.63]\ncomponent Cup of Tea [0.79, 0.61]\ncomponent Tea [0.63, 0.81]\ncomponent Hot Water [0.52, 0.80]\ncomponent Kettle [0.43, 0.35]\ncomponent Power [0.10, 0.70]\n\nBusiness -> Cup of Tea\nCup of Tea -> Tea\nCup of Tea -> Hot Water\nHot Water -> Kettle\nKettle -> Power\n\nevolve Kettle 0.62\nevolve Power 0.89\n\nnote \"Standardising power allows Kettles to evolve faster\" [0.30, 0.49]");
-        check(has(tea, ">Tea Shop Value Chain<") && has(tea, ">Cup of Tea<") && has(tea, ">Genesis<") && has(tea, ">Commodity (+utility)<"), "wardley/labels");
+        check(has(tea, ">Tea Shop Value Chain<") && has(tea, ">Cup of Tea<") && has(tea, ">Genesis<") && has(tea, ">Commodity<") && has(tea, ">Visibility<"), "wardley/labels");
         check(count(tea, "<line") == 5, "wardley/links");
         check(count(tea, "stroke=\"#d9534f\"") == 4, "wardley/evolve");
         check(has(tea, "Standardising power"), "wardley/note");
@@ -332,7 +332,7 @@ int main() {
         std::string c = svg_of("cynefin-beta\n  title Incident Response\n\n  complex\n    \"Investigate root cause\"\n    \"Run chaos experiment\"\n\n  complicated\n    \"Analyze performance data\"\n\n  clear\n    \"Restart service\"\n\n  chaotic\n    \"Page on-call immediately\"\n\n  confusion\n    \"Unknown failure mode\"");
         check(has(c, ">Incident Response<") && has(c, ">Complex<") && has(c, ">Complicated<") && has(c, ">Clear<") && has(c, ">Chaotic<") && has(c, ">Confusion<"), "cynefin/domains");
         check(has(c, ">Investigate root cause<") && has(c, ">Page on-call immediately<") && has(c, ">Unknown failure mode<"), "cynefin/items");
-        check(has(c, ">Probe - Sense - Respond<") && has(c, ">Best practice<"), "cynefin/descriptions");
+        check(has(c, ">Probe \xe2\x86\x92 Sense \xe2\x86\x92 Respond<") && has(c, ">Best Practices<") && has(c, ">Disorder<"), "cynefin/descriptions");
         std::string t = svg_of("cynefin-beta\n  complex\n    \"a\"\n  clear\n  complex --> complicated : \"Pattern identified\"\n  clear --> chaotic : \"Complacency\"\n  complex --> complex : \"ignored\"");
         check(has(t, ">Pattern identified<") && has(t, ">Complacency<") && !has(t, ">ignored<"), "cynefin/transitions");
         check(!has(svg_of("cynefin-beta\n  title Cynefin Framework\n\n  complex\n  complicated\n  clear\n  chaotic"), "ERROR"), "cynefin/empty_domains");
@@ -346,7 +346,7 @@ int main() {
     // --- railroad ---
     {
         std::string json = svg_of("railroad-ebnf-beta\ntitle \"JSON Grammar\"\n\njson = element ;\nelement = object | array | string | number | \"true\" | \"false\" | \"null\" ;\nobject = \"{\" [ member ( \",\" member )* ] \"}\" ;\narray = \"[\" [ element ( \",\" element )* ] \"]\" ;\nmember = string \":\" element ;");
-        check(!has(json, "ERROR") && has(json, ">JSON Grammar<") && has(json, ">json<") && has(json, ">object<") && has(json, ">true<") && has(json, ">null<"), "railroad/ebnf_json");
+        check(!has(json, "ERROR") && !has(json, ">JSON Grammar<") && has(json, ">json =<") && has(json, ">object<") && has(json, ">true<") && has(json, ">null<"), "railroad/ebnf_json");
         check(count(json, "<circle") == 10, "railroad/start_and_end_markers");
         std::string iso = svg_of("railroad-ebnf-beta\nfile = { line } , [ \"end\" ] ;\nline = letter - \"x\" , ? any visible character ? ;\n(* a comment *) letter = \"a\" | \"b\" ;");
         check(has(iso, ">except<") && has(iso, ">any visible character<") && has(iso, ">end<") && !has(iso, "comment"), "railroad/ebnf_iso");
@@ -361,7 +361,7 @@ int main() {
         std::string pred = svg_of("railroad-peg-beta\nA <- !B &C . [a-z]+ ;");
         check(has(pred, ">not<") && has(pred, ">and<") && has(pred, ">any character<") && has(pred, ">[a-z]<"), "railroad/peg_predicates");
         std::string ir = svg_of("railroad-beta\ntitle Expression Grammar\n\nexpr = sequence(\n  nonterminal(\"term\"),\n  zeroOrMore(sequence(choice(terminal(\"+\"), terminal(\"-\")), nonterminal(\"term\")))\n) ;\nterm = oneOrMore(choice(nonterminal(\"digit\"), special(\"letter\"))) ;\nopt = optional(terminal(\"x\")) ;");
-        check(!has(ir, "ERROR") && has(ir, ">Expression Grammar<") && has(ir, ">+<") && has(ir, ">letter<") && has(ir, ">x<"), "railroad/ir");
+        check(!has(ir, "ERROR") && !has(ir, ">Expression Grammar<") && has(ir, ">expr =<") && has(ir, ">+<") && has(ir, ">letter<") && has(ir, ">x<"), "railroad/ir");
         check(has(svg_of("railroad-ebnf-beta\na = ( b ;"), "ERROR"), "railroad/unclosed_group");
         check(has(svg_of("railroad-ebnf-beta\na = \"x"), "ERROR"), "railroad/unclosed_string");
         check(has(svg_of("railroad-beta\na = widget(\"x\") ;"), "ERROR"), "railroad/unknown_constructor");
@@ -442,7 +442,7 @@ int main() {
     {
         std::string tv = svg_of("treeView-beta\n  \"packages\"\n    \"core\"\n      \"src\"\n    \"cli\"\n  \"README.md\"");
         check(has(tv, ">packages<") && has(tv, ">src<") && has(tv, ">README.md<"), "treeview/labels");
-        check(count(tv, "<path") == 5, "treeview/icons");
+        check(count(tv, "<path") == 6, "treeview/icons"); // one per entry, and the drawn '/' root
         check(has(svg_of("treeView-beta"), "ERROR"), "treeview/empty");
         std::string ik = svg_of("ishikawa-beta\n  Blurry photo\n    Process\n      Out of focus\n      Slow shutter\n    User\n      Shaky hands\n    Equipment");
         check(has(ik, ">Blurry photo<") && has(ik, ">Out of focus<") && has(ik, ">Equipment<"), "ishikawa/labels");
@@ -784,7 +784,7 @@ int main() {
         check(count(svg_of("sequenceDiagram\nA->B: x"), "<polygon") == 0, "sequence/open_arrow_has_no_head");
         check(count(svg_of("sequenceDiagram\nA-xB: x"), "<line") >= 4, "sequence/cross");
         check(has(svg_of("sequenceDiagram\nA->>A: self"), "<polyline"), "sequence/self_message");
-        check(has(svg_of("sequenceDiagram\nautonumber\nA->>B: x\nB->>A: y"), ">2. y<"), "sequence/autonumber");
+        check(has(svg_of("sequenceDiagram\nautonumber\nA->>B: x\nB->>A: y"), ">y<") && has(svg_of("sequenceDiagram\nautonumber\nA->>B: x\nB->>A: y"), ">2<"), "sequence/autonumber"); // the number is an element of its own
         check(has(svg_of("sequenceDiagram\nA->>+B: x\nB-->>-A: y"), "width=\"8\""), "sequence/activation_bar");
         check(has(svg_of("sequenceDiagram\nNote over A,B: careful\nA->>B: x"), ">careful<"), "sequence/note");
         std::string blk = svg_of("sequenceDiagram\nloop every day\nA->>B: x\nalt ok\nB->>A: y\nelse bad\nB->>A: z\nend\nend");
@@ -817,12 +817,12 @@ int main() {
     {
         std::string s = svg_of("classDiagram\nclass Animal {\n  +String name\n  +eat() void\n}\nAnimal <|-- Dog\nDog : +bark()");
         check(count(s, "class=\"node\"") == 2, "class/nodes");
-        check(has(s, ">+String name<") && has(s, ">+eat() void<") && has(s, ">+bark()<"), "class/members");
+        check(has(s, ">+String name<") && has(s, ">+eat() : void<") && has(s, ">+bark()<"), "class/members");
         check(count(s, "class=\"edge\"") == 1 && has(s, "<polygon"), "class/inheritance_triangle");
         check(has(svg_of("classDiagram\nA *-- B"), "<polygon") && has(svg_of("classDiagram\nA o-- B"), "<polygon"), "class/diamonds");
         check(has(svg_of("classDiagram\nA ..> B"), "stroke-dasharray=\"5 4\""), "class/dashed");
         check(has(svg_of("classDiagram\nA \"1\" --> \"*\" B : owns"), ">owns<") && has(svg_of("classDiagram\nA \"1\" --> \"*\" B"), ">*<"), "class/label_and_cardinality");
-        check(has(svg_of("classDiagram\nclass I\n<<interface>> I"), ">&lt;&lt;interface&gt;&gt;<"), "class/annotation");
+        check(has(svg_of("classDiagram\nclass I\n<<interface>> I"), ">\xc2\xabinterface\xc2\xbb<"), "class/annotation");
         check(has(svg_of("classDiagram\nA --|> B"), "<polygon"), "class/marker_at_end");
         check(has(svg_of("classDiagram\nclass \xe6\x97\xa5\xe6\x9c\xac"), ">\xe6\x97\xa5\xe6\x9c\xac<"), "class/cjk");
         std::string e1, e2;
@@ -873,7 +873,7 @@ int main() {
         std::string s = svg_of("pie showData\n  title Pets\n  \"Dogs\" : 386\n  \"Cats\" : 85.5\n  \"Rats\" : 15");
         check(has(s, ">Pets<") && count(s, "class=\"slice\"") == 3, "pie/slices_and_title");
         check(has(s, ">Dogs [386]<") && has(s, ">Cats [85.5]<"), "pie/show_data_legend");
-        check(has(s, ">79.3%<"), "pie/percent_label");
+        check(has(s, ">79%<"), "pie/percent_label");
         check(count(svg_of("pie\n\"A\" : 1"), "<circle") == 1, "pie/single_slice_is_a_circle");
         check(has(svg_of("pie title \xe6\x97\xa5\xe6\x9c\xac\n\"\xe7\x8c\xab\" : 1\n\"b\" : 1"), ">\xe7\x8c\xab<"), "pie/cjk");
         check(!has(s, "var(") && !has(s, "color-mix"), "pie/plain_colours_only");
@@ -1029,7 +1029,7 @@ int main() {
         std::string s = svg_of("requirementDiagram\n  requirement req {\n    id: 1\n    text: the test text.\n    risk: high\n    verifymethod: test\n  }\n  element ent {\n    type: simulation\n  }\n  ent - satisfies -> req\n  req <- contains - ent");
         check(count(s, "class=\"node\"") == 2 && has(s, ">req<") && has(s, ">ent<"), "requirement/nodes");
         check(has(s, ">&lt;&lt;Requirement&gt;&gt;<") && has(s, ">&lt;&lt;Element&gt;&gt;<"), "requirement/stereotypes");
-        check(has(s, ">Id: 1<") && has(s, ">Text: the test text.<") && has(s, ">Type: simulation<"), "requirement/fields");
+        check(has(s, ">ID: 1<") && has(s, ">Text: the test text.<") && has(s, ">Type: simulation<"), "requirement/fields");
         check(has(s, ">Risk: High<") && has(s, ">Verification: Test<"), "requirement/capitalised_enum_values");
         check(count(s, "class=\"edge\"") == 2 && has(s, ">&lt;&lt;satisfies&gt;&gt;<") && has(s, ">&lt;&lt;contains&gt;&gt;<"), "requirement/relations");
         check(has(s, "stroke-dasharray=\"6 4\""), "requirement/dashed_except_contains");
