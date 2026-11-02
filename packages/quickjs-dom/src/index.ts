@@ -90,6 +90,14 @@ const STACK_LIMIT = 192 * 1024;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
+// four random words for the page's Math.random (the guest is copied from one start, so it must not keep its own)
+function randomSeed(): number[] {
+  const words = new Uint32Array(4);
+  if (globalThis.crypto?.getRandomValues) globalThis.crypto.getRandomValues(words);
+  else for (let i = 0; i < 4; i++) words[i] = (Math.random() * 4294967296) >>> 0;
+  return Array.from(words);
+}
+
 // the guest program as QuickJS bytecode (made at build time by scripts/build-edge-js.mjs with this very QuickJS)
 let guestBytes: Uint8Array | undefined;
 const guest = () => (guestBytes ??= Uint8Array.from(atob(guestBytecode as string), (c) => c.charCodeAt(0)));
@@ -327,6 +335,11 @@ export async function createDOM(
     },
     MEMORY_LIMIT,
     STACK_LIMIT,
+    // the guest program is started once per module and copied from then on (see QuickJSInstance.create)
+    (instance) => {
+      const loaded = instance.evalBytecode(guest());
+      if (loaded.type === "error") throw new Error(`The QuickJS engine could not load its guest program: ${loaded.value}`);
+    },
   );
   vm.setDeadline(deadline);
   vmDeadline = (ms) => vm.setDeadline(ms);
@@ -383,9 +396,7 @@ export async function createDOM(
       return code;
     };
 
-    const loaded = vm.evalBytecode(guest());
-    if (loaded.type === "error") throw new Error(`The QuickJS engine could not load its guest program: ${loaded.value}`);
-    const boot = vm.eval(`__edgeBoot(${JSON.stringify(html)}, ${JSON.stringify(baseUrl)}, ${Math.round(viewportWidth)})`, "boot.js");
+    const boot = vm.eval(`__edgeBoot(${JSON.stringify(html)}, ${JSON.stringify(baseUrl)}, ${Math.round(viewportWidth)}, ${JSON.stringify(randomSeed())})`, "boot.js");
     if (boot.type === "error") throw new Error(`The QuickJS engine could not build the page: ${boot.value}`);
 
     // scripts in document order, the ones that scripts add included; each external one is fetched by the host

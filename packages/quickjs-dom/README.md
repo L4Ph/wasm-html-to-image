@@ -32,7 +32,7 @@ The QuickJS wasm is chosen by the runtime (the `#quickjs-wasm` entry of `imports
 
 ## Building
 
-The package builds its own QuickJS: `vendor/quickjs` (QuickJS-ng, unmodified) and `csrc/qjsdom.c` are compiled to a standalone `dist/quickjs.wasm` with Emscripten (`emcc` on `PATH`), and the guest program (linkedom and the browser shims) is compiled to QuickJS bytecode with that very wasm. Reading bytecode takes about a millisecond where compiling the source takes tens, so a page starts in roughly 30 ms. Each page runs in a wasm instance of its own; there is no dependency on `quickjs-emscripten`.
+The package builds its own QuickJS: `vendor/quickjs` (QuickJS-ng, unmodified) and `csrc/qjsdom.c` are compiled to a standalone `dist/quickjs.wasm` with Emscripten (`emcc` on `PATH`), and the guest program (linkedom and the browser shims) is compiled to QuickJS bytecode with that very wasm. Reading bytecode takes about a millisecond where compiling the source takes tens, and the started guest is kept in memory and copied into each new instance, so a page starts in about 3 ms (the first one in a process pays about 120 ms). Each page runs in a wasm instance of its own, a copy of that one start: nothing is shared between pages, and each gets its own clock origin and `Math.random` seed. There is no dependency on `quickjs-emscripten`.
 
 ```sh
 pnpm --filter wasm-quickjs-dom build

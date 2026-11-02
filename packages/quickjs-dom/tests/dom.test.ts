@@ -768,3 +768,38 @@ describe("createDOM: speed", () => {
     }
   });
 });
+
+describe("createDOM: instances are copies of one started instance", () => {
+  it("shares nothing between pages, and gives each its own clock and random numbers", async () => {
+    const a = await createDOM({ html: "<p id=p>a</p>" }, { settleMs: 0 });
+    await a.eval(() => {
+      (globalThis as any).leak = "from a";
+      document.body.setAttribute("data-a", "1");
+      setTimeout(() => ((globalThis as any).timerRan = true), 5);
+    });
+    const b = await createDOM({ html: "<p id=p>b</p>" }, { settleMs: 0 });
+    try {
+      expect(await b.eval(() => typeof (globalThis as any).leak)).toBe("undefined");
+      expect(await b.eval(() => document.body.getAttribute("data-a"))).toBe(null);
+      expect(await b.eval(() => document.getElementById("p")!.textContent)).toBe("b");
+      await new Promise((r) => setTimeout(r, 30));
+      expect(await b.eval(() => typeof (globalThis as any).timerRan)).toBe("undefined"); // a's timer is not b's
+      const draws = async (d: typeof a) => d.eval(() => [Math.random(), Math.random(), Math.random()]);
+      expect(await draws(a)).not.toEqual(await draws(b));
+      expect(await b.eval(() => performance.now())).toBeLessThan(2000); // counted from b's own start
+    } finally {
+      a.close();
+      b.close();
+    }
+  });
+
+  it("many pages at once, each on its own", async () => {
+    const pages = await Promise.all(Array.from({ length: 6 }, (_, i) => createDOM({ html: `<p id=p>${i}</p><script>window.me = ${i};</script>` }, { settleMs: 0 })));
+    try {
+      const seen = await Promise.all(pages.map((d) => d.eval(() => [(globalThis as any).me, document.getElementById("p")!.textContent])));
+      expect(seen).toEqual([0, 1, 2, 3, 4, 5].map((i) => [i, String(i)]));
+    } finally {
+      for (const d of pages) d.close();
+    }
+  });
+});

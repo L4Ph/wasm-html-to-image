@@ -54,7 +54,33 @@
     };
   }
   if (!g.queueMicrotask) g.queueMicrotask = function (fn) { Promise.resolve().then(fn); };
-  g.performance = g.performance || { now: function () { return Date.now() - t0; }, timeOrigin: t0 };
+  // QuickJS-ng has its own `performance`, whose origin is the moment the context was made: here that is the moment the
+  // guest was started once for all pages, so the page gets one counted from its own start
+  var perf = {
+    now: function () { return Date.now() - t0; },
+    timeOrigin: t0,
+    mark: function () {}, measure: function () {}, clearMarks: function () {}, clearMeasures: function () {},
+    getEntries: function () { return []; }, getEntriesByName: function () { return []; }, getEntriesByType: function () { return []; },
+  };
+  g.performance = perf;
+  // The guest is started once and copied for every page (see src/runtime.ts), so what depends on when a page begins is
+  // set again in __edgeBoot: the clock's origin, and the random number generator (Math.random).
+  g.__edgeStart = function (seed) {
+    t0 = Date.now();
+    perf.timeOrigin = t0;
+    if (seed && seed.length === 4) {
+      var s0 = seed[0] | 0, s1 = seed[1] | 0, s2 = seed[2] | 0, s3 = seed[3] | 0;
+      if (!(s0 | s1 | s2 | s3)) s0 = 1;
+      // xoshiro128**
+      Math.random = function () {
+        var r = Math.imul(Math.imul(s1, 5) << 7 | Math.imul(s1, 5) >>> 25, 9);
+        var t = s1 << 9;
+        s2 ^= s0; s3 ^= s1; s1 ^= s2; s0 ^= s3; s2 ^= t;
+        s3 = (s3 << 11) | (s3 >>> 21);
+        return (r >>> 0) / 4294967296;
+      };
+    }
+  };
 
   // timers: the host sleeps, then calls __fire(id)
   var tid = 1, timers = new Map();

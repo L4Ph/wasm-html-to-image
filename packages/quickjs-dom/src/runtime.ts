@@ -48,6 +48,17 @@ interface Exports {
 
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
+// What a started instance looks like in memory, per compiled module, so the next one is a copy instead of a start
+// (see QuickJSInstance.create): starting the guest program costs more than copying a few megabytes.
+const snapshots = new WeakMap<WebAssembly.Module, { key: string; bytes: Uint8Array }>();
+
+function takeSnapshot(memory: WebAssembly.Memory): Uint8Array {
+  const words = new Uint32Array(memory.buffer);
+  let end = words.length;
+  while (end > 0 && words[end - 1] === 0) end--; // the rest is still zero in a new instance
+  return new Uint8Array(memory.buffer.slice(0, end * 4));
+}
+
 const RESULT_TYPES = ["undefined", "string", "json", "error"] as const;
 
 export class QuickJSInstance {
@@ -57,8 +68,15 @@ export class QuickJSInstance {
     this.x = x;
   }
 
-  /** Instantiate `wasm` and start a runtime in it. `memoryLimit` is what QuickJS may allocate, `stackLimit` what a script may recurse into (bytes). */
-  static create(wasm: WebAssembly.Module, host: QuickJSHost, memoryLimit: number, stackLimit: number): QuickJSInstance {
+  /**
+   * Instantiate `wasm` and start a runtime in it. `memoryLimit` is what QuickJS may allocate, `stackLimit` what a script
+   * may recurse into (bytes).
+   *
+   * With `warm` (the same function every time for a module), the instance is started by it once; its memory is then
+   * kept, and every later instance is that memory copied into a fresh instance. `warm` must leave nothing of a page
+   * behind: no host callbacks pending, nothing that depends on when it ran.
+   */
+  static create(wasm: WebAssembly.Module, host: QuickJSHost, memoryLimit: number, stackLimit: number, warm?: (instance: QuickJSInstance) => void): QuickJSInstance {
     let x!: Exports;
     const u8 = () => new Uint8Array(x.memory.buffer);
     const text = (ptr: number, len: number) => decoder.decode(u8().subarray(ptr, ptr + len));
@@ -113,9 +131,23 @@ export class QuickJSInstance {
     const wanted = WebAssembly.Module.imports(wasm).filter((i) => !(i.name in (imports[i.module] ?? {})));
     if (wanted.length) throw new Error(`quickjs.wasm needs imports this runtime does not provide: ${wanted.map((i) => `${i.module}.${i.name}`).join(", ")}`);
     x = new WebAssembly.Instance(wasm, imports).exports as unknown as Exports;
+    const key = `${memoryLimit}:${stackLimit}`;
+    const saved = warm ? snapshots.get(wasm) : undefined;
+    if (saved && saved.key === key) {
+      const pages = Math.ceil(saved.bytes.length / 65536);
+      const have = x.memory.buffer.byteLength / 65536;
+      if (pages > have) x.memory.grow(pages - have);
+      new Uint8Array(x.memory.buffer).set(saved.bytes);
+      return new QuickJSInstance(x);
+    }
     x._initialize?.();
     if (x.qd_init(memoryLimit, stackLimit) !== 0) throw new Error("The QuickJS runtime could not be created.");
-    return new QuickJSInstance(x);
+    const instance = new QuickJSInstance(x);
+    if (warm) {
+      warm(instance);
+      snapshots.set(wasm, { key, bytes: takeSnapshot(x.memory) });
+    }
+    return instance;
   }
 
   /** Put a string in wasm memory, NUL-terminated; `use` gets its pointer and byte length. */

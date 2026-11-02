@@ -3,7 +3,8 @@
 (function (g) {
   var done = new WeakSet(), list = [], current = null;
 
-  g.__edgeBoot = function (html, url, width) {
+  g.__edgeBoot = function (html, url, width, seed) {
+    g.__edgeStart(seed);
     var L = g.__linkedom;
     var parsed = L.parseHTML(html);
     var d = parsed.document, w = parsed.window;
