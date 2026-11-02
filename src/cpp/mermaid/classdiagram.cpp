@@ -14,9 +14,14 @@ using litehtml::svgutil::trim;
 
 enum Mark { kNoMark = 0, kTriangle, kDiamondFilled, kDiamondHollow, kArrow };
 
+struct Member {
+    std::string text;
+    bool statik = false, abstrakt = false;  // the `$` and `*` classifiers
+};
+
 struct Class {
     std::string name, display, annotation;
-    std::vector<std::string> attrs, methods;
+    std::vector<Member> attrs, methods;
     double w = 0, h = 0, head_h = 0, attrs_h = 0;
     int ns = -1;  // the `namespace` it was declared in
 };
@@ -116,7 +121,39 @@ void add_member(Class& c, const std::string& raw) {
         c.annotation = stereotype(m);
         return;
     }
-    (m.find('(') != std::string::npos ? c.methods : c.attrs).push_back(angle_generics(m));
+    m = angle_generics(m);
+    Member mem;
+    bool method = m.find('(') != std::string::npos;
+    size_t close = method ? m.find(')', m.find('(')) : std::string::npos;
+    // the classifier, `*` for abstract and `$` for static: right after a method's parameters, or at the very end
+    char mark = 0;
+    if (close != std::string::npos && close + 1 < m.size() && (m[close + 1] == '$' || m[close + 1] == '*')) {
+        mark = m[close + 1];
+        m.erase(close + 1, 1);
+    } else if (!m.empty() && (m.back() == '$' || m.back() == '*')) {
+        mark = m.back();
+        m = trim(m.substr(0, m.size() - 1));
+    }
+    mem.statik = mark == '$';
+    mem.abstrakt = mark == '*';
+    if (method) {  // a return type after the parameters reads `name(params) : Type`, as Mermaid draws it
+        size_t cp = m.find(')', m.find('('));
+        if (cp != std::string::npos) {
+            std::string rest = trim(m.substr(cp + 1));
+            if (!rest.empty() && rest[0] != ':') m = trim(m.substr(0, cp + 1)) + " : " + rest;
+        }
+    }
+    mem.text = m;
+    (method ? c.methods : c.attrs).push_back(mem);
+}
+
+// One member row: like aligned_text, with the classifier's styling (abstract italic, static underlined).
+void member_text(std::string& out, const Theme& th, const Member& m, double x, double cy, double size, const std::string& fill) {
+    out += "<text x=\"" + num(x) + "\" y=\"" + num(cy + size * 0.35) + "\" text-anchor=\"start\" font-size=\"" + num(size) +
+           "\" font-weight=\"400\" font-family=\"" + esc(th.font) + "\" fill=\"" + fill + "\"";
+    if (m.abstrakt) out += " font-style=\"italic\"";
+    if (m.statik) out += " text-decoration=\"underline\"";
+    out += ">" + text_content(m.text) + "</text>\n";
 }
 
 struct Op {
@@ -346,8 +383,8 @@ bool render_class(const std::string& source, const Options& options, std::string
         Class& c = d.classes[k];
         double w = text.width(c.display, kNodeFont, 600);
         if (!c.annotation.empty()) w = std::max(w, text.width(c.annotation, kEdgeFont, 400));
-        for (auto& m : c.attrs) w = std::max(w, text.width(m, kEdgeFont + 1, 400));
-        for (auto& m : c.methods) w = std::max(w, text.width(m, kEdgeFont + 1, 400));
+        for (auto& m : c.attrs) w = std::max(w, text.width(m.text, kEdgeFont + 1, 400));
+        for (auto& m : c.methods) w = std::max(w, text.width(m.text, kEdgeFont + 1, 400));
         c.w = std::max(80.0, w + 2 * kTextPad);
         c.head_h = kHead + (c.annotation.empty() ? 0 : kAnnot);
         c.attrs_h = c.attrs.empty() ? kSection : c.attrs.size() * kRow + kSection;
@@ -504,11 +541,11 @@ bool render_class(const std::string& source, const Options& options, std::string
         centered_text(body, th, {c.display}, p.x, ty, kNodeFont, 600, th.text);
         double ay = y + c.head_h;
         for (size_t m = 0; m < c.attrs.size(); m++)
-            aligned_text(body, th, {c.attrs[m]}, x + kTextPad, ay + kSection / 2 + m * kRow + kRow / 2, kEdgeFont + 1, 400, th.text, "start");
+            member_text(body, th, c.attrs[m], x + kTextPad, ay + kSection / 2 + m * kRow + kRow / 2, kEdgeFont + 1, th.text);
         double my = ay + c.attrs_h;
         body += "<line x1=\"" + num(x) + "\" y1=\"" + num(my) + "\" x2=\"" + num(x + c.w) + "\" y2=\"" + num(my) + "\" stroke=\"" + th.border + "\" stroke-width=\"1\"/>\n";
         for (size_t m = 0; m < c.methods.size(); m++)
-            aligned_text(body, th, {c.methods[m]}, x + kTextPad, my + kSection / 2 + m * kRow + kRow / 2, kEdgeFont + 1, 400, th.text, "start");
+            member_text(body, th, c.methods[m], x + kTextPad, my + kSection / 2 + m * kRow + kRow / 2, kEdgeFont + 1, th.text);
         body += "</g>\n";
     }
     svg = svg_document(th, bx1 - bx0 + 2 * kMargin, by1 - by0 + 2 * kMargin, body);
