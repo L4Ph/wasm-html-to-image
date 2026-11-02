@@ -183,7 +183,7 @@ interface RenderResult {
 | `wasm-html-to-image/markdown` | Markdown input | GitHub-flavoured Markdown to a styled HTML page (`markdownToHtml`); pure JS, runs in browsers and Workers |
 | `wasm-html-to-image/single`, `/workers` | Mermaid diagrams | `renderMermaid(source, options)`: one diagram as an SVG string or an image (any entry's `render({ mermaid: { source } })` does the same) |
 | `wasm-html-to-image/markdown-math` | Maths in Markdown | KaTeX renderer for `markdownToHtml({ math })`: `$...$` and `$$...$$` (`katexMath`); pure JS, runs in browsers and Workers |
-| `wasm-html-to-image/javascript` | Scripts on edge runtimes | `applyJavaScript(options, { quickjsWasm })`: runs a page's scripts in QuickJS (WebAssembly) on linkedom, where jsdom cannot (Workers); `wasm-html-to-image/quickjs.wasm` is the pre-compiled module |
+| `wasm-html-to-image/javascript` | Scripts on edge runtimes | `applyJavaScript(options)`: runs a page's scripts in QuickJS (WebAssembly) on linkedom, where jsdom cannot (Workers); the QuickJS wasm is chosen for the runtime automatically |
 
 ---
 

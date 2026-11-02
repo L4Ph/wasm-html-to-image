@@ -330,3 +330,11 @@ describe("javascript option, QuickJS engine: binary responses", () => {
     }
   });
 });
+
+describe("javascript option, QuickJS engine: the wasm chosen by the runtime", () => {
+  it("is supplied by #quickjs-wasm on Node, as a compiled module", async () => {
+    const { default: defaultQuickJSWasm } = await import("#quickjs-wasm");
+    expect(await defaultQuickJSWasm()).toBeInstanceOf(WebAssembly.Module);
+    expect(await defaultQuickJSWasm()).toBe(await defaultQuickJSWasm()); // compiled once
+  });
+});

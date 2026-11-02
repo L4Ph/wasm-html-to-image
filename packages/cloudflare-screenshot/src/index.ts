@@ -1,6 +1,5 @@
 import { render } from "wasm-html-to-image/workerd";
 import { applyJavaScript } from "wasm-html-to-image/javascript";
-import quickjsWasm from "wasm-html-to-image/quickjs.wasm";
 
 /**
  * Screenshot a web page, scripts included:
@@ -117,10 +116,10 @@ export default {
         quality,
       } as Parameters<typeof render>[0];
       if (script) {
-        options = await applyJavaScript(
-          { ...options, javascript: { settleMs, timeout, waitFor } },
-          { quickjsWasm },
-        );
+        options = await applyJavaScript({
+          ...options,
+          javascript: { settleMs, timeout, waitFor },
+        });
       }
       const { data } = await render(options);
       const res = new Response(data as unknown as BodyInit, {

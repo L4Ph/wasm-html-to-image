@@ -5,19 +5,20 @@
  * program (`dist/edge-js-payload.js`, built by `scripts/build-edge-js.mjs`) holds the DOM and the browser globals a
  * bare QuickJS lacks; this host fetches scripts, keeps time for the timers and serializes the DOM at the end.
  *
- * It is a smaller DOM than jsdom's and an interpreter: no layout (like jsdom), no canvas, `type="module"` scripts are
- * not run, and heavy pages are slower. Like the jsdom engine it is for trusted pages: the page's scripts can `fetch`.
+ * It is a smaller DOM than jsdom's and an interpreter: no layout (like jsdom), no canvas, and heavy pages are slower.
+ * Like the jsdom engine it is for trusted pages: the page's scripts can `fetch`.
+ *
+ * The QuickJS wasm is chosen by the runtime (`#quickjs-wasm` in package.json), so nothing needs importing for it:
  *
  * ```ts
- * import quickjsWasm from "wasm-html-to-image/quickjs.wasm"; // Workers: a pre-compiled module
  * import { applyJavaScript } from "wasm-html-to-image/javascript";
  * import { render } from "wasm-html-to-image/workerd";
- * const opts = await applyJavaScript({ url: "https://example.com/", javascript: true, format: "png" }, { quickjsWasm });
- * const png = await render(opts);
+ * const png = await render(await applyJavaScript({ url: "https://example.com/", javascript: true, format: "png" }));
  * ```
  */
 // @ts-expect-error — dist/edge-js-payload.js is generated at build time
 import { guestSource } from "../dist/edge-js-payload.js";
+import defaultQuickJSWasm from "#quickjs-wasm";
 import type { HtmlToImageOptions } from "./core.js";
 import { applyScripted, type JavaScriptOptions, type ScriptedPage } from "./js-apply.js";
 
@@ -26,8 +27,8 @@ export type { JavaScriptOptions, ScriptedPage } from "./js-apply.js";
 /** Where the QuickJS engine comes from. */
 export interface EdgeJavaScriptEngine {
   /**
-   * The compiled QuickJS module: `import wasm from "wasm-html-to-image/quickjs.wasm"` on Cloudflare Workers, where
-   * WebAssembly cannot be compiled at run time. Omit it on Node, Deno, Bun and in browsers: the package loads its own copy.
+   * A compiled QuickJS module of your own. Omit it: the package supplies its own, chosen by the runtime
+   * (`#quickjs-wasm` in package.json: pre-compiled on Cloudflare Workers, read or fetched elsewhere).
    */
   quickjsWasm?: WebAssembly.Module;
 }
@@ -67,28 +68,6 @@ function loadLibraries() {
   return libraries;
 }
 
-// The package's own quickjs.wasm, compiled once, so each run only has to instantiate it (undefined when it cannot be
-// read here, e.g. in a bundle: the library then loads its own copy every time).
-let defaultWasm: Promise<WebAssembly.Module | undefined> | undefined;
-function compileDefaultWasm() {
-  defaultWasm ??= (async () => {
-    try {
-      const url = new URL("./quickjs.wasm", import.meta.url);
-      let bytes: ArrayBuffer | Uint8Array;
-      if (url.protocol === "file:" && (globalThis as any).process?.versions?.node) {
-        const fs = "node:fs/promises", node = "node:url"; // not literals: edge bundlers must not try to resolve them
-        bytes = await (await import(/* @vite-ignore */ fs)).readFile((await import(/* @vite-ignore */ node)).fileURLToPath(url));
-      } else {
-        bytes = await (await fetch(url)).arrayBuffer();
-      }
-      return await WebAssembly.compile(bytes as BufferSource);
-    } catch {
-      return undefined;
-    }
-  })();
-  return defaultWasm;
-}
-
 // one QuickJS module (a WebAssembly instance) per compiled wasm; every run makes its own runtime in it
 const quickjsModules = new WeakMap<object, Promise<any>>();
 const defaultSlot = {};
@@ -98,7 +77,7 @@ function loadQuickJS(wasm: WebAssembly.Module | undefined): Promise<any> {
   if (!loaded) {
     loaded = (async () => {
       const { core, variant } = await loadLibraries();
-      const compiled = wasm ?? (await compileDefaultWasm());
+      const compiled = wasm ?? (await defaultQuickJSWasm());
       return core.newQuickJSWASMModuleFromVariant(compiled ? core.newVariant(variant, { wasmModule: compiled }) : variant);
     })();
     loaded.catch(() => quickjsModules.delete(slot));

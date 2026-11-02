@@ -108,18 +108,14 @@ export interface RenderResult<T = Uint8Array | string> {
 jsdom は Node.js 専用です。Workers のように `eval` できない環境では、`wasm-html-to-image/javascript` が、QuickJS（WebAssembly）と linkedom の上でページのスクリプトを実行します。React / Next.js のクライアントも、ハイドレーションと `useEffect` まで動くことを確認しています。
 
 ```ts
-import quickjsWasm from "wasm-html-to-image/quickjs.wasm"; // Workers では、コンパイル済みのモジュールとして取り込む
 import { applyJavaScript } from "wasm-html-to-image/javascript";
 import { render } from "wasm-html-to-image/workerd";
 
-const options = await applyJavaScript(
-  { url: "https://example.com/", javascript: true, width: 1200, format: "png" },
-  { quickjsWasm },
-);
+const options = await applyJavaScript({ url: "https://example.com/", javascript: true, width: 1200, format: "png" });
 const { data } = await render(options);
 ```
 
-- Node.js、Deno、Bun では `quickjsWasm` を省略できます（パッケージに入っているものを使います）。Node.js の `single` 入口では、`javascript: { engine: "quickjs" }` でも選べます。
+- QuickJS の wasm は、実行環境に合わせてパッケージが選びます（`package.json` の `imports` の `#quickjs-wasm`）。Workers ではコンパイル済みのモジュールを取り込み、Node.js と Bun ではファイルを読み、Deno とブラウザでは `fetch` します。自前のモジュールを使うなら `applyJavaScript(options, { quickjsWasm })` で渡せます。Node.js の `single` 入口では、`javascript: { engine: "quickjs" }` でも選べます。
 - 任意依存の `quickjs-emscripten-core` と `@jitl/quickjs-wasmfile-release-sync` が要ります（Workers ではバンドルに入ります）。
 - 制限: レイアウトはなく（`getBoundingClientRect` は 0）、`canvas` は使えません。`type="module"` のスクリプトは実行しますが、`import` は先に取得できる（リテラルの指定子の）ものだけです。DOM は linkedom で jsdom より小さく、QuickJS はインタプリタなので、重いページは遅くなります。
 - jsdom と同じく、信頼できるページだけに使ってください（スクリプトは `fetch` できます）。

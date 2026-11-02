@@ -78,18 +78,14 @@ Returns a `string` for `svg` format, and `Uint8Array` for all other formats (`pn
 jsdom is Node.js only. Where `eval` is not allowed, such as Workers, `wasm-html-to-image/javascript` runs the page's scripts in QuickJS (WebAssembly) on a linkedom DOM. A React / Next.js client has been checked to run through hydration and its `useEffect`s.
 
 ```ts
-import quickjsWasm from "wasm-html-to-image/quickjs.wasm"; // on Workers: a pre-compiled module
 import { applyJavaScript } from "wasm-html-to-image/javascript";
 import { render } from "wasm-html-to-image/workerd";
 
-const options = await applyJavaScript(
-  { url: "https://example.com/", javascript: true, width: 1200, format: "png" },
-  { quickjsWasm },
-);
+const options = await applyJavaScript({ url: "https://example.com/", javascript: true, width: 1200, format: "png" });
 const { data } = await render(options);
 ```
 
-- On Node.js, Deno and Bun `quickjsWasm` can be left out (the package's own copy is used). The Node.js `single` entry also selects this engine with `javascript: { engine: "quickjs" }`.
+- The package picks the QuickJS wasm for the runtime (`#quickjs-wasm` in the `imports` of `package.json`): a pre-compiled module on Workers, read from disk on Node.js and Bun, fetched on Deno and in browsers. To use a module of your own, pass it as `applyJavaScript(options, { quickjsWasm })`. The Node.js `single` entry also selects this engine with `javascript: { engine: "quickjs" }`.
 - It needs the optional dependencies `quickjs-emscripten-core` and `@jitl/quickjs-wasmfile-release-sync` (a Workers bundle includes them).
 - Limits: no layout (`getBoundingClientRect` returns 0), no `canvas`, `type="module"` scripts run, but only `import`s with literal specifiers (fetched up front) resolve. The DOM is linkedom's, smaller than jsdom's, and QuickJS is an interpreter, so heavy pages are slower.
 - As with jsdom, use it with trusted pages only (the scripts can `fetch`).

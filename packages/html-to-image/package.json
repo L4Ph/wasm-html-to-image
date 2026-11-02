@@ -40,6 +40,15 @@
   "engines": {
     "node": ">=20.0.0"
   },
+  "imports": {
+    "#quickjs-wasm": {
+      "workerd": "./dist/quickjs-workerd.js",
+      "deno": "./dist/quickjs-web.js",
+      "node": "./dist/quickjs-node.js",
+      "bun": "./dist/quickjs-node.js",
+      "default": "./dist/quickjs-web.js"
+    }
+  },
   "scripts": {
     "build": "tsc -b && node scripts/compress-wasm.mjs && node scripts/build-edge-js.mjs && rolldown -c rolldown.config.js",
     "prepublishOnly": "npm run build",

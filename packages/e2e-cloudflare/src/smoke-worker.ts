@@ -1,7 +1,6 @@
 import { render, renderMermaid } from "wasm-html-to-image/workerd";
 import { markdownToDocument, markdownToHtml } from "wasm-html-to-image/markdown";
 import { katexMath } from "wasm-html-to-image/markdown-math";
-import quickjsWasm from "wasm-html-to-image/quickjs.wasm";
 import { applyJavaScript, runPageScriptsQuickJS } from "wasm-html-to-image/javascript";
 
 /**
@@ -91,8 +90,8 @@ export default {
         'for (const n of [1, 2, 3]) { const li = document.createElement("li"); li.textContent = "item " + n; document.getElementById("l").appendChild(li); }' +
         'setTimeout(() => { document.body.setAttribute("data-timer", "yes"); }, 20);' +
         "</script></body>";
-      const page = await runPageScriptsQuickJS({ html }, { settleMs: 100 }, 800, { quickjsWasm });
-      const png = await render(await applyJavaScript({ value: html, javascript: { settleMs: 100 }, width: 400, format: "png" }, { quickjsWasm }));
+      const page = await runPageScriptsQuickJS({ html }, { settleMs: 100 }, 800);
+      const png = await render(await applyJavaScript({ value: html, javascript: { settleMs: 100 }, width: 400, format: "png" }));
       return Response.json({ html: page.html, pngBytes: (png.data as Uint8Array).length });
     }
 
