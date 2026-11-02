@@ -155,7 +155,7 @@ const h = await dom.eval("document.querySelector('main').getBoundingClientRect()
 ```
 
 - The values are a snapshot: call `measureLayout()` again after the page changed.
-- Inline elements in a line of text (`<span>`, `<a>`, ...) have no box of their own in the engine's layout and stay 0 x 0 (images and other replaced elements, blocks and table cells are measured). The offsets are measured from the top left of the page, not from an `offsetParent`.
+- An inline element in a line of text (`<span>`, `<a>`, ...) gets the one box that encloses all the line fragments it is broken into. The offsets are measured from the top left of the page, not from an `offsetParent`.
 - The page itself is not touched: the marks for the layout are only on a copy.
 
 ### Rendering untrusted HTML (`limits`)

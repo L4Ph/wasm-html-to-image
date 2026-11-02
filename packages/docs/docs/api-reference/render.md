@@ -185,7 +185,7 @@ const h = await dom.eval("document.querySelector('main').getBoundingClientRect()
 ```
 
 - 値はその時点のスナップショットです。ページを変えたら、もう一度 `measureLayout()` を呼んでください。
-- 行の中の `<span>` や `<a>` などのインライン要素は、エンジンのレイアウトに独自のボックスがなく 0 × 0 のままです（画像などの置換要素、ブロック、表のセルなどは測れます）。オフセット系は `offsetParent` ではなくページの左上からの位置です。
+- 行の中の `<span>` や `<a>` などのインライン要素は、折り返された行ごとの断片をすべて囲む 1 つのボックスを返します。オフセット系は `offsetParent` ではなくページの左上からの位置です。
 - ページには手を加えません。レイアウト用の目印は複製にだけ付きます。
 
 ### 高度な制御 & 診断
@@ -197,7 +197,7 @@ const h = await dom.eval("document.querySelector('main').getBoundingClientRect()
 | `onLog`           | `(level: LogLevel, message: string) => void`   | ログ受信用コールバック                                             |
 | `diagnostics`     | `boolean`                                      | 詳細な診断レポートを収集するか                                     |
 | `onDiagnostics`   | `(report: RenderDiagnostics) => void`          | 診断レポート受信用コールバック                                     |
-| `onLayout`        | `(boxes: LayoutBox[]) => void`                 | デバッグ用。レイアウト済みの全要素のボーダーボックス（ページ座標）を受け取る。HTML 入力のみ。ブラウザとの差分調査に使う |
+| `onLayout`        | `(boxes: LayoutBox[]) => void`                 | デバッグ用。レイアウト済みの全要素のボーダーボックス（ページ座標）を受け取る。HTML 入力のみ。ブラウザとの差分調査に使う。`layoutInline: true` を足すと、インライン要素も（行の断片を囲む 1 つのボックスとして）含める |
 | `limits`          | `RenderLimits`                                 | 最大リソース数、最大メモリサイズなどの安全上限                     |
 
 ### 信頼できない HTML を描画するとき (`limits`)
