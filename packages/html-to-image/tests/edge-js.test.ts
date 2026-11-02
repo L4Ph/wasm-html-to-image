@@ -35,3 +35,30 @@ describe("javascript option, QuickJS engine (wasm-quickjs-dom)", () => {
     }
   });
 });
+
+describe("measureLayout: real boxes for the page's getBoundingClientRect", () => {
+  it("lays the page out with the engine and answers from it, leaving the page untouched", async () => {
+    const { createDOM, measureLayout } = await import("../src/edge-js.js");
+    const { render } = await import("../src/single.js");
+    const html =
+      '<!doctype html><html><head><style>body{margin:0}#a{width:200px;height:50px;margin:10px 0 0 30px}#b{height:30px;margin:0}</style></head>' +
+      '<body><div id="a" class="box big"></div><div id="b"></div><script>window.sizes = () => [document.getElementById("a").offsetWidth, document.getElementById("a").offsetHeight];</script></body></html>';
+    const dom = await createDOM({ html }, { settleMs: 0, width: 400 });
+    try {
+      expect(await dom.eval("document.getElementById('a').getBoundingClientRect().width")).toBe(0); // no layout yet
+      const count = await measureLayout(dom, render, { width: 400 });
+      expect(count).toBeGreaterThan(3);
+      expect(await dom.eval("document.getElementById('a').getBoundingClientRect().toJSON()")).toEqual({
+        x: 30, y: 10, width: 200, height: 50, top: 10, left: 30, right: 230, bottom: 60,
+      });
+      expect(await dom.eval("sizes()")).toEqual([200, 50]);
+      expect(await dom.eval("document.getElementById('b').offsetTop")).toBe(60);
+      expect(await dom.eval("document.getElementById('b').getBoundingClientRect().width")).toBe(400);
+      // the markers were only on the copy that was laid out
+      expect(dom.serialize()).not.toContain("qjsl-");
+      expect(await dom.eval("document.getElementById('a').className")).toBe("box big");
+    } finally {
+      dom.close();
+    }
+  }, 60_000);
+});

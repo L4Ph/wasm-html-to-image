@@ -135,4 +135,48 @@
     for (var i = 0; i < n.length; i++) n[i].remove();
     return d.toString().replace(/^<!DOCTYPE\s*>/i, "<!DOCTYPE html>");
   };
+
+  // Layout: there is none in here, so the host lays the page out elsewhere and hands the boxes back.
+  // __edgeMarkLayout() numbers every element (document order) and returns the page as HTML in which each element's
+  // class starts with `qjsl-<number>`, so a layout engine's boxes (which report `class`) find their elements however
+  // it re-parses the markup. The marks are on a clone: the page itself is not touched, no observer sees anything.
+  var boxes = null;
+  g.__edgeMarkLayout = function () {
+    var d = g.document, root = d.documentElement;
+    if (!root) return "";
+    var clone = root.cloneNode(true);
+    var a = Array.prototype.slice.call(root.querySelectorAll("*")), b = Array.prototype.slice.call(clone.querySelectorAll("*"));
+    a.unshift(root); b.unshift(clone);
+    boxes = null;
+    for (var i = 0; i < a.length && i < b.length; i++) {
+      a[i].__qi = i;
+      var had = b[i].getAttribute("class");
+      b[i].setAttribute("class", "qjsl-" + i + (had ? " " + had : ""));
+    }
+    var n = clone.querySelectorAll("noscript");
+    for (var j = 0; j < n.length; j++) n[j].remove();
+    return "<!DOCTYPE html>" + clone.outerHTML;
+  };
+  // boxes: { "<number>": [x, y, width, height] } in page coordinates; an element without a box is 0 x 0
+  g.__edgeSetLayout = function (json) {
+    boxes = JSON.parse(json);
+    var P = g.Element.prototype;
+    var box = function (el) { return (boxes && el.__qi !== undefined && boxes[el.__qi]) || [0, 0, 0, 0]; };
+    var def = function (name, get) { Object.defineProperty(P, name, { configurable: true, get: get }); };
+    var rect = function (el) {
+      var b = box(el);
+      return { x: b[0], y: b[1], width: b[2], height: b[3], top: b[1], left: b[0], right: b[0] + b[2], bottom: b[1] + b[3],
+        toJSON: function () { return { x: this.x, y: this.y, width: this.width, height: this.height, top: this.top, left: this.left, right: this.right, bottom: this.bottom }; } };
+    };
+    Object.defineProperty(P, "getBoundingClientRect", { configurable: true, writable: true, value: function () { return rect(this); } });
+    Object.defineProperty(P, "getClientRects", { configurable: true, writable: true, value: function () { var b = box(this); return b[2] || b[3] ? [rect(this)] : []; } });
+    def("offsetWidth", function () { return Math.round(box(this)[2]); });
+    def("offsetHeight", function () { return Math.round(box(this)[3]); });
+    def("offsetLeft", function () { return Math.round(box(this)[0]); });
+    def("offsetTop", function () { return Math.round(box(this)[1]); });
+    def("clientWidth", function () { return Math.round(box(this)[2]); });
+    def("clientHeight", function () { return Math.round(box(this)[3]); });
+    def("scrollWidth", function () { return Math.round(box(this)[2]); });
+    def("scrollHeight", function () { return Math.round(box(this)[3]); });
+  };
 })(globalThis);

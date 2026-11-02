@@ -143,6 +143,21 @@ try {
 - `serialize()` は現在の HTML、`toOptions(options)` は `render()` にそのまま渡せるオプションを返します。
 - `createDOM` の第 2 引数は `javascript` オプション（`timeout` / `settleMs` / `waitFor`）に `width` と `quickjsWasm` を足したものです。`timeout` は 1 回の呼び出しごとに数えます。
 
+**レイアウトを渡す（`measureLayout`）**: QuickJS の中にはレイアウトがないので、`getBoundingClientRect()` は 0 を返します。`measureLayout()` は画像エンジンでページをレイアウトし（描画やエンコードはしません）、その値をページに渡します。以後 `getBoundingClientRect()`、`getClientRects()`、`offsetWidth` / `offsetHeight` / `offsetLeft` / `offsetTop`、`clientWidth` / `clientHeight`、`scrollWidth` / `scrollHeight` が実測値を返します。
+
+```ts
+import { createDOM, measureLayout } from "wasm-html-to-image/javascript";
+import { render } from "wasm-html-to-image/workerd";
+
+const dom = await createDOM({ url: "https://example.com/" }, { width: 1200 });
+await measureLayout(dom, render, { width: 1200 });  // render は使うエントリのもの
+const h = await dom.eval("document.querySelector('main').getBoundingClientRect().height");
+```
+
+- 値はその時点のスナップショットです。ページを変えたら、もう一度 `measureLayout()` を呼んでください。
+- 行の中の `<span>` や `<a>` などのインライン要素は、エンジンのレイアウトに独自のボックスがなく 0 × 0 のままです（画像などの置換要素、ブロック、表のセルなどは測れます）。オフセット系は `offsetParent` ではなくページの左上からの位置です。
+- ページには手を加えません。レイアウト用の目印は複製にだけ付きます。
+
 ### 高度な制御 & 診断
 
 | オプション        | 型                                             | 説明                                                               |

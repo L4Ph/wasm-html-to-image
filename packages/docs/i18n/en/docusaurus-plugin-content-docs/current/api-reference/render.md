@@ -113,6 +113,21 @@ try {
 - `serialize()` is the current HTML; `toOptions(options)` gives render options you can pass to `render()` as they are.
 - The second argument of `createDOM` is the `javascript` option (`timeout` / `settleMs` / `waitFor`) plus `width` and `quickjsWasm`. `timeout` counts per call.
 
+**Giving the page a layout (`measureLayout`)**: there is no layout inside QuickJS, so `getBoundingClientRect()` returns 0. `measureLayout()` lays the page out with the image engine (nothing is drawn or encoded) and hands the numbers to the page. Afterwards `getBoundingClientRect()`, `getClientRects()`, `offsetWidth` / `offsetHeight` / `offsetLeft` / `offsetTop`, `clientWidth` / `clientHeight` and `scrollWidth` / `scrollHeight` answer with the measured values.
+
+```ts
+import { createDOM, measureLayout } from "wasm-html-to-image/javascript";
+import { render } from "wasm-html-to-image/workerd";
+
+const dom = await createDOM({ url: "https://example.com/" }, { width: 1200 });
+await measureLayout(dom, render, { width: 1200 });  // the render of the entry you use
+const h = await dom.eval("document.querySelector('main').getBoundingClientRect().height");
+```
+
+- The values are a snapshot: call `measureLayout()` again after the page changed.
+- Inline elements in a line of text (`<span>`, `<a>`, ...) have no box of their own in the engine's layout and stay 0 x 0 (images and other replaced elements, blocks and table cells are measured). The offsets are measured from the top left of the page, not from an `offsetParent`.
+- The page itself is not touched: the marks for the layout are only on a copy.
+
 ### Rendering untrusted HTML (`limits`)
 
 When rendering user-supplied HTML, always restrict where it may fetch from and how much. By default any host is fetched, and on Node local files under `baseUrl` are read.

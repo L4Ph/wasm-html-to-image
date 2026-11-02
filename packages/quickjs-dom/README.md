@@ -19,7 +19,7 @@ try {
 - The DOM lives inside QuickJS, so you reach it through `eval()` and JSON values rather than a live `window`. A DOM node cannot be returned: return what you read from it.
 - The page's clock runs only while `eval()` / `settle()` waits. `timeout` (default 10 s) counts per call.
 - Scripts are run in document order, including the ones scripts add, `type="module"` scripts (their literal `import`s are fetched up front) and `fetch` / `XMLHttpRequest` (binary safe), `history.pushState`, storage, `MutationObserver`, `customElements` and the like. React / Next.js clients hydrate and run their effects.
-- Limits: no layout (`getBoundingClientRect` returns 0), no canvas, a smaller DOM than jsdom's, and QuickJS is an interpreter, so heavy pages are slower.
+- Limits: no layout of its own (`getBoundingClientRect` returns 0 until you call `setLayout()`; `wasm-html-to-image` has `measureLayout()` that fills it from its layout engine), no canvas, a smaller DOM than jsdom's, and QuickJS is an interpreter, so heavy pages are slower.
 - **Use trusted pages only**: the page's scripts can `fetch`.
 
 The QuickJS wasm is chosen by the runtime (the `#quickjs-wasm` entry of `imports` in `package.json`): a pre-compiled module on Workers and Vercel / Next.js Edge, read from disk on Node.js and Bun, fetched on Deno and in browsers. Pass `{ quickjsWasm }` to `createDOM` to use a module of your own; `wasm-quickjs-dom/quickjs.wasm` is the file.

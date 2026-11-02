@@ -137,6 +137,21 @@ export interface QuickJSDOM {
   settle(ms?: number): Promise<void>;
   /** The document as it is now, as HTML. */
   serialize(): string;
+  /**
+   * The page as HTML for a layout engine: every element's `class` starts with `qjsl-<n>` (its number, in document
+   * order), so boxes that report `class` can be matched back to elements. The page itself is not changed.
+   * Pair it with {@link QuickJSDOM.setLayout}; `wasm-html-to-image/javascript` has `measureLayout()` doing both.
+   */
+  markForLayout(): string;
+  /**
+   * Give the page a layout: `boxes` maps an element number (see {@link QuickJSDOM.markForLayout}) to its
+   * `[x, y, width, height]` in page coordinates. Afterwards `getBoundingClientRect()`, `getClientRects()`,
+   * `offsetWidth` / `offsetHeight` / `offsetLeft` / `offsetTop`, `clientWidth` / `clientHeight` and
+   * `scrollWidth` / `scrollHeight` answer from it (the offsets are measured from the page, not from an offset
+   * parent). An element without a box is 0 x 0. The layout is not kept in step with later changes to the page:
+   * measure again.
+   */
+  setLayout(boxes: Record<number, [number, number, number, number]>): void;
   /** Options for a renderer that draws this page: `value` is the serialized DOM and `baseUrl` is this page's. */
   toOptions<T extends PageInput>(options: T): T;
   /** Free the QuickJS runtime. The page cannot be used afterwards. */
@@ -441,6 +456,18 @@ export async function createDOM(
         await wait(ms ?? opts.settleMs ?? DEFAULT_SETTLE_MS);
       },
       serialize,
+      markForLayout() {
+        if (closed) throw new Error("The DOM is closed.");
+        begin();
+        const out = call("__edgeMarkLayout()");
+        if (typeof out !== "string") throw new Error("The QuickJS engine could not mark the page for layout.");
+        return out;
+      },
+      setLayout(boxes) {
+        if (closed) throw new Error("The DOM is closed.");
+        begin();
+        if (!run(`__edgeSetLayout(${JSON.stringify(JSON.stringify(boxes))})`, "layout.js")) throw new Error("The QuickJS engine could not apply the layout.");
+      },
       toOptions<T extends PageInput>(options: T): T {
         const { javascript: _javascript, ...rest } = options;
         return { ...rest, url: undefined, value: serialize(), baseUrl: options.baseUrl ?? baseUrl } as unknown as T;

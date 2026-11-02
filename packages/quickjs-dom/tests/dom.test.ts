@@ -407,6 +407,25 @@ describe("createDOM: a page kept open", () => {
     expect(next.html).toContain(">after<");
   }, 60_000);
 
+  it("markForLayout() numbers a copy of the page; setLayout() makes the rect APIs answer", async () => {
+    const dom = await createDOM({ html: '<!doctype html><html><body class="x"><div id="a">hi</div><p id="b"></p></body></html>' }, { settleMs: 0 });
+    try {
+      const html = dom.markForLayout();
+      expect(html).toMatch(/<body class="qjsl-\d+ x">/);
+      expect(html).toMatch(/<div class="qjsl-\d+" id="a">/);
+      expect(dom.serialize()).not.toContain("qjsl-"); // only the copy is marked
+      expect(await dom.eval("document.body.className")).toBe("x");
+      const index = (id: string) => Number(new RegExp('class="qjsl-(\\d+)" id="' + id + '"').exec(html)![1]);
+      dom.setLayout({ [index("a")]: [5, 6, 70, 80] });
+      expect(await dom.eval("document.getElementById('a').getBoundingClientRect().toJSON()")).toEqual({ x: 5, y: 6, width: 70, height: 80, top: 6, left: 5, right: 75, bottom: 86 });
+      expect(await dom.eval("[document.getElementById('a').offsetWidth, document.getElementById('a').offsetHeight, document.getElementById('a').offsetTop]")).toEqual([70, 80, 6]);
+      expect(await dom.eval("document.getElementById('b').getClientRects().length")).toBe(0); // no box
+      expect(await dom.eval("document.getElementById('b').offsetHeight")).toBe(0);
+    } finally {
+      dom.close();
+    }
+  });
+
   it("refuses to be used after close()", async () => {
     const dom = await createDOM({ html: "" }, { settleMs: 0 });
     dom.close();
