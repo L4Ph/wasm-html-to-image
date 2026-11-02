@@ -70,8 +70,29 @@ Returns a `string` for `svg` format, and `Uint8Array` for all other formats (`pn
 
 | Option | Type | Description |
 | ------ | ---- | ----------- |
-| `javascript` | `boolean \| { timeout?: number, settleMs?: number, waitFor?: string }` | Run the page's `<script>`s in jsdom before rendering (Node.js `single` entry and the CLI's `--js`; needs the optional dependency `jsdom`). `true` waits 1 s after `load`. `timeout` bounds the whole phase (default 10000 ms), `settleMs` is the wait after `load` (default 1000 ms), `waitFor` is a CSS selector to wait for (replaces `settleMs`). jsdom has no layout and is not a sandbox: use it with trusted pages only |
+| `javascript` | `boolean \| { timeout?: number, settleMs?: number, waitFor?: string, engine?: "jsdom" \| "quickjs" }` | Run the page's `<script>`s in jsdom before rendering (Node.js `single` entry and the CLI's `--js`; needs the optional dependency `jsdom`). `true` waits 1 s after `load`. `timeout` bounds the whole phase (default 10000 ms), `settleMs` is the wait after `load` (default 1000 ms), `waitFor` is a CSS selector to wait for (replaces `settleMs`). `engine: "quickjs"` runs them in QuickJS (WebAssembly) on linkedom instead of jsdom ([running scripts on edge runtimes](#running-scripts-on-edge-runtimes-cloudflare-workers-and-others)). jsdom has no layout and is not a sandbox: use it with trusted pages only |
 | `mermaid` | `{ source, theme?, padding?, background?, accent?, mode?, directives?, onWarning?, maxLines?, maxSourceBytes? }` | Draw a Mermaid diagram (instead of `value`), as an image sized to the diagram. See [Mermaid conversion](./mermaid.md) |
+
+#### Running scripts on edge runtimes (Cloudflare Workers and others)
+
+jsdom is Node.js only. Where `eval` is not allowed, such as Workers, `wasm-html-to-image/javascript` runs the page's scripts in QuickJS (WebAssembly) on a linkedom DOM. A React / Next.js client has been checked to run through hydration and its `useEffect`s.
+
+```ts
+import quickjsWasm from "wasm-html-to-image/quickjs.wasm"; // on Workers: a pre-compiled module
+import { applyJavaScript } from "wasm-html-to-image/javascript";
+import { render } from "wasm-html-to-image/workerd";
+
+const options = await applyJavaScript(
+  { url: "https://example.com/", javascript: true, width: 1200, format: "png" },
+  { quickjsWasm },
+);
+const { data } = await render(options);
+```
+
+- On Node.js, Deno and Bun `quickjsWasm` can be left out (the package's own copy is used). The Node.js `single` entry also selects this engine with `javascript: { engine: "quickjs" }`.
+- It needs the optional dependencies `quickjs-emscripten-core` and `@jitl/quickjs-wasmfile-release-sync` (a Workers bundle includes them).
+- Limits: no layout (`getBoundingClientRect` returns 0), no `canvas`, `type="module"` scripts are not run. The DOM is linkedom's, smaller than jsdom's, and QuickJS is an interpreter, so heavy pages are slower.
+- As with jsdom, use it with trusted pages only (the scripts can `fetch`).
 
 ### Rendering untrusted HTML (`limits`)
 

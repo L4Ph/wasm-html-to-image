@@ -72,6 +72,17 @@ process.exitCode = await runCfSmoke({
     },
     // 4b. Mermaid through the workerd entry
     (base) => expectPng(base, "/mermaid"),
+    // 4c. A page's scripts run in QuickJS (WebAssembly) inside the worker
+    async (base) => {
+      const res = await fetch(`${base}/javascript`);
+      assert(res.status === 200, `GET /javascript status=${res.status}`);
+      const { html, pngBytes } = await res.json();
+      console.log(`javascript: ${html.length} chars of html, png ${pngBytes} bytes`);
+      assert(html.includes(">after<") && !html.includes(">before<"), "scripts did not change the heading");
+      assert(html.includes("<li>item 3</li>"), "scripts did not build the list");
+      assert(html.includes('data-timer="yes"'), "a timer did not run");
+      assert(pngBytes > 100, "the scripted page did not render to a PNG");
+    },
     // 5. Invalid input rejected with 400
     (base) => expectStatus(base, "/invalid", 400),
   ],

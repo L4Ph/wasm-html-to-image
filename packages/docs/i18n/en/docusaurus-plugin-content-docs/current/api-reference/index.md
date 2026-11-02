@@ -22,6 +22,7 @@ title: API Overview
 | `wasm-html-to-image/markdown`   | `markdownToHtml(md, options)`<br/>`markdownToDocument(md, options)`<br/>`listTemplates()` | GitHub-flavoured Markdown to styled HTML / PDF documents (templates, TOC, cover, pagination) |
 | `wasm-html-to-image/single`, `/workers` | `renderMermaid(source, options)` | A Mermaid diagram alone as an SVG string or an image ([Mermaid Conversion](./mermaid.md)) |
 | `wasm-html-to-image/markdown-math` | `katexMath(options)`<br/>`katexCss(fontBase?)` | KaTeX renderer for inline `$…$` and display `$$…$$` math in Markdown |
+| `wasm-html-to-image/javascript` | `applyJavaScript(options, { quickjsWasm })`<br/>`runPageScriptsQuickJS(source, option)` | Run a page's scripts in QuickJS (WebAssembly) on linkedom, for Workers and other runtimes without `eval` (`wasm-html-to-image/quickjs.wasm` is the pre-compiled module) |
 
 ---
 

@@ -1,6 +1,8 @@
 import { render, renderMermaid } from "wasm-html-to-image/workerd";
 import { markdownToDocument, markdownToHtml } from "wasm-html-to-image/markdown";
 import { katexMath } from "wasm-html-to-image/markdown-math";
+import quickjsWasm from "wasm-html-to-image/quickjs.wasm";
+import { applyJavaScript, runPageScriptsQuickJS } from "wasm-html-to-image/javascript";
 
 /**
  * Minimal worker that exercises the workerd entry over HTTP.
@@ -79,6 +81,19 @@ export default {
         theme: "dark",
       });
       return new Response(out.data as BodyInit, { headers: { "Content-Type": "image/png" } });
+    }
+
+    // The page's scripts run in QuickJS (WebAssembly) on a linkedom DOM: Workers cannot eval, so this is the only way here.
+    if (url.pathname === "/javascript") {
+      const html =
+        '<!doctype html><body><h1 id="t">before</h1><ul id="l"></ul><script>' +
+        'document.getElementById("t").textContent = "after";' +
+        'for (const n of [1, 2, 3]) { const li = document.createElement("li"); li.textContent = "item " + n; document.getElementById("l").appendChild(li); }' +
+        'setTimeout(() => { document.body.setAttribute("data-timer", "yes"); }, 20);' +
+        "</script></body>";
+      const page = await runPageScriptsQuickJS({ html }, { settleMs: 100 }, 800, { quickjsWasm });
+      const png = await render(await applyJavaScript({ value: html, javascript: { settleMs: 100 }, width: 400, format: "png" }, { quickjsWasm }));
+      return Response.json({ html: page.html, pngBytes: (png.data as Uint8Array).length });
     }
 
     if (url.pathname === "/invalid") {

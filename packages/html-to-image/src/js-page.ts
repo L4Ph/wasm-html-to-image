@@ -10,27 +10,12 @@
  * jsdom is not a security sandbox: do not enable this for URLs you do not trust.
  */
 import type { HtmlToImageOptions } from "./core.js";
+import { applyScripted, type JavaScriptOptions, type ScriptedPage } from "./js-apply.js";
 
-/** Options of the `javascript` render option. */
-export interface JavaScriptOptions {
-  /** Upper bound for the whole script phase in ms (default 10000). The page is rendered as it is when it expires. */
-  timeout?: number;
-  /** Extra time after the `load` event for timers and fetches to finish, in ms (default 1000). */
-  settleMs?: number;
-  /** CSS selector to wait for after `load`; replaces `settleMs` when given. */
-  waitFor?: string;
-}
+export type { JavaScriptOptions, ScriptedPage, ScriptRunner } from "./js-apply.js";
 
 const DEFAULT_TIMEOUT = 10000;
 const DEFAULT_SETTLE_MS = 1000;
-
-/** What the script phase produced. */
-export interface ScriptedPage {
-  /** The DOM after the scripts ran, serialized as HTML. */
-  html: string;
-  /** The document's final URL (after redirects), for resolving relative resources. */
-  baseUrl: string;
-}
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
@@ -206,17 +191,10 @@ export async function runPageScripts(
  * Image and binary inputs, and options without `javascript`, pass through untouched.
  */
 export async function applyJavaScript<T extends HtmlToImageOptions>(options: T): Promise<T> {
-  const { javascript, ...rest } = options;
-  if (!javascript) return options;
-  const config = javascript === true ? true : javascript;
-  const width = options.width || 800;
-  if (options.url) {
-    const page = await runPageScripts({ url: options.url }, config, width);
-    return { ...rest, url: undefined, value: page.html, baseUrl: options.baseUrl ?? page.baseUrl } as unknown as T;
+  const { javascript } = options;
+  if (javascript && typeof javascript === "object" && javascript.engine === "quickjs") {
+    const { runPageScriptsQuickJS } = await import("./edge-js.js");
+    return applyScripted(options, runPageScriptsQuickJS);
   }
-  if (typeof options.value === "string" && !options.value.startsWith("data:image/")) {
-    const page = await runPageScripts({ html: options.value, baseUrl: options.baseUrl }, config, width);
-    return { ...rest, value: page.html, baseUrl: options.baseUrl ?? page.baseUrl } as unknown as T;
-  }
-  return rest as unknown as T;
+  return applyScripted(options, runPageScripts);
 }

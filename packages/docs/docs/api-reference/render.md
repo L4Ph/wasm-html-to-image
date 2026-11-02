@@ -100,8 +100,29 @@ export interface RenderResult<T = Uint8Array | string> {
 
 | オプション   | 型                                                       | 説明 |
 | ------------ | -------------------------------------------------------- | ---- |
-| `javascript` | `boolean \| { timeout?: number, settleMs?: number, waitFor?: string }` | ページの `<script>` を jsdom で実行してから描画する（Node.js の `single` 入口と CLI の `--js`。任意依存の `jsdom` が要る）。`true` は `load` の後 1 秒待つ。`timeout` は全体の上限（既定 10000 ms）、`settleMs` は `load` の後の待ち時間（既定 1000 ms）、`waitFor` は待つ CSS セレクタ（指定すると `settleMs` の代わりになる）。jsdom にはレイアウトも安全な隔離もないので、信頼できるページだけに使う |
+| `javascript` | `boolean \| { timeout?: number, settleMs?: number, waitFor?: string, engine?: "jsdom" \| "quickjs" }` | ページの `<script>` を jsdom で実行してから描画する（Node.js の `single` 入口と CLI の `--js`。任意依存の `jsdom` が要る）。`true` は `load` の後 1 秒待つ。`timeout` は全体の上限（既定 10000 ms）、`settleMs` は `load` の後の待ち時間（既定 1000 ms）、`waitFor` は待つ CSS セレクタ（指定すると `settleMs` の代わりになる）。`engine: "quickjs"` は、jsdom の代わりに QuickJS（WebAssembly）と linkedom で実行する（[Edge で使う](#edgecloudflare-workers-などでスクリプトを実行する)）。jsdom にはレイアウトも安全な隔離もないので、信頼できるページだけに使う |
 | `mermaid`    | `{ source, theme?, padding?, background?, accent?, mode?, directives?, onWarning?, maxLines?, maxSourceBytes? }` | Mermaid の図を描く（`value` の代わり）。図の大きさに合わせた画像になる。詳しくは [Mermaid 変換](./mermaid.md) |
+
+#### Edge（Cloudflare Workers など）でスクリプトを実行する
+
+jsdom は Node.js 専用です。Workers のように `eval` できない環境では、`wasm-html-to-image/javascript` が、QuickJS（WebAssembly）と linkedom の上でページのスクリプトを実行します。React / Next.js のクライアントも、ハイドレーションと `useEffect` まで動くことを確認しています。
+
+```ts
+import quickjsWasm from "wasm-html-to-image/quickjs.wasm"; // Workers では、コンパイル済みのモジュールとして取り込む
+import { applyJavaScript } from "wasm-html-to-image/javascript";
+import { render } from "wasm-html-to-image/workerd";
+
+const options = await applyJavaScript(
+  { url: "https://example.com/", javascript: true, width: 1200, format: "png" },
+  { quickjsWasm },
+);
+const { data } = await render(options);
+```
+
+- Node.js、Deno、Bun では `quickjsWasm` を省略できます（パッケージに入っているものを使います）。Node.js の `single` 入口では、`javascript: { engine: "quickjs" }` でも選べます。
+- 任意依存の `quickjs-emscripten-core` と `@jitl/quickjs-wasmfile-release-sync` が要ります（Workers ではバンドルに入ります）。
+- 制限: レイアウトはなく（`getBoundingClientRect` は 0）、`canvas` は使えません。`type="module"` のスクリプトは実行しません。DOM は linkedom で jsdom より小さく、QuickJS はインタプリタなので、重いページは遅くなります。
+- jsdom と同じく、信頼できるページだけに使ってください（スクリプトは `fetch` できます）。
 
 ### 高度な制御 & 診断
 
