@@ -116,6 +116,21 @@ export async function runPageScripts(
             if (!window[name] && (globalThis as any)[name]) window[name] = (globalThis as any)[name];
           }
         }
+        // jsdom has no Web Streams (React's server-data reader, e.g. Next.js, needs them): lend Node's.
+        for (const name of ["ReadableStream", "WritableStream", "TransformStream"]) {
+          if (!window[name] && (globalThis as any)[name]) window[name] = (globalThis as any)[name];
+        }
+        // Some bundles (Next.js / Turbopack chunks) read `document.currentScript` after their script has run, when it is
+        // null in jsdom but set in a browser: fall back to the last `<script src>` so the lookup finds a script element.
+        const current = Object.getOwnPropertyDescriptor(window.Document.prototype, "currentScript");
+        if (current?.get) {
+          Object.defineProperty(window.document, "currentScript", {
+            configurable: true,
+            get(this: Document) {
+              return current.get!.call(this) || Array.from(this.querySelectorAll("script[src]")).pop() || null;
+            },
+          });
+        }
         for (const name of ["ResizeObserver", "IntersectionObserver"]) {
           if (!window[name]) {
             window[name] = class {

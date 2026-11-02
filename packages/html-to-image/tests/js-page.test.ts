@@ -80,3 +80,33 @@ describe("javascript option (jsdom)", () => {
     expect(resolveJavaScript("#app .ready")).toEqual({ waitFor: "#app .ready" });
   });
 });
+
+describe("javascript option: what framework bundles (Next.js) need", () => {
+  it("has Web Streams", async () => {
+    const out = await runPageScripts(
+      { html: page("<p id=s></p>", 'document.getElementById("s").textContent = typeof ReadableStream + "," + typeof TransformStream;') },
+      { settleMs: 0 },
+    );
+    expect(out.html).toContain(">function,function<");
+  });
+
+  it("lets an external script find a script element in document.currentScript after it has run", async () => {
+    const { createServer } = await import("node:http");
+    const server = createServer((req, res) => {
+      res.setHeader("content-type", req.url === "/chunk.js" ? "text/javascript" : "text/html");
+      res.end(
+        req.url === "/chunk.js"
+          ? 'setTimeout(() => { document.body.setAttribute("data-cs", String(document.currentScript && document.currentScript.tagName)); }, 20);'
+          : '<!doctype html><body><script src="/chunk.js" async></script></body>',
+      );
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const { port } = server.address() as { port: number };
+      const out = await runPageScripts({ url: `http://127.0.0.1:${port}/` }, { settleMs: 300 });
+      expect(out.html).toContain('data-cs="SCRIPT"');
+    } finally {
+      server.close();
+    }
+  });
+});
