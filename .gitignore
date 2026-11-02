@@ -86,3 +86,4 @@ tmp/
 # Cloudflare
 .wrangler
 .cloudflare/
+packages/cloudflare-screenshot/.dev.vars

@@ -45,5 +45,7 @@ writeFileSync(
 
 const quickjsWasm = join(dirname(require.resolve("@jitl/quickjs-wasmfile-release-sync/package.json")), "dist", "emscripten-module.wasm");
 copyFileSync(quickjsWasm, join(root, "dist", "quickjs.wasm"));
+// what `import wasm from "wasm-html-to-image/quickjs.wasm"` is typed as (bundlers for Workers give a compiled module)
+writeFileSync(join(root, "dist", "quickjs-wasm.d.ts"), "declare const quickjsWasm: WebAssembly.Module;\nexport default quickjsWasm;\n");
 
 console.log(`edge-js: payload ${(source.length / 1024).toFixed(0)} KiB, quickjs.wasm copied`);

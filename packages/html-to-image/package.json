@@ -129,7 +129,10 @@
       "types": "./dist/edge-js.d.ts",
       "import": "./dist/edge-js.js"
     },
-    "./quickjs.wasm": "./dist/quickjs.wasm",
+    "./quickjs.wasm": {
+      "types": "./dist/quickjs-wasm.d.ts",
+      "default": "./dist/quickjs.wasm"
+    },
     "./llms.txt": "./llms.txt"
   },
   "files": [
