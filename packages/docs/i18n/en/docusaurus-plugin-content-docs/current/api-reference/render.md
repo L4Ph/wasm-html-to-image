@@ -88,7 +88,8 @@ const { data } = await render(options);
 - The package picks the QuickJS wasm for the runtime (`#quickjs-wasm` in the `imports` of `package.json`): a pre-compiled module on Workers and on Vercel / Next.js Edge, read from disk on Node.js and Bun, fetched on Deno and in browsers. To use a module of your own, pass it as `applyJavaScript(options, { quickjsWasm })`. The Node.js `single` entry also selects this engine with `javascript: { engine: "quickjs" }`.
 - The engine itself is the separate package [`wasm-quickjs-dom`](https://www.npmjs.com/package/wasm-quickjs-dom) (a small JSDOM that knows nothing about images), installed as a dependency of `wasm-html-to-image`. `createDOM` can also be used straight from `wasm-quickjs-dom`.
 - Limits: no layout (`getBoundingClientRect` returns 0), no `canvas`, `type="module"` scripts run, but only `import`s with literal specifiers (fetched up front) resolve. The DOM is linkedom's, smaller than jsdom's, and QuickJS is an interpreter, so heavy pages are slower.
-- As with jsdom, use it with trusted pages only (the scripts can `fetch`).
+- As with jsdom, use it with trusted pages only (the scripts can `fetch`). For pages you do not control, always add the fetch limits below.
+- `IntersectionObserver` and `ResizeObserver` report once when you `observe()` (the page is meant to be seen whole, without scrolling, so everything counts as intersecting and lazy content gets to load). `matchMedia` answers for the viewport `width` (`min-width` / `max-width` / `orientation` ..., with a light-mode, no-motion user). `getComputedStyle` gives the element's own `style` and the initial values; the cascade is not computed.
 
 #### Keeping the DOM open (`createDOM`)
 
@@ -112,6 +113,32 @@ try {
 - `settle(ms?)` lets the page's timers and fetches run. The page's clock runs only during `eval()` / `settle()`, not in between.
 - `serialize()` is the current HTML; `toOptions(options)` gives render options you can pass to `render()` as they are.
 - The second argument of `createDOM` is the `javascript` option (`timeout` / `settleMs` / `waitFor`) plus `width` and `quickjsWasm`. `timeout` counts per call.
+
+**Fetch limits (`limits`)**: for pages you do not control, restrict where the page's scripts may fetch from. It covers the page's own `fetch` / `XMLHttpRequest`, the `<script>`s and modules it loads, and the page itself given as `url`.
+
+```ts
+const dom = await createDOM({ url }, {
+  limits: {
+    allowedProtocols: ["https:"],
+    allowedHosts: ["example.com", "cdn.example.com"], // exact match
+    blockPrivateHosts: true,     // refuse localhost and private, loopback and link-local addresses
+    maxResourceCount: 50,
+    maxResourceBytes: 5_000_000,
+    maxTotalResourceBytes: 20_000_000,
+  },
+});
+```
+
+- The names are those of the `limits` of `render()`. With `applyJavaScript()` the `limits` of the same call are the defaults, and `javascript: { limits }` overrides them.
+- With host or protocol limits, redirects are not followed automatically: each one is checked before it is followed. A runtime that hides the redirect target (a browser's `opaqueredirect`) cannot be checked, so the request is refused.
+- `blockPrivateHosts` looks at hostnames and IP literals only. A hostname that resolves to an internal address through DNS cannot be told apart here: pair it with `allowedHosts` when the target is not trusted.
+
+**What happened in the page (`logs`)**: `dom.logs` keeps the `console` output, script errors, unhandled promise rejections (`unhandledrejection`) and the page's requests with their status or the reason they failed (the last 1000). The `onLog` option delivers them as they happen. Use them to find out why a page rendered empty.
+
+```ts
+const dom = await createDOM({ url }, { onLog: (e) => e.type === "error" && console.error(e.source, e.message) });
+console.log(dom.logs.filter((e) => e.type === "request" && (e.error || (e.status ?? 0) >= 400)));
+```
 
 **Giving the page a layout (`measureLayout`)**: there is no layout inside QuickJS, so `getBoundingClientRect()` returns 0. `measureLayout()` lays the page out with the image engine (nothing is drawn or encoded) and hands the numbers to the page. Afterwards `getBoundingClientRect()`, `getClientRects()`, `offsetWidth` / `offsetHeight` / `offsetLeft` / `offsetTop`, `clientWidth` / `clientHeight` and `scrollWidth` / `scrollHeight` answer with the measured values.
 

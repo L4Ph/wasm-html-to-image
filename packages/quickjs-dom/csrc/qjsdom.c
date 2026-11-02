@@ -19,7 +19,7 @@
 #define EXPORT(name) __attribute__((export_name(name)))
 #define IMPORT(name) __attribute__((import_module("host"), import_name(name)))
 
-enum { OP_LOG = 0, OP_TIMER = 1, OP_FETCH = 2 };
+enum { OP_LOG = 0, OP_TIMER = 1, OP_FETCH = 2, OP_REJECTION = 3 };
 enum { RES_UNDEFINED = 0, RES_STRING = 1, RES_JSON = 2, RES_ERROR = 3, RES_BYTES = 4 };
 
 /* log(level, message) / timer(id, ms) / fetch(id, target, method): see runtime.ts */
@@ -102,44 +102,93 @@ static void set_result_value(JSValueConst v) {
     }
 }
 
-/* "Name: message\nstack" of the pending exception; clears it */
-static void set_result_error(void) {
-    JSValue exc = JS_GetException(ctx);
-    const char *text = NULL;
-    JSValue stack = JS_UNDEFINED;
-    if (JS_IsObject(exc)) {
-        JSValue name = JS_GetPropertyStr(ctx, exc, "name");
-        JSValue message = JS_GetPropertyStr(ctx, exc, "message");
-        stack = JS_GetPropertyStr(ctx, exc, "stack");
+/* "Name: message\nstack" of a thrown value (malloc'd; free() it) */
+static char *describe(JSValueConst v) {
+    char *out;
+    if (JS_IsObject(v)) {
+        JSValue name = JS_GetPropertyStr(ctx, v, "name");
+        JSValue message = JS_GetPropertyStr(ctx, v, "message");
+        JSValue stack = JS_GetPropertyStr(ctx, v, "stack");
         const char *n = JS_IsString(name) ? JS_ToCString(ctx, name) : NULL;
         const char *m = JS_IsString(message) ? JS_ToCString(ctx, message) : NULL;
-        const char *s = JS_IsString(stack) ? JS_ToCString(ctx, stack) : NULL;
-        size_t cap = (n ? strlen(n) : 0) + (m ? strlen(m) : 0) + (s ? strlen(s) : 0) + 8;
-        char *buf = malloc(cap);
-        buf[0] = 0;
-        if (n) strcat(buf, n);
+        const char *st = JS_IsString(stack) ? JS_ToCString(ctx, stack) : NULL;
+        size_t cap = (n ? strlen(n) : 0) + (m ? strlen(m) : 0) + (st ? strlen(st) : 0) + 8;
+        out = malloc(cap);
+        out[0] = 0;
+        if (n) strcat(out, n);
         if (m) {
-            if (n) strcat(buf, ": ");
-            strcat(buf, m);
+            if (n) strcat(out, ": ");
+            strcat(out, m);
         }
-        if (s) {
-            strcat(buf, "\n");
-            strcat(buf, s);
+        if (st) {
+            strcat(out, "\n");
+            strcat(out, st);
         }
-        set_result(RES_ERROR, buf, strlen(buf));
-        free(buf);
         if (n) JS_FreeCString(ctx, n);
         if (m) JS_FreeCString(ctx, m);
-        if (s) JS_FreeCString(ctx, s);
+        if (st) JS_FreeCString(ctx, st);
         JS_FreeValue(ctx, name);
         JS_FreeValue(ctx, message);
         JS_FreeValue(ctx, stack);
     } else {
-        text = JS_ToCString(ctx, exc);
-        set_result(RES_ERROR, text ? text : "", text ? strlen(text) : 0);
-        if (text) JS_FreeCString(ctx, text);
+        const char *t = JS_ToCString(ctx, v);
+        out = strdup(t ? t : "");
+        if (t) JS_FreeCString(ctx, t);
     }
+    return out;
+}
+
+/* the pending exception becomes the result; clears it */
+static void set_result_error(void) {
+    JSValue exc = JS_GetException(ctx);
+    char *text = describe(exc);
+    set_result(RES_ERROR, text, strlen(text));
+    free(text);
     JS_FreeValue(ctx, exc);
+}
+
+/* ---- promises rejected with nobody to handle them ---- */
+
+typedef struct {
+    JSValue promise, reason;
+} Rejected;
+static Rejected *rejected;
+static int rejected_count, rejected_cap;
+
+static void rejection_tracker(JSContext *c, JSValueConst promise, JSValueConst reason, bool is_handled, void *opaque) {
+    (void)c;
+    (void)opaque;
+    if (!is_handled) {
+        if (rejected_count == rejected_cap) {
+            rejected_cap = rejected_cap ? rejected_cap * 2 : 8;
+            rejected = realloc(rejected, sizeof(Rejected) * (size_t)rejected_cap);
+        }
+        rejected[rejected_count].promise = JS_DupValue(ctx, promise);
+        rejected[rejected_count].reason = JS_DupValue(ctx, reason);
+        rejected_count++;
+        return;
+    }
+    for (int i = 0; i < rejected_count; i++) {
+        if (JS_VALUE_GET_PTR(rejected[i].promise) == JS_VALUE_GET_PTR(promise)) {
+            JS_FreeValue(ctx, rejected[i].promise);
+            JS_FreeValue(ctx, rejected[i].reason);
+            rejected[i] = rejected[--rejected_count];
+            return;
+        }
+    }
+}
+
+/* the ones still unhandled once the jobs have run are reported, as a browser reports "unhandledrejection" */
+static void flush_rejections(void) {
+    int n = rejected_count;
+    rejected_count = 0;
+    for (int i = 0; i < n; i++) {
+        char *text = describe(rejected[i].reason);
+        host_call(OP_REJECTION, 0, 0, text, (int)strlen(text), "", 0);
+        free(text);
+        JS_FreeValue(ctx, rejected[i].promise);
+        JS_FreeValue(ctx, rejected[i].reason);
+    }
 }
 
 static int interrupt_handler(JSContext *c, void *opaque) {
@@ -249,6 +298,7 @@ EXPORT("qd_init") int qd_init(size_t memory_limit, size_t stack_limit) {
     JS_SetMemoryLimit(rt, memory_limit);
     JS_SetMaxStackSize(rt, stack_limit);
     JS_SetInterruptHandler(rt, interrupt_handler, NULL);
+    JS_SetHostPromiseRejectionTracker(rt, rejection_tracker, NULL);
     JS_SetModuleLoaderFunc(rt, module_normalize, module_loader, NULL);
     ctx = JS_NewContext(rt);
     if (!ctx) return -1;
@@ -326,6 +376,7 @@ EXPORT("qd_jobs") int qd_jobs(void) {
             JS_FreeValue(c, e);
         }
     }
+    flush_rejections();
     return count;
 }
 

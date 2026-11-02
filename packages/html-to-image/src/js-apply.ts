@@ -3,6 +3,7 @@
  * result replaces the render input. No engine is imported here (jsdom, QuickJS), so the edge entry points can use
  * this without a bundler following an import to jsdom.
  */
+import type { FetchLimits } from "wasm-quickjs-dom";
 import type { HtmlToImageOptions } from "./core.js";
 
 /** Options of the `javascript` render option. */
@@ -19,6 +20,12 @@ export interface JavaScriptOptions {
    * `wasm-html-to-image/javascript`). It is a smaller DOM than jsdom's and an interpreter, so heavy pages are slower.
    */
   engine?: "jsdom" | "quickjs";
+  /**
+   * What the page's scripts may fetch (QuickJS engine): the same names as the render `limits` (`allowedHosts`, ...) plus
+   * `blockPrivateHosts`. The render `limits` of the same call are the defaults, so `limits.allowedHosts` applies to the
+   * scripts' requests too; set this to give the scripts different limits.
+   */
+  limits?: FetchLimits;
 }
 
 /** What the script phase produced. */
@@ -43,7 +50,17 @@ export type ScriptRunner = (
 export async function applyScripted<T extends HtmlToImageOptions>(options: T, run: ScriptRunner): Promise<T> {
   const { javascript, ...rest } = options;
   if (!javascript) return options;
-  const config = javascript === true ? true : javascript;
+  const base = javascript === true ? {} : javascript;
+  const l = options.limits;
+  const fromRender: FetchLimits | undefined = l && {
+    allowedProtocols: l.allowedProtocols,
+    allowedHosts: l.allowedHosts,
+    blockedHosts: l.blockedHosts,
+    maxResourceCount: l.maxResourceCount,
+    maxResourceBytes: l.maxResourceBytes,
+    maxTotalResourceBytes: l.maxTotalResourceBytes,
+  };
+  const config: JavaScriptOptions = fromRender || base.limits ? { ...base, limits: { ...fromRender, ...base.limits } } : base;
   const width = options.width || 800;
   if (options.url) {
     const page = await run({ url: options.url }, config, width);

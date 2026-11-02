@@ -16,7 +16,7 @@ JavaScript (React, Vue, Vite and Next.js builds among them) are the target.
 
 | Parameter | Default | |
 | --------- | ------- | --- |
-| `url` | (required) | The page. Only `http` and `https`; `localhost`, private addresses and hosts without a dot are refused. |
+| `url` | (required) | The page. Only `http` and `https`; `localhost`, private addresses and hosts without a dot are refused. The page's scripts (and the scripts and modules they load) and every redirect are held to the same rule, with caps on the number and size of their requests. |
 | `width` | `1280` | Viewport width, 200–2400. |
 | `height` | auto | Viewport height, 100–8000. |
 | `format` | `png` | `png`, `jpeg` or `webp`. |

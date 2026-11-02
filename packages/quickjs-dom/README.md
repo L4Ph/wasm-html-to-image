@@ -20,7 +20,9 @@ try {
 - The page's clock runs only while `eval()` / `settle()` waits. `timeout` (default 10 s) counts per call.
 - Scripts are run in document order, including the ones scripts add, `type="module"` scripts (their literal `import`s are fetched up front) and `fetch` / `XMLHttpRequest` (binary safe), `history.pushState`, storage, `MutationObserver`, `customElements` and the like. React / Next.js clients hydrate and run their effects.
 - Limits: no layout of its own (`getBoundingClientRect` returns 0 until you call `setLayout()`; `wasm-html-to-image` has `measureLayout()` that fills it from its layout engine), no canvas, a smaller DOM than jsdom's, and QuickJS is an interpreter, so heavy pages are slower.
-- **Use trusted pages only**: the page's scripts can `fetch`.
+- **Untrusted pages need `limits`**: the page's scripts can `fetch`, and so can the scripts and modules it loads. `createDOM(source, { limits })` restricts them (`allowedProtocols`, `allowedHosts`, `blockedHosts`, `blockPrivateHosts`, `maxResourceCount`, `maxResourceBytes`, `maxTotalResourceBytes`; every redirect is checked too).
+- `dom.logs` (and the `onLog` option) hold what happened in the page: console output, script errors, unhandled promise rejections and requests with their status. They tell you why a page rendered empty.
+- `IntersectionObserver` / `ResizeObserver` report once on `observe()` (so lazy content loads), `matchMedia` answers for the viewport width, and `getComputedStyle` returns the element's own style and initial values.
 
 The QuickJS wasm is chosen by the runtime (the `#quickjs-wasm` entry of `imports` in `package.json`): a pre-compiled module on Workers and Vercel / Next.js Edge, read from disk on Node.js and Bun, fetched on Deno and in browsers. Pass `{ quickjsWasm }` to `createDOM` to use a module of your own; `wasm-quickjs-dom/quickjs.wasm` is the file.
 

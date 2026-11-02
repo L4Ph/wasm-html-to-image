@@ -47,10 +47,59 @@
     g.addEventListener = function (t, f, o) { return d.defaultView.addEventListener(t, f, o); };
     g.removeEventListener = function (t, f, o) { return d.defaultView.removeEventListener(t, f, o); };
     g.dispatchEvent = function (e) { return d.defaultView.dispatchEvent(e); };
+    // Media queries against this window: width / height features (px, em, rem), orientation, screen, and a light,
+    // no-motion, hovering, fine-pointer user. Anything it does not know does not match.
+    function mediaMatches(query) {
+      var len = function (v) { var m = /^\s*(-?[0-9.]+)\s*(px|em|rem)?\s*$/.exec(v || ""); return m ? parseFloat(m[1]) * (m[2] && m[2] !== "px" ? 16 : 1) : NaN; };
+      var one = function (part) {
+        part = part.trim();
+        var negate = /^not\s+/i.test(part);
+        if (negate) part = part.replace(/^not\s+/i, "");
+        var ok = part.split(/\s+and\s+/i).every(function (term) {
+          term = term.trim();
+          if (/^(all|screen)$/i.test(term)) return true;
+          if (/^(print|speech)$/i.test(term)) return false;
+          var m = /^\(\s*([a-z-]+)\s*(?::\s*([^)]*?))?\s*\)$/i.exec(term);
+          if (!m) return false;
+          var name = m[1].toLowerCase(), v = m[2], W = g.innerWidth, H = g.innerHeight;
+          if (name === "min-width") return W >= len(v);
+          if (name === "max-width") return W <= len(v);
+          if (name === "width") return W === len(v);
+          if (name === "min-height") return H >= len(v);
+          if (name === "max-height") return H <= len(v);
+          if (name === "height") return H === len(v);
+          if (name === "orientation") return (W >= H ? "landscape" : "portrait") === (v || "").trim();
+          if (name === "prefers-color-scheme") return (v || "").trim() === "light";
+          if (name === "prefers-reduced-motion") return (v || "").trim() === "no-preference";
+          if (name === "hover") return v == null || v.trim() === "hover";
+          if (name === "pointer") return v == null || v.trim() === "fine";
+          return false;
+        });
+        return negate ? !ok : ok;
+      };
+      return String(query).split(",").some(one);
+    }
     g.matchMedia = function (q) {
-      return { matches: false, media: q, onchange: null, addListener: function () {}, removeListener: function () {}, addEventListener: function () {}, removeEventListener: function () {}, dispatchEvent: function () { return false; } };
+      return { matches: mediaMatches(q), media: String(q), onchange: null, addListener: function () {}, removeListener: function () {}, addEventListener: function () {}, removeEventListener: function () {}, dispatchEvent: function () { return false; } };
     };
-    g.getComputedStyle = g.getComputedStyle || function (el) { return el.style || {}; };
+    // The cascade is not computed: the element's own style, with the initial values a script usually asks about.
+    var initial = { display: "block", visibility: "visible", opacity: "1", position: "static", overflow: "visible", "pointer-events": "auto", "z-index": "auto" };
+    g.getComputedStyle = g.getComputedStyle || function (el) {
+      var st = el.style || {};
+      var get = function (name) {
+        var v = typeof st.getPropertyValue === "function" ? st.getPropertyValue(name) : st[name];
+        return v || initial[name] || "";
+      };
+      return new Proxy(st, {
+        get: function (t, k) {
+          if (k === "getPropertyValue") return get;
+          if (typeof k !== "string") return t[k];
+          var v = t[k];
+          if (typeof v === "function") return v.bind(t);
+          return v || initial[k.replace(/[A-Z]/g, function (c) { return "-" + c.toLowerCase(); })] || (v === undefined ? undefined : "");
+        },
+      });
+    };
     function storage() {
       var m = new Map();
       return {
@@ -75,9 +124,36 @@
     var state = "loading";
     Object.defineProperty(d, "readyState", { configurable: true, get: function () { return state; } });
     g.__edgeSetReady = function (s) { state = s; };
-    ["ResizeObserver", "IntersectionObserver", "MutationObserver"].forEach(function (n) {
-      if (!g[n]) g[n] = w[n] || class { observe() {} unobserve() {} disconnect() {} takeRecords() { return []; } };
-    });
+    if (!g.MutationObserver) g.MutationObserver = w.MutationObserver || class { observe() {} disconnect() {} takeRecords() { return []; } };
+    // There is no scrolling and the page is meant to be seen whole, so everything is "intersecting" and lazy content
+    // (infinite lists, images that load on view) gets its turn; like a browser, each observer reports once on observe().
+    function observer(Name, entryOf) {
+      var O = function (cb, opts) { this._cb = cb; this._seen = new Set(); this.root = (opts && opts.root) || null; this.rootMargin = (opts && opts.rootMargin) || "0px"; this.thresholds = [0]; };
+      O.prototype.observe = function (el) {
+        var self = this;
+        if (this._seen.has(el)) return;
+        this._seen.add(el);
+        g.setTimeout(function () { if (self._seen.has(el)) self._cb.call(self, [entryOf(el)], self); }, 0);
+      };
+      O.prototype.unobserve = function (el) { this._seen.delete(el); };
+      O.prototype.disconnect = function () { this._seen.clear(); };
+      O.prototype.takeRecords = function () { return []; };
+      Object.defineProperty(O, "name", { value: Name });
+      return O;
+    }
+    var box = function (r) { return [{ inlineSize: r.width, blockSize: r.height }]; };
+    if (!g.IntersectionObserver) {
+      g.IntersectionObserver = observer("IntersectionObserver", function (el) {
+        var r = el.getBoundingClientRect();
+        return { target: el, isIntersecting: true, intersectionRatio: 1, boundingClientRect: r, intersectionRect: r, rootBounds: null, time: g.performance.now() };
+      });
+    }
+    if (!g.ResizeObserver) {
+      g.ResizeObserver = observer("ResizeObserver", function (el) {
+        var r = el.getBoundingClientRect();
+        return { target: el, contentRect: r, borderBoxSize: box(r), contentBoxSize: box(r), devicePixelContentBoxSize: box(r) };
+      });
+    }
     if (!d.getElementsByName) d.getElementsByName = function (n) { return d.querySelectorAll('[name="' + n + '"]'); };
 
     // URL-valued properties read back absolute, as in a browser (framework code does `new URL(script.src)`)
@@ -121,7 +197,7 @@
       s.dispatchEvent(e);
       var h = ok ? s.onload : s.onerror;
       if (typeof h === "function") h.call(s, e);
-    } catch (x) { __host.log("error", "load handler: " + ((x && x.stack) || x)); }
+    } catch (x) { __host.log("error", "load handler: " + (x && x.message ? x.name + ": " + x.message + " " + (x.stack || "") : String(x))); }
   };
   g.__edgeDocumentEvents = function () {
     g.__edgeSetReady("interactive");

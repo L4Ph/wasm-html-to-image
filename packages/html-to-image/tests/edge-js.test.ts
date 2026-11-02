@@ -62,3 +62,23 @@ describe("measureLayout: real boxes for the page's getBoundingClientRect", () =>
     }
   }, 60_000);
 });
+
+describe("the render `limits` also bound what the page's scripts fetch (QuickJS engine)", () => {
+  it("applyJavaScript passes allowedHosts / blockPrivateHosts on, and javascript.limits wins", async () => {
+    const { createServer } = await import("node:http");
+    const server = createServer((_req, res) => res.end("hello"));
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
+    const html = `<!doctype html><body><p id="p"></p><script>fetch(${JSON.stringify(url)}).then((r) => r.text(), (e) => "blocked").then((t) => { document.getElementById("p").textContent = t; });</script></body>`;
+    try {
+      const run = async (options: Record<string, unknown>) => String((await applyJavaScript({ value: html, ...options } as never)).value);
+      expect(await run({ javascript: { settleMs: 200 } })).toContain(">hello<");
+      expect(await run({ javascript: { settleMs: 200 }, limits: { allowedHosts: ["example.com"] } })).toContain(">blocked<");
+      expect(await run({ javascript: { settleMs: 200, limits: { blockPrivateHosts: true } } })).toContain(">blocked<");
+      // the scripts' own limits replace the render ones where both say something
+      expect(await run({ javascript: { settleMs: 200, limits: { allowedHosts: ["127.0.0.1"] } }, limits: { allowedHosts: ["example.com"] } })).toContain(">hello<");
+    } finally {
+      server.close();
+    }
+  });
+});

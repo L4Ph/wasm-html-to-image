@@ -118,7 +118,8 @@ const { data } = await render(options);
 - QuickJS の wasm は、実行環境に合わせてパッケージが選びます（`package.json` の `imports` の `#quickjs-wasm`）。Workers と Vercel / Next.js の Edge ではコンパイル済みのモジュールを取り込み、Node.js と Bun ではファイルを読み、Deno とブラウザでは `fetch` します。自前のモジュールを使うなら `applyJavaScript(options, { quickjsWasm })` で渡せます。Node.js の `single` 入口では、`javascript: { engine: "quickjs" }` でも選べます。
 - エンジン本体は別パッケージの [`wasm-quickjs-dom`](https://www.npmjs.com/package/wasm-quickjs-dom)（画像とは無関係の小さな JSDOM）で、`wasm-html-to-image` の依存として入ります。`createDOM` はそのまま `wasm-quickjs-dom` からも使えます。
 - 制限: レイアウトはなく（`getBoundingClientRect` は 0）、`canvas` は使えません。`type="module"` のスクリプトは実行しますが、`import` は先に取得できる（リテラルの指定子の）ものだけです。DOM は linkedom で jsdom より小さく、QuickJS はインタプリタなので、重いページは遅くなります。
-- jsdom と同じく、信頼できるページだけに使ってください（スクリプトは `fetch` できます）。
+- jsdom と同じく、信頼できるページだけに使ってください（スクリプトは `fetch` できます）。信頼できないページには、下の「取得の制限」を必ず付けてください。
+- `IntersectionObserver` と `ResizeObserver` は、`observe()` したときに 1 回だけ通知します（スクロールのないページ全体を見る前提なので、すべて「交差している」扱いです。遅延読み込みの中身が出てきます）。`matchMedia` は表示幅（`width`）で答えます（`min-width` / `max-width` / `orientation` など、ライトモードで動きを減らさない設定のユーザーとして答えます）。`getComputedStyle` は、要素自身の `style` と初期値を返すだけで、カスケードは計算しません。
 
 #### DOM を開いたまま使う（`createDOM`）
 
@@ -142,6 +143,32 @@ try {
 - `settle(ms?)`: ページのタイマーと `fetch` を進めます。ページの時計は `eval()` / `settle()` の間だけ進み、呼び出しの間は止まっています。
 - `serialize()` は現在の HTML、`toOptions(options)` は `render()` にそのまま渡せるオプションを返します。
 - `createDOM` の第 2 引数は `javascript` オプション（`timeout` / `settleMs` / `waitFor`）に `width` と `quickjsWasm` を足したものです。`timeout` は 1 回の呼び出しごとに数えます。
+
+**取得の制限（`limits`）**: 信頼できないページを扱うときは、ページのスクリプトが取得できる先を絞ります。ページ自身の `fetch` / `XMLHttpRequest`、読み込む `<script>` とモジュール、`url` で渡したページ本体のすべてが対象です。
+
+```ts
+const dom = await createDOM({ url }, {
+  limits: {
+    allowedProtocols: ["https:"],
+    allowedHosts: ["example.com", "cdn.example.com"], // 完全一致
+    blockPrivateHosts: true,     // localhost とプライベート / ループバック / リンクローカルのアドレスを拒否
+    maxResourceCount: 50,
+    maxResourceBytes: 5_000_000,
+    maxTotalResourceBytes: 20_000_000,
+  },
+});
+```
+
+- 名前は `render()` の `limits` と同じです。`applyJavaScript()` では、同じ呼び出しの `limits` が既定値になり、`javascript: { limits }` で上書きできます。
+- ホストやプロトコルを制限すると、リダイレクトは 1 つずつ自動では辿らず、辿る前に毎回検査します。リダイレクト先を隠すランタイム（ブラウザの `opaqueredirect`）では、検査できないので拒否します。
+- `blockPrivateHosts` が見るのは、ホスト名と IP リテラルだけです。DNS で内部アドレスに解決されるホスト名は、ここでは見分けられません。ターゲットを信頼できないときは `allowedHosts` と併用してください。
+
+**ページで起きたこと（`logs`）**: `dom.logs` に、`console` の出力、スクリプトのエラー、処理されなかった Promise の拒否（`unhandledrejection`）、ページのリクエスト（ステータスまたは失敗の理由つき）が残ります（直近 1000 件）。`onLog` オプションで、起きた時点で受け取ることもできます。「なぜ空のまま描画されたのか」の調査に使います。
+
+```ts
+const dom = await createDOM({ url }, { onLog: (e) => e.type === "error" && console.error(e.source, e.message) });
+console.log(dom.logs.filter((e) => e.type === "request" && (e.error || (e.status ?? 0) >= 400)));
+```
 
 **レイアウトを渡す（`measureLayout`）**: QuickJS の中にはレイアウトがないので、`getBoundingClientRect()` は 0 を返します。`measureLayout()` は画像エンジンでページをレイアウトし（描画やエンコードはしません）、その値をページに渡します。以後 `getBoundingClientRect()`、`getClientRects()`、`offsetWidth` / `offsetHeight` / `offsetLeft` / `offsetTop`、`clientWidth` / `clientHeight`、`scrollWidth` / `scrollHeight` が実測値を返します。
 

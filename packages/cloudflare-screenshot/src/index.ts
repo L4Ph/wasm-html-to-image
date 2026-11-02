@@ -81,10 +81,8 @@ export default {
       return json(405, "Use GET");
     if (url.pathname !== "/") return json(404, "Not found");
 
-    const target = checkTarget(
-      url.searchParams.get("url"),
-      env.ALLOW_PRIVATE_HOSTS === "1",
-    );
+    const allowPrivate = env.ALLOW_PRIVATE_HOSTS === "1";
+    const target = checkTarget(url.searchParams.get("url"), allowPrivate);
     if (typeof target === "string") return json(400, target);
 
     const q = url.searchParams;
@@ -118,7 +116,20 @@ export default {
       if (script) {
         options = await applyJavaScript({
           ...options,
-          javascript: { settleMs, timeout, waitFor },
+          // the page's scripts, and what they load, get no further than the page itself may: checkTarget only
+          // saw the first URL, a redirect or a script could still point inside
+          javascript: {
+            settleMs,
+            timeout,
+            waitFor,
+            limits: {
+              allowedProtocols: ["http:", "https:"],
+              blockPrivateHosts: !allowPrivate,
+              maxResourceCount: 100,
+              maxResourceBytes: 5_000_000,
+              maxTotalResourceBytes: 25_000_000,
+            },
+          },
         });
       }
       const { data } = await render(options);

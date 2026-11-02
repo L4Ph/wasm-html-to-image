@@ -70,7 +70,7 @@
     var t = timers.get(id);
     if (!t) return;
     if (t.rep) __host.timer(id, t.rep); else timers.delete(id);
-    try { t.fn.apply(null, t.args); } catch (e) { __host.log("error", "timer: " + ((e && e.stack) || e)); }
+    try { t.fn.apply(null, t.args); } catch (e) { __host.log("error", "timer: " + (e && e.message ? e.name + ": " + e.message + " " + (e.stack || "") : String(e))); }
   };
 
   // text

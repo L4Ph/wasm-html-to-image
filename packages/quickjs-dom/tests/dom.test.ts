@@ -51,7 +51,7 @@ describe("javascript option, QuickJS engine", () => {
       { settleMs: 0 },
     );
     expect(out.html).not.toContain("no js");
-    expect(out.html).toContain(">function,function,http://h.test/a?b=1,aGk=,hi,true,false<");
+    expect(out.html).toContain(">function,function,http://h.test/a?b=1,aGk=,hi,true,true<"); // the last: matchMedia("(min-width: 1px)")
   });
 
   it("stops a script that never ends at the timeout", async () => {
@@ -432,5 +432,204 @@ describe("createDOM: a page kept open", () => {
     dom.close(); // harmless twice
     await expect(dom.eval("1")).rejects.toThrow("closed");
     expect(() => dom.serialize()).toThrow("closed");
+  });
+});
+
+describe("createDOM: limits on what the page may fetch", () => {
+  let server: Server;
+  let origin: string;
+  let port = 0;
+  beforeAll(async () => {
+    server = createServer((req, res) => {
+      if (req.url === "/redirect") {
+        res.statusCode = 302;
+        res.setHeader("location", `http://localhost:${port}/data`);
+        res.end();
+      } else if (req.url === "/big") {
+        res.end("x".repeat(5000));
+      } else if (req.url === "/script.js") {
+        res.setHeader("content-type", "text/javascript");
+        res.end('document.body.setAttribute("data-script", "ran");');
+      } else {
+        res.end("small");
+      }
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    port = (server.address() as { port: number }).port;
+    origin = `http://127.0.0.1:${port}`;
+  });
+  afterAll(() => {
+    server.close();
+  });
+
+  const tryFetch = (dom: Awaited<ReturnType<typeof createDOM>>, url: string) =>
+    dom.eval(`fetch(${JSON.stringify(url)}).then((r) => r.text()).then((t) => "ok:" + t.length, (e) => "blocked:" + String(e))`);
+
+  it("is unlimited by default, and blockPrivateHosts refuses loopback and private addresses", async () => {
+    const open = await createDOM({ html: "<p>x</p>" }, { settleMs: 0 });
+    const shut = await createDOM({ html: "<p>x</p>" }, { settleMs: 0, limits: { blockPrivateHosts: true } });
+    try {
+      expect(await tryFetch(open, `${origin}/data`)).toBe("ok:5");
+      expect(String(await tryFetch(shut, `${origin}/data`))).toMatch(/^blocked:.*private host/);
+      expect(String(await tryFetch(shut, "http://[::1]:1/"))).toMatch(/^blocked:.*private host/);
+      expect(String(await tryFetch(shut, "http://169.254.169.254/latest/meta-data/"))).toMatch(/^blocked:.*private host/);
+    } finally {
+      open.close();
+      shut.close();
+    }
+  });
+
+  it("allowedHosts / allowedProtocols / blockedHosts, and the scripts it loads obey them too", async () => {
+    const dom = await createDOM({ html: "<p>x</p>" }, { settleMs: 0, limits: { allowedHosts: ["127.0.0.1"], allowedProtocols: ["http:"] } });
+    try {
+      expect(await tryFetch(dom, `${origin}/data`)).toBe("ok:5");
+      expect(String(await tryFetch(dom, `http://localhost:${port}/data`))).toMatch(/^blocked:.*host not allowed/);
+      expect(String(await tryFetch(dom, "https://127.0.0.1:1/"))).toMatch(/^blocked:.*protocol/);
+    } finally {
+      dom.close();
+    }
+    const html = (host: string) =>
+      `<!doctype html><body><script>var s = document.createElement("script"); s.src = "http://${host}:${port}/script.js"; s.onerror = function () { document.body.setAttribute("data-err", "1"); }; document.head.appendChild(s);</script></body>`;
+    const allowed = await runPageScriptsQuickJS({ html: html("127.0.0.1") }, { settleMs: 50, limits: { blockedHosts: ["localhost"] } });
+    expect(allowed.html).toContain('data-script="ran"');
+    const blocked = await runPageScriptsQuickJS({ html: html("localhost") }, { settleMs: 50, limits: { blockedHosts: ["localhost"] } });
+    expect(blocked.html).not.toContain("data-script");
+    expect(blocked.html).toContain('data-err="1"');
+  });
+
+  it("checks every redirect, not just the first URL", async () => {
+    const dom = await createDOM({ html: "<p>x</p>" }, { settleMs: 0, limits: { allowedHosts: ["127.0.0.1"] } });
+    try {
+      expect(String(await tryFetch(dom, `${origin}/redirect`))).toMatch(/^blocked:.*host not allowed/);
+    } finally {
+      dom.close();
+    }
+    const free = await createDOM({ html: "<p>x</p>" }, { settleMs: 0, limits: { allowedHosts: ["127.0.0.1", "localhost"] } });
+    try {
+      expect(await tryFetch(free, `${origin}/redirect`)).toBe("ok:5"); // both hosts allowed: the redirect is followed
+    } finally {
+      free.close();
+    }
+  });
+
+  it("refuses the page's own url, oversized responses and too many requests", async () => {
+    await expect(createDOM({ url: `${origin}/` }, { settleMs: 0, limits: { blockPrivateHosts: true } })).rejects.toThrow("Blocked by the fetch limits");
+    const dom = await createDOM({ html: "<p>x</p>" }, { settleMs: 0, limits: { maxResourceBytes: 1000, maxTotalResourceBytes: 1500, maxResourceCount: 3 } });
+    try {
+      expect(String(await tryFetch(dom, `${origin}/big`))).toMatch(/^blocked:.*over 1000 bytes/);
+      expect(await tryFetch(dom, `${origin}/data`)).toBe("ok:5");
+      expect(String(await tryFetch(dom, `${origin}/data`))).toBe("ok:5");
+      expect(String(await tryFetch(dom, `${origin}/data`))).toMatch(/^blocked:.*more than 3 requests/);
+    } finally {
+      dom.close();
+    }
+  });
+
+  it("isPrivateHost", async () => {
+    const { isPrivateHost } = await import("../src/limits.js");
+    for (const h of ["localhost", "a.localhost", "printer.local", "127.0.0.1", "10.1.2.3", "172.16.0.1", "172.31.255.255", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "::1", "[::1]", "fd00::1", "fe80::1", "::ffff:7f00:1"]) {
+      expect(isPrivateHost(h), h).toBe(true);
+    }
+    for (const h of ["example.com", "8.8.8.8", "172.32.0.1", "172.15.0.1", "192.169.0.1", "2606:4700::1111"]) {
+      expect(isPrivateHost(h), h).toBe(false);
+    }
+  });
+});
+
+describe("createDOM: logs of what happened in the page", () => {
+  it("records console output, script errors, unhandled rejections and requests; onLog sees them as they happen", async () => {
+    const seen: string[] = [];
+    const html =
+      '<!doctype html><body><script>console.log("hello", 1); console.warn("careful");</script>' +
+      '<script>throw new Error("script boom");</script>' +
+      '<script>Promise.reject(new Error("nobody catches this"));</script>' +
+      '<script>Promise.reject(new Error("caught later")).catch(function () {});</script>' +
+      '<script>setTimeout(function () { throw new Error("timer boom"); }, 5);</script></body>';
+    const dom = await createDOM({ html }, { settleMs: 50, onLog: (e) => seen.push(e.type) });
+    try {
+      const logs = dom.logs;
+      expect(logs).toContainEqual({ type: "console", level: "log", message: "hello 1" });
+      expect(logs).toContainEqual({ type: "console", level: "warn", message: "careful" });
+      const error = logs.find((e) => e.type === "error");
+      expect(error && error.type === "error" && error.message).toContain("script boom");
+      expect(error && error.type === "error" && error.source).toBe("inline");
+      const rejections = logs.filter((e) => e.type === "rejection");
+      expect(rejections).toHaveLength(1); // the handled one is not reported
+      expect(JSON.stringify(rejections)).toContain("nobody catches this");
+      expect(JSON.stringify(logs)).toContain("timer boom");
+      expect(seen).toEqual(logs.map((e) => e.type));
+    } finally {
+      dom.close();
+    }
+  });
+
+  it("logs requests with their status or the reason they failed", async () => {
+    const server = createServer((req, res) => {
+      res.statusCode = req.url === "/missing" ? 404 : 200;
+      res.end("x");
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const origin = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    const dom = await createDOM({ html: "<p>x</p>" }, { settleMs: 0, limits: { allowedHosts: ["127.0.0.1"] } });
+    try {
+      await dom.eval(`Promise.all([fetch("${origin}/ok"), fetch("${origin}/missing"), fetch("http://example.invalid/").catch(() => 0)])`);
+      const requests = dom.logs.filter((e) => e.type === "request");
+      expect(requests).toContainEqual({ type: "request", method: "GET", url: `${origin}/ok`, status: 200 });
+      expect(requests).toContainEqual({ type: "request", method: "GET", url: `${origin}/missing`, status: 404 });
+      expect(JSON.stringify(requests)).toContain("host not allowed");
+    } finally {
+      dom.close();
+      server.close();
+    }
+  });
+});
+
+describe("createDOM: observers, media queries and computed style", () => {
+  it("IntersectionObserver and ResizeObserver report once on observe(), so lazy content loads", async () => {
+    const html =
+      '<!doctype html><body><div id="a"></div><script>' +
+      'new IntersectionObserver(function (entries, o) { document.body.setAttribute("data-io", entries[0].isIntersecting + "," + entries[0].target.id + "," + (o instanceof IntersectionObserver)); }).observe(document.getElementById("a"));' +
+      'new ResizeObserver(function (entries) { document.body.setAttribute("data-ro", String(entries[0].contentRect.width)); }).observe(document.getElementById("a"));' +
+      'var gone = new IntersectionObserver(function () { document.body.setAttribute("data-gone", "fired"); }); gone.observe(document.getElementById("a")); gone.disconnect();' +
+      "</script></body>";
+    const out = await runPageScriptsQuickJS({ html }, { settleMs: 30 });
+    expect(out.html).toContain('data-io="true,a,true"');
+    expect(out.html).toContain('data-ro="0"'); // no layout was given: 0, as getBoundingClientRect says
+    expect(out.html).not.toContain('data-gone="fired"'); // disconnect() before it fired
+  });
+
+  it("matchMedia answers for the viewport width", async () => {
+    const dom = await createDOM({ html: "<p>x</p>" }, { settleMs: 0, width: 600 });
+    try {
+      const matches = (q: string) => dom.eval(`matchMedia(${JSON.stringify(q)}).matches`);
+      expect(await matches("(min-width: 500px)")).toBe(true);
+      expect(await matches("(min-width: 700px)")).toBe(false);
+      expect(await matches("(max-width: 600px)")).toBe(true);
+      expect(await matches("(min-width: 40em)")).toBe(false); // 640px
+      expect(await matches("screen and (min-width: 300px) and (max-width: 900px)")).toBe(true);
+      expect(await matches("(min-width: 900px), (max-width: 700px)")).toBe(true);
+      expect(await matches("(orientation: landscape)")).toBe(true);
+      expect(await matches("(prefers-color-scheme: light)")).toBe(true);
+      expect(await matches("(prefers-color-scheme: dark)")).toBe(false);
+      expect(await matches("(prefers-reduced-motion: reduce)")).toBe(false);
+      expect(await matches("print")).toBe(false);
+      expect(await matches("not print")).toBe(true);
+      expect(await matches("(something-unknown: 1)")).toBe(false);
+    } finally {
+      dom.close();
+    }
+  });
+
+  it("getComputedStyle gives the element's own style and the initial values scripts ask about", async () => {
+    const dom = await createDOM({ html: '<div id="a" style="color: red; display: flex"></div><div id="b"></div>' }, { settleMs: 0 });
+    try {
+      expect(await dom.eval("getComputedStyle(document.getElementById('a')).color")).toBe("red");
+      expect(await dom.eval("getComputedStyle(document.getElementById('a')).display")).toBe("flex");
+      expect(await dom.eval("getComputedStyle(document.getElementById('b')).display")).toBe("block");
+      expect(await dom.eval("getComputedStyle(document.getElementById('b')).getPropertyValue('visibility')")).toBe("visible");
+      expect(await dom.eval("getComputedStyle(document.getElementById('b')).opacity")).toBe("1");
+    } finally {
+      dom.close();
+    }
   });
 });

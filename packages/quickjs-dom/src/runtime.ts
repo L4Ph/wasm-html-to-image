@@ -10,6 +10,8 @@
 export interface QuickJSHost {
   log(level: string, message: string): void;
   timer(id: number, ms: number): void;
+  /** A promise was rejected and nothing handled it. */
+  rejection(message: string): void;
   /** The page called `__host.fetch(target, method)`; answer later with {@link QuickJSInstance.settle}. */
   fetch(id: number, target: string, method: string): void;
   /**
@@ -66,6 +68,7 @@ export class QuickJSInstance {
           if (op === 0) host.log(text(a, alen), text(b, blen));
           else if (op === 1) host.timer(n1, n2);
           else if (op === 2) host.fetch(n1, text(a, alen), text(b, blen));
+          else if (op === 3) host.rejection(text(a, alen));
         },
         module(kind: number, a: number, alen: number, b: number, blen: number): number {
           const out = host.module(kind as 0 | 1, text(a, alen), text(b, blen));

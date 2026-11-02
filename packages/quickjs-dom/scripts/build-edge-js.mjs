@@ -43,7 +43,7 @@ mkdirSync(join(root, "dist"), { recursive: true });
 // it is made here, with that wasm (build-quickjs.mjs runs first, tsc has made dist/runtime.js).
 const { QuickJSInstance } = await import(pathToFileURL(join(root, "dist", "runtime.js")).href);
 const wasm = new WebAssembly.Module(readFileSync(join(root, "dist", "quickjs.wasm")));
-const host = { log() {}, timer() {}, fetch() {}, module: () => undefined };
+const host = { log() {}, timer() {}, rejection() {}, fetch() {}, module: () => undefined };
 const bytes = QuickJSInstance.create(wasm, host, 256 * 1024 * 1024, 192 * 1024).compile(source, "edge-js-guest.js");
 const check = QuickJSInstance.create(wasm, host, 256 * 1024 * 1024, 192 * 1024).evalBytecode(bytes);
 if (check.type === "error") throw new Error("build-edge-js: the bytecode does not run: " + check.value);

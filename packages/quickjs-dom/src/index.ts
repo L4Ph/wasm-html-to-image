@@ -22,7 +22,21 @@
 // @ts-expect-error — dist/edge-js-payload.js is generated at build time
 import { guestBytecode } from "../dist/edge-js-payload.js";
 import defaultQuickJSWasm from "#quickjs-wasm";
+import { createGuard, type FetchLimits } from "./limits.js";
 import { QuickJSInstance } from "./runtime.js";
+
+export { isPrivateHost, type FetchLimits } from "./limits.js";
+
+/** Something that happened in the page, for finding out why it rendered the way it did. */
+export type PageLogEntry =
+  /** `console.log` / `warn` / `error` (and the page's timer callbacks that threw). */
+  | { type: "console"; level: "log" | "warn" | "error"; message: string }
+  /** A script (inline, external, module, or code run by `eval()`'s page-side hooks) threw. `source` is its URL or `inline`. */
+  | { type: "error"; message: string; source: string }
+  /** A promise was rejected and nothing handled it (the browser's `unhandledrejection`). */
+  | { type: "rejection"; message: string }
+  /** A request the page made (`fetch`, `XMLHttpRequest`, scripts, modules, the page itself), with its outcome. */
+  | { type: "request"; method: string; url: string; status?: number; error?: string };
 
 /** Options of the script phase. */
 export interface JavaScriptOptions {
@@ -63,6 +77,7 @@ const DEFAULT_TIMEOUT = 10000;
 const DEFAULT_SETTLE_MS = 1000;
 const MEMORY_LIMIT = 256 * 1024 * 1024;
 const MAX_MODULES = 300;
+const MAX_LOGS = 1000;
 
 // a fetched body crosses into the page as base64, so binary data survives
 function toBase64(bytes: Uint8Array): string {
@@ -88,6 +103,13 @@ async function loadModule(wasm: WebAssembly.Module | undefined): Promise<WebAsse
 
 /** Options of {@link createDOM}: the script phase's, the viewport width and the QuickJS module. */
 export interface CreateDOMOptions extends JavaScriptOptions, EdgeJavaScriptEngine {
+  /**
+   * What the page may fetch: its own `fetch` / `XMLHttpRequest`, the scripts and modules it loads, and `source.url`
+   * itself. Unlimited by default, so set it for pages you do not control (see {@link FetchLimits}).
+   */
+  limits?: FetchLimits;
+  /** Called for every {@link PageLogEntry} as it happens; they are also kept in {@link QuickJSDOM.logs}. */
+  onLog?: (entry: PageLogEntry) => void;
   /** `window.innerWidth` of the page (default 800). */
   width?: number;
 }
@@ -102,6 +124,8 @@ export interface CreateDOMOptions extends JavaScriptOptions, EdgeJavaScriptEngin
 export interface QuickJSDOM {
   /** The document's URL (after redirects when it was fetched). */
   readonly baseUrl: string;
+  /** What happened in the page so far: console output, script errors, unhandled rejections and requests (the last 1000). */
+  readonly logs: readonly PageLogEntry[];
   /**
    * Run code in the page (global scope, like `window.eval`) and return its value as JSON. A promise is awaited, so
    * `fetch(...).then((r) => r.text())` works. A DOM node cannot be returned: return what you read from it
@@ -160,18 +184,41 @@ export async function createDOM(
     deadline = started + timeout;
     vmDeadline?.(deadline);
   };
+  const guard = createGuard(opts.limits);
+  const logs: PageLogEntry[] = [];
+  const log = (entry: PageLogEntry) => {
+    logs.push(entry);
+    if (logs.length > MAX_LOGS) logs.shift();
+    try {
+      opts.onLog?.(entry);
+    } catch {
+      // a listener's failure is not the page's
+    }
+  };
+  const loggedFetch = async (input: string | URL, init: RequestInit = {}): Promise<Response> => {
+    const entry = { type: "request" as const, method: init.method ?? "GET", url: String(input) };
+    try {
+      const res = await guard.fetch(input, init);
+      log({ ...entry, status: res.status });
+      return res;
+    } catch (error) {
+      log({ ...entry, error: String(error) });
+      throw error;
+    }
+  };
+  const text = async (res: Response) => new TextDecoder().decode(await guard.bytes(res));
   const remaining = () => Math.max(0, timeout - (Date.now() - started));
 
   let html = source.html ?? "";
   let baseUrl = source.baseUrl || "about:blank";
   if (source.url) {
     const res = await Promise.race([
-      fetch(source.url),
+      loggedFetch(source.url),
       sleep(timeout).then(() => {
         throw new Error(`Timed out loading ${source.url} for the \`javascript\` option (${timeout} ms).`);
       }),
     ]);
-    html = await res.text();
+    html = await text(res);
     baseUrl = res.url || source.url;
   }
 
@@ -200,6 +247,11 @@ export async function createDOM(
     {
       log(level, message) {
         if (debug) console.error("[page " + level + "]", message);
+        log({ type: "console", level: level === "warn" || level === "error" ? level : "log", message });
+      },
+      rejection(message) {
+        if (debug) console.error("[page unhandled rejection]", message);
+        log({ type: "rejection", message });
       },
       timer(id, ms) {
         timers.push({ id, at: Date.now() + ms });
@@ -210,8 +262,8 @@ export async function createDOM(
           vm.settle(id, ok, text);
           pump();
         };
-        const task: Promise<void> = fetch(new URL(target, baseUrl), { method })
-          .then(async (r) => ({ status: r.status, url: r.url, headers: Object.fromEntries(r.headers), body: toBase64(new Uint8Array(await r.arrayBuffer())) }))
+        const task: Promise<void> = loggedFetch(new URL(target, baseUrl), { method })
+          .then(async (r) => ({ status: r.status, url: r.url, headers: Object.fromEntries(r.headers), body: toBase64(await guard.bytes(r)) }))
           .then(
             (o) => settle(true, JSON.stringify(o)),
             (e) => settle(false, String(e)),
@@ -240,6 +292,7 @@ export async function createDOM(
   const run = (code: string, name: string, module = false): boolean => {
     if (closed) return false;
     const result = vm.eval(code, name, module);
+    if (result.type === "error") log({ type: "error", message: result.value, source: name });
     pump();
     return result.type !== "error";
   };
@@ -274,9 +327,9 @@ export async function createDOM(
       await Promise.all(
         pending.map(async (target) => {
           try {
-            const res = await fetch(target, { signal: AbortSignal.timeout(Math.max(1, remaining())) });
+            const res = await loggedFetch(target, { signal: AbortSignal.timeout(Math.max(1, remaining())) });
             if (!res.ok) return;
-            await prefetchModules(await res.text(), target);
+            await prefetchModules(await text(res), target);
           } catch {
             // left as the load error set above
           }
@@ -302,7 +355,7 @@ export async function createDOM(
           if (s.src) {
             name = new URL(s.src, baseUrl).href;
             try {
-              code = await (await fetch(name, { signal: AbortSignal.timeout(Math.max(1, remaining())) })).text();
+              code = await text(await loggedFetch(name, { signal: AbortSignal.timeout(Math.max(1, remaining())) }));
             } catch {
               call(`__edgeScriptEvent(${s.idx}, false)`);
               continue;
@@ -384,6 +437,7 @@ export async function createDOM(
 
     return {
       baseUrl,
+      logs,
       eval(code: string) {
         const next = queue.then(() => evaluate(code));
         queue = next.catch(() => undefined);
