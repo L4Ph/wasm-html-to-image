@@ -200,3 +200,23 @@ describe("gantt vertical markers", () => {
     expect((data.match(/class="task"/g) ?? []).length).toBe(1);
   });
 });
+
+describe("renderMermaid: click links", () => {
+  it("wraps a flowchart node in an <a> for click href, with tooltip and target, and ignores scripts", async () => {
+    const src = [
+      "flowchart LR",
+      "  A[Docs] --> B[Home] --> C[Bad]",
+      '  click A "https://example.com/docs?a=1&b=2" "Open the docs" _blank',
+      '  click B href "/home"',
+      '  click C "javascript:alert(1)"',
+      "  click B call doNothing()",
+    ].join("\n");
+    const { data } = await renderMermaid(src);
+    expect(data).toContain('<a href="https://example.com/docs?a=1&amp;b=2" target="_blank" title="Open the docs">');
+    expect(data).toContain('<a href="/home">');
+    expect(data).not.toContain("javascript:");
+    expect((data.match(/<a /g) ?? []).length).toBe(2);
+    expect((data.match(/<\/a>/g) ?? []).length).toBe(2);
+    expect(data).toContain("Docs"); // the node text is still drawn
+  });
+});

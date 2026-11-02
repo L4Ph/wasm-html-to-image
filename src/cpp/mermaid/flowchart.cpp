@@ -31,6 +31,7 @@ struct Node {
     bool parked = false;   // an empty subgraph: kept out of the layout and set beside the drawing or beside its parent's frame, its edges drawn straight
     double w = 0, h = 0;
     std::vector<std::string> lines;
+    std::string href, tooltip, target;  // from `click`: the node is drawn inside a link
 };
 
 enum class Kind { Solid, Dotted, Thick, Invisible };
@@ -353,6 +354,40 @@ struct Parser {
         return i >= s.size();
     }
 
+    /// `click ID "url" ["tooltip"] [target]` or `click ID href "url" ...`; `call` / callback forms need script and are skipped.
+    void take_click(const std::string& rest) {
+        std::vector<std::pair<std::string, bool>> tok;  // text, was quoted
+        for (size_t i = 0; i < rest.size();) {
+            if (rest[i] == ' ' || rest[i] == '\t') {
+                i++;
+            } else if (rest[i] == '"') {
+                size_t e = rest.find('"', i + 1);
+                if (e == std::string::npos) e = rest.size();
+                tok.push_back({rest.substr(i + 1, e - i - 1), true});
+                i = e + 1;
+            } else {
+                size_t e = rest.find_first_of(" \t", i);
+                if (e == std::string::npos) e = rest.size();
+                tok.push_back({rest.substr(i, e - i), false});
+                i = e;
+            }
+        }
+        if (tok.size() < 2) return;
+        auto it = g.index.find(tok[0].first);
+        if (it == g.index.end()) return;
+        size_t k = 1;
+        if (!tok[k].second && tok[k].first == "href") k++;
+        if (k >= tok.size() || !tok[k].second) return;
+        std::string url = tok[k++].first, low;
+        for (char ch : url) low += (char)std::tolower((unsigned char)ch);
+        if (url.empty() || low.compare(0, 11, "javascript:") == 0 || low.compare(0, 5, "data:") == 0 || low.compare(0, 9, "vbscript:") == 0) return;
+        Node& n = g.nodes[it->second];
+        n.href = url;
+        if (k < tok.size() && tok[k].second) n.tooltip = tok[k++].first;
+        if (k < tok.size() && !tok[k].second && (tok[k].first == "_blank" || tok[k].first == "_self" || tok[k].first == "_parent" || tok[k].first == "_top"))
+            n.target = tok[k].first;
+    }
+
     bool parse_statement(const std::string& line) {
         std::string s = trim(line);
         if (s.empty()) return true;
@@ -382,7 +417,11 @@ struct Parser {
             if (!group_stack.empty()) group_stack.pop_back();
             return true;
         }
-        if (starts("direction") || starts("click") || starts("accTitle") || starts("accDescr") || starts("title")) return true;
+        if (starts("click")) {
+            take_click(s.substr(5));
+            return true;
+        }
+        if (starts("direction") || starts("accTitle") || starts("accDescr") || starts("title")) return true;
         if (starts("classDef")) {
             std::string rest = trim(s.substr(8));
             size_t sp = rest.find(' ');
@@ -793,6 +832,9 @@ void draw_node(std::string& out, const Theme& th, const Node& n, Pt c) {
         for (const Pt& q : p) s += (s.empty() ? "" : " ") + num(q.x) + "," + num(q.y);
         return s;
     };
+    if (!n.href.empty())
+        out += "<a href=\"" + esc(n.href) + "\"" + (n.target.empty() ? "" : " target=\"" + n.target + "\"") +
+               (n.tooltip.empty() ? "" : " title=\"" + esc(n.tooltip) + "\"") + ">\n";
     out += "<g class=\"node\">\n";
     switch (n.shape) {
         case Shape::Rect:
@@ -852,6 +894,7 @@ void draw_node(std::string& out, const Theme& th, const Node& n, Pt c) {
     double cy = n.shape == Shape::Cylinder ? c.y + n.h * 0.07 : c.y;
     centered_text(out, th, n.lines, c.x, cy, kNodeFont, kNodeWeight, n.style.color.empty() ? th.text : n.style.color);
     out += "</g>\n";
+    if (!n.href.empty()) out += "</a>\n";
 }
 
 void draw_arrow(std::string& out, Pt tip, Pt from, const std::string& color) {
