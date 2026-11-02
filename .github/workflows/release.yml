@@ -1,12 +1,13 @@
 name: Release
 
+# Runs after "Deploy to GitHub Pages" has passed on master (it builds and tests every commit), and publishes what that
+# run built: the dist folders of wasm-quickjs-dom and wasm-html-to-image, uploaded as the `release-dist` artifact.
+# Nothing is compiled or tested again here. A manual run publishes the latest passing Deploy run of master.
 on:
-  push:
-    branches:
-      - master
-    paths:
-      - "packages/html-to-image/package.json"
-      - "packages/quickjs-dom/package.json"
+  workflow_run:
+    workflows: ["Deploy to GitHub Pages"]
+    types: [completed]
+    branches: [master]
   workflow_dispatch:
 
 concurrency:
@@ -15,15 +16,42 @@ concurrency:
 
 jobs:
   check-version:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
     outputs:
       should_release: ${{ steps.check.outputs.should_release }}
       version: ${{ steps.check.outputs.version }}
       tag: ${{ steps.check.outputs.tag }}
       publish_qjs: ${{ steps.qjs.outputs.publish_qjs }}
+      run_id: ${{ steps.deploy.outputs.run_id }}
+      sha: ${{ steps.deploy.outputs.sha }}
     steps:
+      - name: Find the Deploy run to publish
+        id: deploy
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_run" ]; then
+            RUN_ID="${{ github.event.workflow_run.id }}"
+            SHA="${{ github.event.workflow_run.head_sha }}"
+          else
+            read -r RUN_ID SHA < <(gh run list --repo "${{ github.repository }}" --workflow deploy.yml --branch master --status success --limit 1 --json databaseId,headSha --jq '.[0] | "\(.databaseId) \(.headSha)"')
+          fi
+          if [ -z "$RUN_ID" ] || [ -z "$SHA" ]; then
+            echo "No passing Deploy run found on master."
+            exit 1
+          fi
+          echo "Publishing run $RUN_ID at $SHA"
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+
       - name: Checkout
         uses: actions/checkout@v7
+        with:
+          ref: ${{ steps.deploy.outputs.sha }}
 
       - name: Setup Node
         uses: actions/setup-node@v7
@@ -69,35 +97,44 @@ jobs:
     permissions:
       contents: write
       id-token: write
-    env:
-      VCPKG_ROOT: /usr/local/share/vcpkg
-      VCPKG_BINARY_SOURCES: "clear;files,${{ github.workspace }}/vcpkg_cache,readwrite"
-      VCPKG_DOWNLOADS: "${{ github.workspace }}/vcpkg_downloads"
-      EMSDK_VERSION: "4.0.15"
+      actions: read
     steps:
       - name: Checkout
         uses: actions/checkout@v7
         with:
-          submodules: recursive
-          fetch-depth: 0
+          ref: ${{ needs.check-version.outputs.sha }}
 
-      - name: Host C++ unit tests
-        run: |
-          cmake -S tests/cpp -B build-host-tests
-          cmake --build build-host-tests
-          ctest --test-dir build-host-tests -C Debug --output-on-failure
-
-      - name: Build wasm
-        uses: ./.github/actions/build-wasm
+      - name: Install pnpm
+        uses: pnpm/action-setup@v6
         with:
-          emsdk-version: ${{ env.EMSDK_VERSION }}
+          version: 10
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: "pnpm"
           registry-url: "https://registry.npmjs.org"
 
-      - name: Build JS Packages
-        run: pnpm build:js
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
 
-      - name: Run Unit Tests
-        run: pnpm test
+      # what the Deploy run built from this very commit
+      - name: Download the built packages
+        uses: actions/download-artifact@v4
+        with:
+          name: release-dist
+          path: release-dist
+          run-id: ${{ needs.check-version.outputs.run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Put the built packages in place
+        run: |
+          for pkg in html-to-image quickjs-dom; do
+            test -d "release-dist/$pkg/dist" || { echo "release-dist/$pkg/dist is missing"; exit 1; }
+            rm -rf "packages/$pkg/dist"
+            cp -r "release-dist/$pkg/dist" "packages/$pkg/dist"
+          done
 
       - name: Create and push git tag
         if: needs.check-version.outputs.should_release == 'true'
@@ -116,13 +153,14 @@ jobs:
             --title "${{ needs.check-version.outputs.tag }}" \
             --generate-notes
 
+      # --ignore-scripts: the packages' prepublishOnly would build them again; they are built already
       - name: Publish to npm (Trusted Publishing / OIDC)
         run: |
           npm install -g npm@latest
           # wasm-html-to-image depends on wasm-quickjs-dom, so that one goes first (only when its version is new)
           if [ "${{ needs.check-version.outputs.publish_qjs }}" = "true" ]; then
-            pnpm --filter wasm-quickjs-dom publish --provenance --access public --no-git-checks
+            pnpm --filter wasm-quickjs-dom publish --provenance --access public --no-git-checks --ignore-scripts
           fi
           if [ "${{ needs.check-version.outputs.should_release }}" = "true" ]; then
-            pnpm --filter wasm-html-to-image publish --provenance --access public --no-git-checks
+            pnpm --filter wasm-html-to-image publish --provenance --access public --no-git-checks --ignore-scripts
           fi
