@@ -346,7 +346,50 @@ bool render_state(const std::string& source, const Options& options, std::string
         group_parent.push_back(gr.parent);
         group_min_w.push_back(std::ceil(text.width(gr.title, kGroupFont, kGroupWeight)) + 24 + 4);
     }
-    LayoutResult lay = layout_layered(ln, le, d.dir, group_parent, group_min_w);
+    LayoutResult lay;
+    if (horizontal) {
+        lay = layout_layered(ln, le, d.dir, group_parent, group_min_w);
+    } else {
+        // top-down: the layout leaves the notes out, and each one is set beside its state afterwards (not a rank above or below it)
+        std::vector<int> lmap(d.nodes.size(), -1), emap(d.edges.size(), -1);
+        std::vector<LayoutNode> cn;
+        std::vector<LayoutEdge> ce;
+        for (size_t k = 0; k < d.nodes.size(); k++)
+            if (d.nodes[k].kind != Kind::Note) lmap[k] = (int)cn.size(), cn.push_back(ln[k]);
+        for (size_t k = 0; k < d.edges.size(); k++) {
+            if (d.edges[k].note) continue;
+            LayoutEdge e = le[k];
+            e.from = lmap[e.from];
+            e.to = lmap[e.to];
+            emap[k] = (int)ce.size();
+            ce.push_back(e);
+        }
+        LayoutResult core = layout_layered(cn, ce, d.dir, group_parent, group_min_w);
+        lay.width = core.width;
+        lay.height = core.height;
+        lay.center.assign(d.nodes.size(), Pt{0, 0});
+        lay.points.assign(d.edges.size(), {});
+        lay.label_center.assign(d.edges.size(), Pt{0, 0});
+        for (size_t k = 0; k < d.nodes.size(); k++)
+            if (lmap[k] >= 0) lay.center[k] = core.center[lmap[k]];
+        for (size_t k = 0; k < d.edges.size(); k++)
+            if (emap[k] >= 0) lay.points[k] = core.points[emap[k]], lay.label_center[k] = core.label_center[emap[k]];
+        constexpr double kNoteGap = 28;
+        std::map<int, double> stacked;  // per state and side: the height of the notes already set there
+        for (size_t k = 0; k < d.edges.size(); k++) {
+            if (!d.edges[k].note) continue;
+            const bool left = d.nodes[d.edges[k].from].kind == Kind::Note;
+            const int ni = left ? d.edges[k].from : d.edges[k].to, ti = left ? d.edges[k].to : d.edges[k].from;
+            const Node &note = d.nodes[ni], &st = d.nodes[ti];
+            double& used = stacked[ti * 2 + (left ? 1 : 0)];
+            const double cy = lay.center[ti].y + used, tx = lay.center[ti].x;
+            const double cx = tx + (left ? -1 : 1) * (st.w / 2 + kNoteGap + note.w / 2);
+            used += note.h + 8;
+            lay.center[ni] = Pt{cx, cy};
+            if (left) lay.points[k] = {Pt{cx + note.w / 2, cy}, Pt{tx - st.w / 2, cy}};
+            else lay.points[k] = {Pt{tx + st.w / 2, cy}, Pt{cx - note.w / 2, cy}};
+        }
+    }
 
     // composite state frames, children first so a parent covers them
     struct Frame {
@@ -373,6 +416,10 @@ bool render_state(const std::string& source, const Options& options, std::string
     double x0 = 0, y0 = 0, x1 = lay.width, y1 = lay.height;
     for (const Frame& f : frames)
         if (f.used) x0 = std::min(x0, f.x0), y0 = std::min(y0, f.y0), x1 = std::max(x1, f.x1), y1 = std::max(y1, f.y1);
+    for (size_t k = 0; k < d.nodes.size(); k++)  // notes set beside their states may reach past the layout's box
+        if (d.nodes[k].kind == Kind::Note)
+            x0 = std::min(x0, lay.center[k].x - d.nodes[k].w / 2), y0 = std::min(y0, lay.center[k].y - d.nodes[k].h / 2),
+            x1 = std::max(x1, lay.center[k].x + d.nodes[k].w / 2), y1 = std::max(y1, lay.center[k].y + d.nodes[k].h / 2);
     const double ox = kMargin - x0, oy = kMargin - y0;
     auto at = [&](Pt p) { return Pt{p.x + ox, p.y + oy}; };
 

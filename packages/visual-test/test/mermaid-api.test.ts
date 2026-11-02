@@ -220,3 +220,19 @@ describe("renderMermaid: click links", () => {
     expect(data).toContain("Docs"); // the node text is still drawn
   });
 });
+
+describe("renderMermaid: state notes in a top-down diagram", () => {
+  it("sets each note beside its state, on the side named", async () => {
+    const src = ["stateDiagram-v2", "  A --> B", "  B --> C", "  note left of A : west", "  note right of B : east"].join("\n");
+    const { data } = await renderMermaid(src);
+    const boxes = new Map<string, { x: number; y: number; w: number; h: number }>();
+    for (const m of data.matchAll(/<rect x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="([\d.]+)"[^>]*\/>\s*<text[^>]*>([^<]*)/g))
+      boxes.set(m[5], { x: +m[1], y: +m[2], w: +m[3], h: +m[4] });
+    const [a, b, west, east] = ["A", "B", "west", "east"].map((k) => boxes.get(k)!);
+    expect([a, b, west, east].every(Boolean), [...boxes.keys()].join()).toBe(true);
+    expect(west.x + west.w).toBeLessThan(a.x); // left of A
+    expect(east.x).toBeGreaterThan(b.x + b.w); // right of B
+    expect(Math.abs(west.y + west.h / 2 - (a.y + a.h / 2))).toBeLessThan(1); // level with its state
+    expect(Math.abs(east.y + east.h / 2 - (b.y + b.h / 2))).toBeLessThan(1);
+  });
+});
