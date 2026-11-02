@@ -591,14 +591,17 @@ export async function createDOM(
 /**
  * Run a page's scripts in QuickJS and return the resulting HTML.
  * Give `url` to fetch the page, or `html` (with an optional `baseUrl`) for markup you already have.
+ * `option` is what {@link createDOM} takes (`true` or omitted: the defaults); the page is closed for you.
+ * `viewportWidth` and `engine.quickjsWasm` are the older way of passing `width` and `quickjsWasm`.
  */
 export async function runPageScriptsQuickJS(
   source: { url?: string; html?: string; baseUrl?: string },
-  option: true | JavaScriptOptions,
-  viewportWidth = 800,
+  option: true | CreateDOMOptions = {},
+  viewportWidth?: number,
   engine: EdgeJavaScriptEngine = {},
 ): Promise<ScriptedPage> {
-  const dom = await createDOM(source, { ...(option === true ? {} : option), width: viewportWidth, quickjsWasm: engine.quickjsWasm });
+  const given = option === true ? {} : option;
+  const dom = await createDOM(source, { ...given, width: viewportWidth ?? given.width, quickjsWasm: engine.quickjsWasm ?? given.quickjsWasm });
   try {
     return { html: dom.serialize(), baseUrl: dom.baseUrl };
   } finally {
