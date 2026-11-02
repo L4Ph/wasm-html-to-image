@@ -32,6 +32,11 @@ struct Doc {
     std::vector<Class> classes;
     std::vector<Relation> rels;
     std::vector<std::string> namespaces;
+    struct Note {
+        std::string text;
+        int target = -1;  // the class it is for, or -1 for a note of its own
+    };
+    std::vector<Note> notes;
     int cur_ns = -1;  // while parsing: the namespace block that is open
     std::map<std::string, int> index;
     Direction dir = Direction::TD;
@@ -181,6 +186,27 @@ bool parse(const std::string& source, Doc& d, std::string& error) {
             d.cur_ns = -1;
             continue;
         }
+        if (starts(line, "note ")) {  // `note for A "text"` or `note "text"`; `\n` in the text is a line break
+            std::string rest = trim(line.substr(5));
+            int target = -1;
+            if (starts(rest, "for ")) {
+                rest = trim(rest.substr(4));
+                size_t q = rest.find('"');
+                if (q != std::string::npos) {
+                    target = class_for(d, rest.substr(0, q));
+                    rest = rest.substr(q);
+                }
+            }
+            if (rest.size() >= 2 && rest.front() == '"' && rest.back() == '"') {
+                std::string text;
+                for (size_t p = 1; p + 1 < rest.size(); p++) {
+                    if (rest[p] == '\\' && rest[p + 1] == 'n') text += '\n', p++;
+                    else text += rest[p];
+                }
+                d.notes.push_back({text, target});
+            }
+            continue;
+        }
         if (starts(line, "note") || starts(line, "style ") || starts(line, "classDef ") || starts(line, "cssClass ") || starts(line, "click ") ||
             starts(line, "link ") || starts(line, "callback ") || starts(line, "title ") || line == "}")
             continue;
@@ -293,6 +319,25 @@ bool render_class(const std::string& source, const Options& options, std::string
     std::vector<double> group_min_w;  // a frame is wide enough for its title
     for (const std::string& n : d.namespaces) group_min_w.push_back(std::ceil(text.width(n, kGroupFont, kGroupWeight)) + 24 + 4);
     for (size_t k = 0; k < d.classes.size(); k++) ln[k].group = d.classes[k].ns;
+    // notes: a node each, after the classes, joined to their class by a dotted link (edges after the relations)
+    const size_t n_classes = d.classes.size(), n_rels = d.rels.size();
+    std::vector<std::vector<std::string>> note_lines(d.notes.size());
+    std::vector<int> note_edge(d.notes.size(), -1);  // the layout edge of a note's link
+    for (size_t k = 0; k < d.notes.size(); k++) {
+        note_lines[k] = wrap_lines(text, split_lines(d.notes[k].text), kEdgeFont, 400, kWrapWidth);
+        LayoutNode nn;
+        nn.w = std::max(40.0, text.block_width(note_lines[k], kEdgeFont, 400) + 20);
+        nn.h = note_lines[k].size() * (kEdgeFont * kLineHeight + 2) + 16;
+        nn.group = d.notes[k].target >= 0 ? d.classes[d.notes[k].target].ns : -1;
+        ln.push_back(nn);
+        if (d.notes[k].target >= 0) {
+            LayoutEdge ne;
+            ne.from = d.notes[k].target;
+            ne.to = (int)(n_classes + k);
+            note_edge[k] = (int)le.size();
+            le.push_back(ne);
+        }
+    }
     LayoutResult lay = layout_layered(ln, le, d.dir, group_parent, group_min_w);
 
     // namespace frames, around the classes declared in them
@@ -306,6 +351,14 @@ bool render_class(const std::string& source, const Options& options, std::string
         int g = d.classes[k].ns;
         if (g < 0) continue;
         double x0 = lay.center[k].x - d.classes[k].w / 2, y0 = lay.center[k].y - d.classes[k].h / 2, x1 = lay.center[k].x + d.classes[k].w / 2, y1 = lay.center[k].y + d.classes[k].h / 2;
+        Frame& f = frames[g];
+        f = f.used ? Frame{std::min(f.x0, x0), std::min(f.y0, y0), std::max(f.x1, x1), std::max(f.y1, y1), true} : Frame{x0, y0, x1, y1, true};
+    }
+    for (size_t k = 0; k < d.notes.size(); k++) {
+        int g = ln[n_classes + k].group;
+        if (g < 0) continue;
+        const size_t at_k = n_classes + k;
+        double x0 = lay.center[at_k].x - ln[at_k].w / 2, y0 = lay.center[at_k].y - ln[at_k].h / 2, x1 = lay.center[at_k].x + ln[at_k].w / 2, y1 = lay.center[at_k].y + ln[at_k].h / 2;
         Frame& f = frames[g];
         f = f.used ? Frame{std::min(f.x0, x0), std::min(f.y0, y0), std::max(f.x1, x1), std::max(f.y1, y1), true} : Frame{x0, y0, x1, y1, true};
     }
@@ -367,6 +420,19 @@ bool render_class(const std::string& source, const Options& options, std::string
         body += "<g class=\"edge-label\">\n<rect x=\"" + num(c.x - le[k].label_w / 2) + "\" y=\"" + num(c.y - le[k].label_h / 2) + "\" width=\"" + num(le[k].label_w) + "\" height=\"" +
                 num(le[k].label_h) + "\" rx=\"2\" ry=\"2\" fill=\"" + th.label_bg + "\" stroke=\"" + th.label_stroke + "\" stroke-width=\"1\"/>\n";
         centered_text(body, th, label_lines[k], c.x, c.y, kEdgeFont, kEdgeWeight, th.text_sec);
+        body += "</g>\n";
+    }
+    for (size_t k = 0; k < d.notes.size(); k++) {
+        if (note_edge[k] >= 0 && lay.points[note_edge[k]].size() >= 2) {
+            std::string list;
+            for (const Pt& p : lay.points[note_edge[k]]) list += (list.empty() ? "" : " ") + num(at(p).x) + "," + num(at(p).y);
+            body += "<polyline class=\"edge note-link\" points=\"" + list + "\" fill=\"none\" stroke=\"" + th.note_border + "\" stroke-width=\"1\" stroke-dasharray=\"3 3\" stroke-linejoin=\"round\"/>\n";
+        }
+        const size_t at_k = n_classes + k;
+        Pt p = at(lay.center[at_k]);
+        body += "<g class=\"note\">\n<rect x=\"" + num(p.x - ln[at_k].w / 2) + "\" y=\"" + num(p.y - ln[at_k].h / 2) + "\" width=\"" + num(ln[at_k].w) + "\" height=\"" + num(ln[at_k].h) +
+                "\" rx=\"2\" ry=\"2\" fill=\"" + th.note_fill + "\" stroke=\"" + th.note_border + "\" stroke-width=\"1\"/>\n";
+        centered_text(body, th, note_lines[k], p.x, p.y, kEdgeFont, 400, th.note_text);
         body += "</g>\n";
     }
     for (size_t k = 0; k < d.classes.size(); k++) {

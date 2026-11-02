@@ -170,3 +170,23 @@ describe("class diagram namespaces", () => {
     expect((data.match(/class="namespace"/g) ?? []).length).toBe(1);
   });
 });
+
+describe("notes in state and class diagrams", () => {
+  it("draws a state diagram's notes, single and multi-line, linked to their states", async () => {
+    const src = ["stateDiagram-v2", "  [*] --> Active", "  note right of Active : first note", "  note left of Active", "    line one", "    line two", "  end note"].join("\n");
+    const { data } = await renderMermaid(src);
+    for (const text of ["first note", "line one", "line two"]) expect(data).toContain(text);
+    expect((data.match(/note-link/g) ?? []).length).toBe(2);
+  });
+
+  it("draws a class diagram's notes, with \n as a line break and a note of its own", async () => {
+    const src = String.raw`classDiagram
+  class Animal
+  note for Animal "can fly\ncan swim"
+  note "free-standing"`;
+    const { data } = await renderMermaid(src);
+    for (const text of ["can fly", "can swim", "free-standing"]) expect(data).toContain(text);
+    expect((data.match(/class="note"/g) ?? []).length).toBe(2);
+    expect((data.match(/note-link/g) ?? []).length).toBe(1);
+  });
+});

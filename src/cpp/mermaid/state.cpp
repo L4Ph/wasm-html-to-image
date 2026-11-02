@@ -13,7 +13,7 @@ namespace {
 
 using litehtml::svgutil::trim;
 
-enum class Kind { State, Start, End, Choice, Fork };
+enum class Kind { State, Start, End, Choice, Fork, Note };
 
 struct Node {
     std::string name;
@@ -32,6 +32,7 @@ struct Group {
 struct Edge {
     int from, to;  // node index, or -(group + 2) for a composite state
     std::string label;
+    bool note = false;  // the dotted link between a note and its state
 };
 
 struct Doc {
@@ -72,9 +73,28 @@ int node_for(Doc& d, const std::string& raw, int scope, bool as_target) {
 
 bool starts(const std::string& s, const char* p) { return s.compare(0, std::char_traits<char>::length(p), p) == 0; }
 
+/// A note beside a state: a node of its own, joined to the state by a dotted link (the note comes after the state for `right of`, before for `left of`).
+void add_note(Doc& d, const std::string& target, bool left, int scope, const std::string& text) {
+    if (target.empty() || text.empty()) return;
+    int t = node_for(d, target, scope, false);
+    Node n;
+    n.kind = Kind::Note;
+    n.name = text;
+    n.group = t >= 0 ? d.nodes[t].group : scope;
+    d.nodes.push_back(n);
+    int at = (int)d.nodes.size() - 1;
+    Edge e;
+    e.from = left ? at : t;
+    e.to = left ? t : at;
+    e.note = true;
+    d.edges.push_back(e);
+}
+
 bool parse(const std::string& source, Doc& d, std::string& error) {
     std::vector<int> scopes;
-    bool first = true, in_note = false;
+    bool first = true, in_note = false, note_left = false;
+    std::string note_target, note_text;
+    int note_scope = -1;
     // composite states can be named by transitions before their block, so register them up front
     {
         int count = 0;
@@ -103,12 +123,29 @@ bool parse(const std::string& source, Doc& d, std::string& error) {
             continue;
         }
         if (in_note) {
-            if (line == "end note") in_note = false;
+            if (line == "end note") {
+                in_note = false;
+                add_note(d, note_target, note_left, note_scope, note_text);
+            } else {
+                note_text += (note_text.empty() ? "" : "\n") + line;
+            }
             continue;
         }
         int scope = scopes.empty() ? -1 : scopes.back();
-        if (starts(line, "note ")) {
-            if (line.find(':') == std::string::npos) in_note = true;
+        if (starts(line, "note ")) {  // `note right of A : text`, or a block that runs to `end note`
+            std::string rest = trim(line.substr(5));
+            bool left = starts(rest, "left of ");
+            if (left || starts(rest, "right of ")) {
+                rest = trim(rest.substr(left ? 8 : 9));
+                size_t colon = rest.find(':');
+                note_target = trim(colon == std::string::npos ? rest : rest.substr(0, colon));
+                note_left = left;
+                note_scope = scope;
+                if (colon != std::string::npos) add_note(d, note_target, left, scope, trim(rest.substr(colon + 1)));
+                else in_note = true, note_text.clear();
+            } else if (line.find(':') == std::string::npos) {
+                in_note = true, note_text.clear(), note_target.clear();
+            }
             continue;
         }
         if (starts(line, "direction ")) {
@@ -217,7 +254,7 @@ int resolve(const Doc& d, int ref) {
     if (ref >= 0) return ref;
     int g = -ref - 2, any = -1;
     for (size_t k = 0; k < d.nodes.size(); k++) {
-        if (!inside(d, d.nodes[k].group, g)) continue;
+        if (!inside(d, d.nodes[k].group, g) || d.nodes[k].kind == Kind::Note) continue;
         if (d.nodes[k].kind == Kind::Start && d.nodes[k].group == g) return (int)k;
         if (any < 0) any = (int)k;
     }
@@ -267,6 +304,12 @@ bool render_state(const std::string& source, const Options& options, std::string
             case Kind::End: n.w = n.h = 20; break;
             case Kind::Choice: n.w = n.h = 26; break;
             case Kind::Fork: n.w = horizontal ? 6 : 60, n.h = horizontal ? 60 : 6; break;
+            case Kind::Note: {
+                n.title_lines = wrap_lines(text, split_lines(n.name), kEdgeFont, 400, kWrapWidth);
+                n.w = std::max(40.0, text.block_width(n.title_lines, kEdgeFont, 400) + 20);
+                n.h = n.title_lines.size() * dlh + 16;
+                break;
+            }
             case Kind::State: {
                 n.title_lines = wrap_lines(text, split_lines(n.name), kNodeFont, kNodeWeight, kWrapWidth);
                 n.desc = wrap_lines(text, n.desc, kEdgeFont, 400, kWrapWidth);
@@ -355,6 +398,10 @@ bool render_state(const std::string& source, const Options& options, std::string
             pts.push_back(at(p));
             list += (list.empty() ? "" : " ") + num(pts.back().x) + "," + num(pts.back().y);
         }
+        if (d.edges[k].note) {  // a note's link: dotted, no arrow head
+            body += "<polyline class=\"edge note-link\" points=\"" + list + "\" fill=\"none\" stroke=\"" + th.note_border + "\" stroke-width=\"1\" stroke-dasharray=\"3 3\" stroke-linejoin=\"round\"/>\n";
+            continue;
+        }
         body += "<polyline class=\"edge\" points=\"" + list + "\" fill=\"none\" stroke=\"" + th.line + "\" stroke-width=\"1\" stroke-linejoin=\"round\"/>\n";
         draw_arrow(body, pts.back(), pts[pts.size() - 2], th.arrow);
     }
@@ -384,6 +431,11 @@ bool render_state(const std::string& source, const Options& options, std::string
                 break;
             case Kind::Fork:
                 body += "<rect x=\"" + num(c.x - n.w / 2) + "\" y=\"" + num(c.y - n.h / 2) + "\" width=\"" + num(n.w) + "\" height=\"" + num(n.h) + "\" rx=\"2\" fill=\"" + th.text + "\"/>\n";
+                break;
+            case Kind::Note:
+                body += "<rect x=\"" + num(c.x - n.w / 2) + "\" y=\"" + num(c.y - n.h / 2) + "\" width=\"" + num(n.w) + "\" height=\"" + num(n.h) + "\" rx=\"2\" ry=\"2\" fill=\"" +
+                        th.note_fill + "\" stroke=\"" + th.note_border + "\" stroke-width=\"1\"/>\n";
+                centered_text(body, th, n.title_lines, c.x, c.y, kEdgeFont, 400, th.note_text);
                 break;
             case Kind::State: {
                 body += "<rect x=\"" + num(c.x - n.w / 2) + "\" y=\"" + num(c.y - n.h / 2) + "\" width=\"" + num(n.w) + "\" height=\"" + num(n.h) + "\" rx=\"6\" ry=\"6\"" +
