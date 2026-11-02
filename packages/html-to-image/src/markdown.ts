@@ -462,7 +462,7 @@ ${body}</blockquote>
     options.template !== undefined ||
     front.template !== undefined ||
     [settings.header, settings.footer, settings.margin, settings.orientation].some((v) => v !== undefined);
-  const withOrientation = (size: string) => (settings.orientation === "landscape" && !/landscape/.test(size) ? `${size} landscape` : size);
+  const withOrientation = (size: string) => (settings.orientation === "landscape" && !/\blandscape\b/.test(size) ? `${size} landscape` : size);
   // A plain document keeps the exact page it always had; a template adds its own @page (size and margins).
   const pageSetting = hasTemplate && options.paged !== false
     ? { size: withOrientation(settings.page_size ?? page.size), margin: page.margin }

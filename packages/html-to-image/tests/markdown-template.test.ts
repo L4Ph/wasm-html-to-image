@@ -49,7 +49,7 @@ describe("templates", () => {
   it("without a template the page is the plain one: no @page size, no cover", () => {
     const html = markdownToHtml("---\ntitle: T\n---\n# H", { paged: true });
     expect(style(html)).toContain("@page { margin: 32px; }");
-    expect(/@page \{[^}]*size:/.test(style(html))).toBe(false); // a margin only, no page size
+    expect(/@page \{[^}]*\bsize:/.test(style(html))).toBe(false); // a margin only, no page size
     expect(article(html)).not.toContain('class="cover"');
   });
 
