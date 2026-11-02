@@ -102,4 +102,9 @@ jobs:
       - name: Publish to npm (Trusted Publishing / OIDC)
         run: |
           npm install -g npm@latest
+          # wasm-html-to-image depends on wasm-quickjs-dom, so that one goes first (only when its version is new)
+          QJS_VERSION=$(node -p "require('./packages/quickjs-dom/package.json').version")
+          if [ -z "$(npm view "wasm-quickjs-dom@$QJS_VERSION" version 2>/dev/null)" ]; then
+            pnpm --filter wasm-quickjs-dom publish --provenance --access public --no-git-checks
+          fi
           pnpm --filter wasm-html-to-image publish --provenance --access public --no-git-checks

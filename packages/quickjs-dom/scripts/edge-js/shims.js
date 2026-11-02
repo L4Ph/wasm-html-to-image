@@ -1,5 +1,5 @@
 // Browser-ish globals that a bare QuickJS context lacks. Runs first, as a plain script.
-// Timers and fetch call out to the host through `__host` (see src/edge-js.ts).
+// Timers and fetch call out to the host through `__host` (see src/index.ts).
 (function (g) {
   var B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   var t0 = Date.now();

@@ -1,0 +1,74 @@
+{
+  "name": "wasm-quickjs-dom",
+  "version": "1.0.0",
+  "description": "A small JSDOM for runtimes without Node or eval: QuickJS (WebAssembly) on a linkedom DOM, for Cloudflare Workers, Vercel Edge, Deno, Bun and browsers",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "author": "SoraKumo <info@croud.jp>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SoraKumo001/wasm-html-to-image.git",
+    "directory": "packages/quickjs-dom"
+  },
+  "homepage": "https://sorakumo001.github.io/wasm-html-to-image/master/docs/",
+  "bugs": {
+    "url": "https://github.com/SoraKumo001/wasm-html-to-image/issues"
+  },
+  "keywords": [
+    "jsdom",
+    "dom",
+    "quickjs",
+    "linkedom",
+    "wasm",
+    "webassembly",
+    "cloudflare-workers",
+    "edge-runtime"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "imports": {
+    "#quickjs-wasm": {
+      "workerd": "./dist/quickjs-workerd.js",
+      "edge-light": "./dist/quickjs-edge-light.js",
+      "deno": "./dist/quickjs-web.js",
+      "node": "./dist/quickjs-node.js",
+      "bun": "./dist/quickjs-node.js",
+      "default": "./dist/quickjs-web.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b && node scripts/build-edge-js.mjs",
+    "prepublishOnly": "npm run build",
+    "test": "vitest run"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./quickjs.wasm": {
+      "types": "./dist/quickjs-wasm.d.ts",
+      "default": "./dist/quickjs.wasm"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "@jitl/quickjs-wasmfile-release-sync": "0.32.0",
+    "quickjs-emscripten-core": "0.32.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.5",
+    "linkedom": "0.18.13",
+    "typescript": "^7.0.2",
+    "vitest": "^5.0.5",
+    "web-streams-polyfill": "4.3.0"
+  }
+}

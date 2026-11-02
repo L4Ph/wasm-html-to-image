@@ -2,11 +2,11 @@
 //
 //   dist/edge-js-payload.js  the guest program as one string: shims, the Web Streams polyfill, linkedom
 //                            (wrapped in a function: its top-level `const window` must not shadow the
-//                            global one) and the boot code. `src/edge-js.ts` evaluates it in QuickJS.
+//                            global one) and the boot code. `src/index.ts` evaluates it in QuickJS.
 //   dist/quickjs.wasm        QuickJS itself, for runtimes that need a pre-compiled WebAssembly.Module
-//                            (Cloudflare Workers): `import wasm from "wasm-html-to-image/quickjs.wasm"`.
+//                            (Cloudflare Workers): `import wasm from "wasm-quickjs-dom/quickjs.wasm"`.
 //
-// Usage (from `packages/html-to-image/`): node scripts/build-edge-js.mjs
+// Usage (from `packages/quickjs-dom/`): node scripts/build-edge-js.mjs
 import { copyFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { dirname, join } from "node:path";
@@ -45,7 +45,7 @@ writeFileSync(
 
 const quickjsWasm = join(dirname(require.resolve("@jitl/quickjs-wasmfile-release-sync/package.json")), "dist", "emscripten-module.wasm");
 copyFileSync(quickjsWasm, join(root, "dist", "quickjs.wasm"));
-// what `import wasm from "wasm-html-to-image/quickjs.wasm"` is typed as (bundlers for Workers give a compiled module)
+// what `import wasm from "wasm-quickjs-dom/quickjs.wasm"` is typed as (bundlers for Workers give a compiled module)
 writeFileSync(join(root, "dist", "quickjs-wasm.d.ts"), "declare const quickjsWasm: WebAssembly.Module;\nexport default quickjsWasm;\n");
 
 console.log(`edge-js: payload ${(source.length / 1024).toFixed(0)} KiB, quickjs.wasm copied`);

@@ -40,18 +40,8 @@
   "engines": {
     "node": ">=20.0.0"
   },
-  "imports": {
-    "#quickjs-wasm": {
-      "workerd": "./dist/quickjs-workerd.js",
-      "edge-light": "./dist/quickjs-edge-light.js",
-      "deno": "./dist/quickjs-web.js",
-      "node": "./dist/quickjs-node.js",
-      "bun": "./dist/quickjs-node.js",
-      "default": "./dist/quickjs-web.js"
-    }
-  },
   "scripts": {
-    "build": "tsc -b && node scripts/compress-wasm.mjs && node scripts/build-edge-js.mjs && rolldown -c rolldown.config.js",
+    "build": "tsc -b && node scripts/compress-wasm.mjs && node scripts/copy-quickjs-wasm.mjs && rolldown -c rolldown.config.js",
     "prepublishOnly": "npm run build",
     "test": "vitest run",
     "example:cli": "tsx src/cli.ts --help"
@@ -154,15 +144,14 @@
   "license": "MIT",
   "dependencies": {
     "commander": "15.0.0",
+    "wasm-quickjs-dom": "workspace:*",
     "worker-lib": "2.2.1"
   },
   "optionalDependencies": {
-    "@jitl/quickjs-wasmfile-release-sync": "0.32.0",
     "highlight.js": "^11.12.0",
     "jsdom": "^30.1.3",
     "katex": "^0.16.11",
-    "marked": "^16.4.2",
-    "quickjs-emscripten-core": "0.32.0"
+    "marked": "^16.4.2"
   },
   "peerDependencies": {
     "@unocss/core": "^66.6.5",
@@ -197,11 +186,9 @@
     "@types/node": "26.6.5",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "linkedom": "0.18.13",
     "rolldown": "^1.2.15",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
-    "vitest": "^5.0.5",
-    "web-streams-polyfill": "4.3.0"
+    "vitest": "^5.0.5"
   }
 }

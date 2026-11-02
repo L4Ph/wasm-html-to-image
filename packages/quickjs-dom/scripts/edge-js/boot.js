@@ -1,4 +1,4 @@
-// Builds the page in linkedom and exposes the hooks the host drives (see src/edge-js.ts).
+// Builds the page in linkedom and exposes the hooks the host drives (see src/index.ts).
 // Runs after shims.js, the Web Streams polyfill and linkedom (`globalThis.__linkedom`).
 (function (g) {
   var done = new WeakSet(), list = [], current = null;

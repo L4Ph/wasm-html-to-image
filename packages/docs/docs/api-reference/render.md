@@ -116,7 +116,7 @@ const { data } = await render(options);
 ```
 
 - QuickJS の wasm は、実行環境に合わせてパッケージが選びます（`package.json` の `imports` の `#quickjs-wasm`）。Workers と Vercel / Next.js の Edge ではコンパイル済みのモジュールを取り込み、Node.js と Bun ではファイルを読み、Deno とブラウザでは `fetch` します。自前のモジュールを使うなら `applyJavaScript(options, { quickjsWasm })` で渡せます。Node.js の `single` 入口では、`javascript: { engine: "quickjs" }` でも選べます。
-- 任意依存の `quickjs-emscripten-core` と `@jitl/quickjs-wasmfile-release-sync` が要ります（Workers ではバンドルに入ります）。
+- エンジン本体は別パッケージの [`wasm-quickjs-dom`](https://www.npmjs.com/package/wasm-quickjs-dom)（画像とは無関係の小さな JSDOM）で、`wasm-html-to-image` の依存として入ります。`createDOM` はそのまま `wasm-quickjs-dom` からも使えます。
 - 制限: レイアウトはなく（`getBoundingClientRect` は 0）、`canvas` は使えません。`type="module"` のスクリプトは実行しますが、`import` は先に取得できる（リテラルの指定子の）ものだけです。DOM は linkedom で jsdom より小さく、QuickJS はインタプリタなので、重いページは遅くなります。
 - jsdom と同じく、信頼できるページだけに使ってください（スクリプトは `fetch` できます）。
 
