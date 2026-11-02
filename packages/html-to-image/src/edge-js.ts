@@ -229,7 +229,9 @@ export async function runPageScriptsQuickJS(
       },
       (base: string, name: string) => resolveModule(base, name),
     );
-    const prefetchModules = async (code: string, name: string): Promise<void> => {
+    // QuickJS gives `import.meta` no `url`, so the module's own URL is written into its source
+    const prefetchModules = async (source: string, name: string): Promise<string> => {
+      const code = source.replace(/\bimport\.meta\.url\b/g, JSON.stringify(name));
       modules.set(name, code);
       const pending: string[] = [];
       for (const m of code.matchAll(/(?:\bfrom\s*|\bimport\s*\(?\s*)(["'`])(\.{0,2}\/[^"'`$]+|https?:[^"'`$]+)\1/g)) {
@@ -250,6 +252,7 @@ export async function runPageScriptsQuickJS(
           }
         }),
       );
+      return code;
     };
 
     run(guestSource as string, "edge-js-guest.js");
@@ -282,7 +285,7 @@ export async function runPageScriptsQuickJS(
           call(`__edgeSetCurrent(${s.idx})`);
           if (s.module) {
             if (!s.src) name = `${baseUrl}#module-${s.idx}`;
-            await prefetchModules(code, name);
+            code = await prefetchModules(code, name);
           }
           const ok = run(code, name, s.module);
           call("__edgeSetCurrent(-1)");

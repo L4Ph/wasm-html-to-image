@@ -293,3 +293,13 @@ describe("javascript option, QuickJS engine: ES modules", () => {
     expect(out.html).toContain('data-m="b"');
   });
 });
+
+describe("javascript option, QuickJS engine: import.meta", () => {
+  it("gives a module its own URL as import.meta.url", async () => {
+    const out = await runPageScriptsQuickJS(
+      { baseUrl: "http://h.test/p/", html: '<!doctype html><body><script type="module">document.body.setAttribute("data-u", new URL("x.png", import.meta.url).href);</script></body>' },
+      { settleMs: 0 },
+    );
+    expect(out.html).toContain('data-u="http://h.test/p/x.png"');
+  });
+});
