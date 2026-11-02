@@ -503,6 +503,11 @@ bool render_sequence(const std::string& source, const Options& options, std::str
     std::string groups;
     for (const BoxGroup& b : d.boxes) {
         double x0 = cx[b.first] - w[b.first] / 2 - 10, x1 = cx[b.last] + w[b.last] / 2 + 10;
+        // a frame wide enough for its title, grown on both sides
+        if (!b.label.empty()) {
+            const double need = std::ceil(tx.block_width({b.label}, metrics::kNodeFont, 600)) + 24;
+            if (x1 - x0 < need) x0 -= (need - (x1 - x0)) / 2, x1 = x0 + need;
+        }
         ext(x0, x1);
         groups += rect(x0, -box_top, x1 - x0, bottom + hh + box_top + 8, mix(th.fg, th.bg, 5), th.border, 6);
         if (!b.label.empty()) centered_text(groups, th, {b.label}, (x0 + x1) / 2, -box_top / 2 - 2, metrics::kNodeFont, 600, th.text);

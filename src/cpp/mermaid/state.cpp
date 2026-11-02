@@ -298,8 +298,12 @@ bool render_state(const std::string& source, const Options& options, std::string
         }
     }
     std::vector<int> group_parent;
-    for (const Group& gr : d.groups) group_parent.push_back(gr.parent);
-    LayoutResult lay = layout_layered(ln, le, d.dir, group_parent);
+    std::vector<double> group_min_w;  // a frame is wide enough for its title
+    for (const Group& gr : d.groups) {
+        group_parent.push_back(gr.parent);
+        group_min_w.push_back(std::ceil(text.width(gr.title, kGroupFont, kGroupWeight)) + 24 + 4);
+    }
+    LayoutResult lay = layout_layered(ln, le, d.dir, group_parent, group_min_w);
 
     // composite state frames, children first so a parent covers them
     struct Frame {
@@ -320,6 +324,7 @@ bool render_state(const std::string& source, const Options& options, std::string
         if (!frames[gi].used) continue;
         Frame& f = frames[gi];
         f = {f.x0 - kFramePad, f.y0 - kFramePad - kHeader, f.x1 + kFramePad, f.y1 + kFramePad, true};
+        f.x1 = std::max(f.x1, f.x0 + group_min_w[gi]);  // wide enough for its title; the layout left the room
         if (d.groups[gi].parent >= 0) grow(frames[d.groups[gi].parent], f.x0, f.y0, f.x1, f.y1);
     }
     double x0 = 0, y0 = 0, x1 = lay.width, y1 = lay.height;

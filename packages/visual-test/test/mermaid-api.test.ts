@@ -143,3 +143,19 @@ describe("a diagram in HTML on a dark page", () => {
     expect(await fill(`<body style="background:#111;color:#eee"><div style="--mermaid-bg:#fff">${diagram}</div></body>`)).toBe(false);
   });
 });
+
+describe("frame titles longer than the frame's contents", () => {
+  const T = "A very long frame title that is much wider than its contents";
+  const width = async (src: string) => Number(/<svg[^>]*\bwidth="([\d.]+)"/.exec((await renderMermaid(src)).data)![1]);
+  // the drawing is at least as wide as the title text (about 6 px a character at 12 px)
+  const roomFor = (w: number) => expect(w).toBeGreaterThan(T.length * 6);
+
+  it("widens a state composite, top-down and left-right", async () => {
+    roomFor(await width(`stateDiagram-v2\n state "${T}" as S1 {\n  a --> b\n }\n [*] --> S1`));
+    roomFor(await width(`stateDiagram-v2\n direction LR\n state "${T}" as S1 {\n  a --> b\n }\n [*] --> S1`));
+  });
+
+  it("widens a sequence box", async () => {
+    roomFor(await width(`sequenceDiagram\n box ${T}\n participant A\n participant B\n end\n A->>B: hi`));
+  });
+});
