@@ -23,9 +23,16 @@
     loc.assign = loc.replace = loc.reload = function () {};
     g.location = loc;
     g.navigator = { userAgent: "Mozilla/5.0 (compatible; wasm-html-to-image) AppleWebKit/537.36 Chrome/120.0", language: "en-US", languages: ["en-US"], platform: "Linux", hardwareConcurrency: 1, onLine: true, cookieEnabled: false };
+    // pushState/replaceState move the location, as routers expect (no navigation happens)
+    function moveTo(u) {
+      if (u == null || u === "") return;
+      var n = new g.URL(String(u), loc.href);
+      ["protocol", "host", "hostname", "port", "pathname", "search", "hash", "origin", "searchParams"].forEach(function (k) { loc[k] = n[k]; });
+    }
     g.history = {
       state: null, length: 1, scrollRestoration: "auto",
-      pushState: function (s) { this.state = s; }, replaceState: function (s) { this.state = s; },
+      pushState: function (s, t, u) { this.state = s; this.length++; moveTo(u); },
+      replaceState: function (s, t, u) { this.state = s; moveTo(u); },
       back: function () {}, forward: function () {}, go: function () {},
     };
     g.screen = { width: width, height: Math.round(width * 0.75) };
@@ -41,9 +48,32 @@
       return { matches: false, media: q, onchange: null, addListener: function () {}, removeListener: function () {}, addEventListener: function () {}, removeEventListener: function () {}, dispatchEvent: function () { return false; } };
     };
     g.getComputedStyle = g.getComputedStyle || function (el) { return el.style || {}; };
-    g.localStorage = g.sessionStorage = { getItem: function () { return null; }, setItem: function () {}, removeItem: function () {}, clear: function () {} };
+    function storage() {
+      var m = new Map();
+      return {
+        getItem: function (k) { k = String(k); return m.has(k) ? m.get(k) : null; },
+        setItem: function (k, v) { m.set(String(k), String(v)); },
+        removeItem: function (k) { m.delete(String(k)); },
+        clear: function () { m.clear(); },
+        key: function (i) { return Array.from(m.keys())[i] == null ? null : Array.from(m.keys())[i]; },
+        get length() { return m.size; },
+      };
+    }
+    g.localStorage = storage();
+    g.sessionStorage = storage();
+    if (!g.customElements && w.customElements) g.customElements = w.customElements;
+    g.Image = function (width, height) {
+      var i = d.createElement("img");
+      if (width != null) i.setAttribute("width", width);
+      if (height != null) i.setAttribute("height", height);
+      return i;
+    };
+    d.fonts = d.fonts || { ready: Promise.resolve(), check: function () { return true; }, load: function () { return Promise.resolve([]); }, add: function () {}, forEach: function () {}, addEventListener: function () {}, removeEventListener: function () {} };
+    var state = "loading";
+    Object.defineProperty(d, "readyState", { configurable: true, get: function () { return state; } });
+    g.__edgeSetReady = function (s) { state = s; };
     ["ResizeObserver", "IntersectionObserver", "MutationObserver"].forEach(function (n) {
-      if (!g[n]) g[n] = class { observe() {} unobserve() {} disconnect() {} takeRecords() { return []; } };
+      if (!g[n]) g[n] = w[n] || class { observe() {} unobserve() {} disconnect() {} takeRecords() { return []; } };
     });
     if (!d.getElementsByName) d.getElementsByName = function (n) { return d.querySelectorAll('[name="' + n + '"]'); };
 
@@ -91,7 +121,9 @@
     } catch (x) { __host.log("error", "load handler: " + ((x && x.stack) || x)); }
   };
   g.__edgeDocumentEvents = function () {
+    g.__edgeSetReady("interactive");
     g.document.dispatchEvent(new g.Event("DOMContentLoaded"));
+    g.__edgeSetReady("complete");
     g.document.defaultView.dispatchEvent(new g.Event("load"));
   };
   g.__edgeHas = function (selector) { return !!g.document.querySelector(selector); };

@@ -184,8 +184,45 @@
     constructor(i) { this.m = new Map(); if (i) for (var k of Object.keys(i)) this.m.set(k.toLowerCase(), String(i[k])); }
     get(k) { var v = this.m.get(String(k).toLowerCase()); return v == null ? null : v; }
     set(k, v) { this.m.set(String(k).toLowerCase(), String(v)); }
+    append(k, v) { k = String(k).toLowerCase(); this.m.set(k, this.m.has(k) ? this.m.get(k) + ", " + v : String(v)); }
+    delete(k) { this.m.delete(String(k).toLowerCase()); }
     has(k) { return this.m.has(String(k).toLowerCase()); }
     forEach(f) { this.m.forEach(function (v, k) { f(v, k); }); }
+    entries() { return this.m.entries(); }
+    keys() { return this.m.keys(); }
+    values() { return this.m.values(); }
+    [Symbol.iterator]() { return this.m.entries(); }
+  };
+  g.Blob = g.Blob || class {
+    constructor(parts, opts) {
+      var enc = new g.TextEncoder(), chunks = (parts || []).map(function (p) { return typeof p === "string" ? enc.encode(p) : p instanceof g.Blob ? p._u : p instanceof Uint8Array ? p : new Uint8Array(p.buffer || p); });
+      var n = 0; chunks.forEach(function (c) { n += c.length; });
+      this._u = new Uint8Array(n);
+      var o = 0; chunks.forEach(function (c) { this._u.set(c, o); o += c.length; }, this);
+      this.size = n;
+      this.type = (opts && opts.type) || "";
+    }
+    async text() { return new g.TextDecoder().decode(this._u); }
+    async arrayBuffer() { return this._u.slice().buffer; }
+    slice(a, b, t) { var s = new g.Blob([this._u.slice(a, b)], { type: t || this.type }); return s; }
+  };
+  g.FormData = g.FormData || class {
+    constructor() { this.l = []; }
+    append(k, v) { this.l.push([String(k), v]); }
+    set(k, v) { this.delete(k); this.append(k, v); }
+    get(k) { var e = this.l.find(function (x) { return x[0] === k; }); return e ? e[1] : null; }
+    getAll(k) { return this.l.filter(function (x) { return x[0] === k; }).map(function (x) { return x[1]; }); }
+    has(k) { return this.l.some(function (x) { return x[0] === k; }); }
+    delete(k) { this.l = this.l.filter(function (x) { return x[0] !== k; }); }
+    entries() { return this.l[Symbol.iterator](); }
+    [Symbol.iterator]() { return this.entries(); }
+  };
+  if (g.URL && !g.URL.createObjectURL) { g.URL.createObjectURL = function () { return "blob:null/" + Math.random().toString(16).slice(2); }; g.URL.revokeObjectURL = function () {}; }
+
+  // crypto: random values only (no digest/subtle)
+  g.crypto = g.crypto || {
+    getRandomValues: function (a) { for (var i = 0; i < a.length; i++) a[i] = Math.floor(Math.random() * Math.pow(2, 8 * a.BYTES_PER_ELEMENT)); return a; },
+    randomUUID: function () { return "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx".replace(/[xy]/g, function (c) { var r = Math.random() * 16 | 0; return (c === "x" ? r : (r & 3) | 8).toString(16); }); },
   };
   g.Response = g.Response || class {
     constructor(body, init) {
@@ -201,6 +238,7 @@
     async text() { return typeof this._b === "string" ? this._b : new g.TextDecoder().decode(this._b); }
     async json() { return JSON.parse(await this.text()); }
     async arrayBuffer() { var u = typeof this._b === "string" ? new g.TextEncoder().encode(this._b) : this._b; return u.buffer; }
+    async blob() { return new g.Blob([this._b], { type: this.headers.get("content-type") || "" }); }
     clone() { return new g.Response(this._b, this); }
     get body() {
       var b = this._b;
@@ -216,5 +254,33 @@
     return __host.fetch(String((input && input.url) || input), (init && init.method) || "GET")
       .then(function (j) { return JSON.parse(j); })
       .then(function (r) { return new g.Response(r.body, { status: r.status, headers: r.headers, url: r.url }); });
+  };
+
+  // XMLHttpRequest on top of fetch (axios and older libraries)
+  g.XMLHttpRequest = g.XMLHttpRequest || class {
+    constructor() { this.readyState = 0; this.status = 0; this.statusText = ""; this.responseText = ""; this.response = null; this.responseType = ""; this.l = {}; this.h = {}; }
+    open(m, u) { this.m = m; this.u = u; this.set(1); }
+    setRequestHeader() {}
+    getResponseHeader(k) { return this.h[String(k).toLowerCase()] == null ? null : this.h[String(k).toLowerCase()]; }
+    getAllResponseHeaders() { var h = this.h; return Object.keys(h).map(function (k) { return k + ": " + h[k]; }).join("\r\n"); }
+    addEventListener(t, f) { (this.l[t] = this.l[t] || []).push(f); }
+    removeEventListener(t, f) { this.l[t] = (this.l[t] || []).filter(function (x) { return x !== f; }); }
+    set(n) { this.readyState = n; this.emit("readystatechange"); }
+    emit(t) {
+      var e = { type: t, target: this }, h = this["on" + t];
+      if (typeof h === "function") h.call(this, e);
+      (this.l[t] || []).forEach(function (f) { f.call(this, e); }, this);
+    }
+    send() {
+      var x = this;
+      g.fetch(new g.URL(x.u, g.location.href).href, { method: x.m }).then(function (r) {
+        x.status = r.status; x.statusText = r.statusText; r.headers.forEach(function (v, k) { x.h[k] = v; });
+        return r.text();
+      }).then(function (t) {
+        x.responseText = t; x.response = x.responseType === "json" ? JSON.parse(t) : t;
+        x.set(4); x.emit("load"); x.emit("loadend");
+      }, function () { x.set(4); x.emit("error"); x.emit("loadend"); });
+    }
+    abort() {}
   };
 })(globalThis);

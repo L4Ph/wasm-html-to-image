@@ -154,3 +154,81 @@ describe("javascript option, QuickJS engine: engine choice and reuse", () => {
     expect(String(out.value)).toContain(">undefined,function<"); // QuickJS has no `process`; jsdom would say "object"
   });
 });
+
+describe("javascript option, QuickJS engine: browser APIs that apps use", () => {
+  let server: Server;
+  let base = "";
+  beforeAll(async () => {
+    server = createServer((req, res) => {
+      if (req.url === "/api.json") {
+        res.setHeader("content-type", "application/json");
+        res.end('{"a":42}');
+      } else if (req.url === "/bin") res.end(Buffer.from([1, 2, 3, 4, 5]));
+      else res.end("");
+    }).listen(0);
+    await new Promise((r) => server.once("listening", r));
+    base = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
+  });
+  afterAll(() => {
+    server.close();
+  });
+
+  it("fetch: json, arrayBuffer, blob; XMLHttpRequest on top of it", async () => {
+    const out = await runPageScriptsQuickJS(
+      {
+        baseUrl: base,
+        html: page(
+          "",
+          `(async () => {
+             const j = await (await fetch("/api.json")).json();
+             const n = (await (await fetch("/bin")).arrayBuffer()).byteLength;
+             const b = (await (await fetch("/bin")).blob()).size;
+             const x = await new Promise((r) => { const q = new XMLHttpRequest(); q.open("GET", "/api.json"); q.onload = () => r(q.status + ":" + JSON.parse(q.responseText).a); q.send(); });
+             document.body.setAttribute("data-r", [j.a, n, b, x].join(","));
+           })();`,
+        ),
+      },
+      { settleMs: 500 },
+    );
+    expect(out.html).toContain('data-r="42,5,5,200:42"');
+  });
+
+  it("history.pushState moves the location; storage and readyState behave", async () => {
+    const out = await runPageScriptsQuickJS(
+      {
+        baseUrl: "http://h.test/",
+        html: page(
+          "",
+          `history.pushState({}, "", "/foo?y=2#h");
+           localStorage.setItem("k", "v"); sessionStorage.setItem("s", "w");
+           const states = [document.readyState];
+           document.addEventListener("DOMContentLoaded", () => states.push(document.readyState));
+           window.addEventListener("load", () => { states.push(document.readyState);
+             document.body.setAttribute("data-r", [location.pathname + location.search + location.hash, localStorage.getItem("k"), localStorage.getItem("s"), sessionStorage.getItem("s"), states.join(">")].join("|")); });`,
+        ),
+      },
+      { settleMs: 50 },
+    );
+    expect(out.html).toContain('data-r="/foo?y=2#h|v||w|loading>interactive>complete"');
+  });
+
+  it("has crypto, customElements, MutationObserver and Image", async () => {
+    const out = await runPageScriptsQuickJS(
+      {
+        html: page(
+          "",
+          `class A extends HTMLElement { connectedCallback() { this.textContent = "hi"; } }
+           customElements.define("x-a", A);
+           const e = document.createElement("x-a"); document.body.appendChild(e);
+           const uuid = crypto.randomUUID(), arr = crypto.getRandomValues(new Uint8Array(4));
+           const mo = new MutationObserver((m) => document.body.setAttribute("data-mo", String(m.length)));
+           mo.observe(document.body, { childList: true }); document.body.appendChild(document.createElement("i"));
+           document.body.setAttribute("data-r", [e.textContent, /^[0-9a-f-]{36}$/.test(uuid), arr.length, new Image(3, 4).getAttribute("width")].join(","));`,
+        ),
+      },
+      { settleMs: 50 },
+    );
+    expect(out.html).toContain('data-r="hi,true,4,3"');
+    expect(out.html).toContain('data-mo="1"');
+  });
+});
