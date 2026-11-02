@@ -109,6 +109,9 @@ try {
 }
 ```
 
+- `eval(fn, ...args)` also takes a function and JSON arguments (`dom.eval((sel) => document.querySelectorAll(sel).length, "a")`). The function travels as source text, so it cannot use variables from its surroundings.
+- `click(selector)`, `type(selector, text)` (sets `value`, fires `input` and `change`) and `waitForSelector(selector)` drive the page and wait for it. They return `false` when nothing matched.
+- `expose(name, fn)` makes a host function callable from the page as `await window[name](...args)`. Arguments and result travel as JSON; a throw becomes a rejection with the same message.
 - `eval(code)` runs code in the page's global scope and returns the result as JSON. A promise is awaited, and what the code throws becomes an `Error`. A DOM node cannot be returned: return what you read from it. Calls run one after another.
 - `settle(ms?)` lets the page's timers and fetches run. The page's clock runs only during `eval()` / `settle()`, not in between.
 - `serialize()` is the current HTML; `toOptions(options)` gives render options you can pass to `render()` as they are.

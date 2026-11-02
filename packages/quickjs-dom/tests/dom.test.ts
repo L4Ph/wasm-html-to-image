@@ -633,3 +633,69 @@ describe("createDOM: observers, media queries and computed style", () => {
     }
   });
 });
+
+describe("createDOM: eval with arguments, and helpers to drive the page", () => {
+  it("eval(fn, ...args) passes JSON arguments; a string takes none", async () => {
+    const dom = await createDOM({ html: '<ul><li class="a">1</li><li class="a">2</li><li>3</li></ul>' }, { settleMs: 0 });
+    try {
+      expect(await dom.eval((sel: string) => document.querySelectorAll(sel).length, "li.a")).toBe(2);
+      expect(await dom.eval((a: number, b: { x: string }) => a + b.x, 1, { x: "y" })).toBe("1y");
+      expect(await dom.eval(async (ms: number) => { await new Promise((r) => setTimeout(r, ms)); return "slept"; }, 10)).toBe("slept");
+      expect(() => dom.eval("1", 2 as never)).toThrow(TypeError);
+      const count: number = await dom.eval<number>("document.querySelectorAll('li').length");
+      expect(count).toBe(3);
+    } finally {
+      dom.close();
+    }
+  });
+
+  it("click(), type() and waitForSelector() drive the page and fire its handlers", async () => {
+    const html =
+      '<!doctype html><body><input id="name"><button id="go">go</button><div id="out"></div><script>' +
+      'var input = document.getElementById("name");' +
+      'input.addEventListener("input", function () { document.getElementById("out").setAttribute("data-typed", input.value); });' +
+      'document.getElementById("go").addEventListener("click", function () { setTimeout(function () { var p = document.createElement("p"); p.id = "later"; p.textContent = "hello " + input.value; document.body.appendChild(p); }, 30); });' +
+      "</script></body>";
+    const dom = await createDOM({ html }, { settleMs: 0, timeout: 2000 });
+    try {
+      expect(await dom.type("#name", "Ada")).toBe(true);
+      expect(await dom.eval("document.getElementById('out').getAttribute('data-typed')")).toBe("Ada");
+      expect(await dom.waitForSelector("#later")).toBe(false); // not yet, and a short wait would not be enough
+    } finally {
+      dom.close();
+    }
+    const dom2 = await createDOM({ html }, { settleMs: 0, timeout: 2000 });
+    try {
+      await dom2.type("#name", "Ada");
+      expect(await dom2.click("#go")).toBe(true);
+      expect(await dom2.waitForSelector("#later")).toBe(true);
+      expect(await dom2.eval("document.getElementById('later').textContent")).toBe("hello Ada");
+      expect(await dom2.click("#missing")).toBe(false);
+      expect(await dom2.type("#missing", "x")).toBe(false);
+    } finally {
+      dom2.close();
+    }
+  });
+
+  it("expose() makes a host function callable from the page, as a promise", async () => {
+    const dom = await createDOM({ html: "<p>x</p>" }, { settleMs: 0 });
+    try {
+      const calls: unknown[][] = [];
+      dom.expose("hostAdd", (a: number, b: number) => (calls.push([a, b]), a + b));
+      dom.expose("hostSlow", async (s: string) => {
+        await new Promise((r) => setTimeout(r, 20));
+        return { echoed: s.toUpperCase() };
+      });
+      dom.expose("hostFail", () => {
+        throw new Error("nope");
+      });
+      expect(await dom.eval("hostAdd(2, 3)")).toBe(5);
+      expect(calls).toEqual([[2, 3]]);
+      expect(await dom.eval("hostSlow('abc')")).toEqual({ echoed: "ABC" });
+      expect(await dom.eval("hostFail().then(() => 'no', (e) => e.message)")).toBe("nope");
+      expect(await dom.eval("typeof hostAdd(1, 1).then")).toBe("function");
+    } finally {
+      dom.close();
+    }
+  });
+});

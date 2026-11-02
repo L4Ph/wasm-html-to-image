@@ -131,7 +131,25 @@ export interface QuickJSDOM {
    * `fetch(...).then((r) => r.text())` works. A DOM node cannot be returned: return what you read from it
    * (`document.querySelector("h1").textContent`). Throws what the code threw. Calls run one after another.
    */
-  eval(code: string): Promise<unknown>;
+  eval<T = unknown>(code: string): Promise<T>;
+  /**
+   * Run a function in the page, with JSON-able arguments: `dom.eval((sel) => document.querySelectorAll(sel).length, "a")`.
+   * The function is sent as its source text, so it must not use anything from the surrounding scope (and a transpiler
+   * must leave its body alone: no helpers injected from the outside, no renamed globals).
+   */
+  eval<T = unknown>(fn: (...args: any[]) => T | Promise<T>, ...args: unknown[]): Promise<T>;
+  /** Wait (up to `timeout`) until a CSS selector matches something; false when it never did. */
+  waitForSelector(selector: string): Promise<boolean>;
+  /** Dispatch a bubbling `click` on the first match of the selector. False when nothing matched. */
+  click(selector: string): Promise<boolean>;
+  /** Set the `value` of the first match (or its text, for an element without one) and fire `input` and `change`. False when nothing matched. */
+  type(selector: string, text: string): Promise<boolean>;
+  /**
+   * Make a function of yours callable from the page as `await window[name](...args)`. Arguments and the result
+   * travel as JSON; a throw becomes a rejection with the same message. The page's call counts as a request in flight, so
+   * `settle()` waits for it.
+   */
+  expose(name: string, fn: (...args: any[]) => unknown): void;
   /** Let the page's timers and fetches run for `ms` (default `settleMs`) and until its fetches are done. */
   settle(ms?: number): Promise<void>;
   /** The document as it is now, as HTML. */
@@ -226,6 +244,7 @@ export async function createDOM(
 
   let closed = false;
   const timers: { id: number; at: number }[] = [];
+  const exposed = new Map<string, (...args: any[]) => unknown>();
   const inflight = new Set<Promise<void>>();
   const debug = typeof process !== "undefined" && !!process.env?.WASM_HTML_TO_IMAGE_DEBUG;
 
@@ -262,17 +281,36 @@ export async function createDOM(
           vm.settle(id, ok, text);
           pump();
         };
-        const task: Promise<void> = loggedFetch(new URL(target, baseUrl), { method })
-          .then(async (r) => ({ status: r.status, url: r.url, headers: Object.fromEntries(r.headers), body: toBase64(await guard.bytes(r)) }))
-          .then(
-            (o) => settle(true, JSON.stringify(o)),
-            (e) => settle(false, String(e)),
-          )
-          .finally(() => {
+        const track = (work: Promise<void>) => {
+          const task: Promise<void> = work.finally(() => {
             inflight.delete(task);
             pump();
           });
-        inflight.add(task);
+          inflight.add(task);
+        };
+        // expose(): the page's call arrives as a fetch of "expose:<name>" whose "method" is the JSON arguments
+        if (target.startsWith("expose:")) {
+          const fn = exposed.get(target.slice("expose:".length));
+          track(
+            (async () => {
+              try {
+                if (!fn) throw new Error(`${target.slice("expose:".length)} is not exposed`);
+                settle(true, JSON.stringify({ v: await fn(...(JSON.parse(method) as unknown[])) }));
+              } catch (error) {
+                settle(false, error instanceof Error ? error.message : String(error));
+              }
+            })(),
+          );
+          return;
+        }
+        track(
+          loggedFetch(new URL(target, baseUrl), { method })
+            .then(async (r) => ({ status: r.status, url: r.url, headers: Object.fromEntries(r.headers), body: toBase64(await guard.bytes(r)) }))
+            .then(
+              (o) => settle(true, JSON.stringify(o)),
+              (e) => settle(false, String(e)),
+            ),
+        );
       },
       module(kind, base, name) {
         if (kind === 0) return resolveModule(base, name);
@@ -435,13 +473,53 @@ export async function createDOM(
       }
     };
 
-    return {
+    const dom: QuickJSDOM = {
       baseUrl,
       logs,
-      eval(code: string) {
-        const next = queue.then(() => evaluate(code));
+      eval(code: string | ((...args: any[]) => unknown), ...args: unknown[]) {
+        let source: string;
+        if (typeof code === "function") source = `(${code.toString()})(...${JSON.stringify(args)})`;
+        else if (args.length) throw new TypeError("eval(code, ...args): arguments need a function; a string of code takes none");
+        else source = code;
+        const next = queue.then(() => evaluate(source));
         queue = next.catch(() => undefined);
-        return next;
+        return next as Promise<any>;
+      },
+      async waitForSelector(selector: string) {
+        if (closed) throw new Error("The DOM is closed.");
+        begin();
+        await wait(0, selector);
+        return !!call(`__edgeHas(${JSON.stringify(selector)})`);
+      },
+      click(selector: string) {
+        return dom.eval((s: string) => {
+          const el = document.querySelector(s);
+          if (!el) return false;
+          el.dispatchEvent(typeof MouseEvent === "function" ? new MouseEvent("click", { bubbles: true, cancelable: true }) : new Event("click", { bubbles: true, cancelable: true }));
+          return true;
+        }, selector);
+      },
+      type(selector: string, text: string) {
+        return dom.eval(
+          (s: string, t: string) => {
+            const el = document.querySelector(s) as (HTMLElement & { value?: string }) | null;
+            if (!el) return false;
+            if ("value" in el) el.value = t;
+            else el.textContent = t;
+            for (const name of ["input", "change"]) el.dispatchEvent(new Event(name, { bubbles: true }));
+            return true;
+          },
+          selector,
+          text,
+        );
+      },
+      expose(name: string, fn: (...args: any[]) => unknown) {
+        if (closed) throw new Error("The DOM is closed.");
+        exposed.set(name, fn);
+        run(
+          `globalThis[${JSON.stringify(name)}] = (...args) => __host.fetch("expose:" + ${JSON.stringify(name)}, JSON.stringify(args)).then((t) => JSON.parse(t).v, (e) => { throw new Error(String(e)); });`,
+          "expose.js",
+        );
       },
       async settle(ms?: number) {
         if (closed) throw new Error("The DOM is closed.");
@@ -467,6 +545,7 @@ export async function createDOM(
       },
       close,
     };
+    return dom;
   } catch (error) {
     close();
     throw error;

@@ -139,6 +139,9 @@ try {
 }
 ```
 
+- `eval(fn, ...args)`: 関数と JSON の引数でも呼べます（`dom.eval((sel) => document.querySelectorAll(sel).length, "a")`）。関数はソースの文字列として渡るので、外側の変数は使えません。
+- `click(selector)` / `type(selector, text)`（`value` を入れて `input` と `change` を発火）/ `waitForSelector(selector)`: ページを操作して待つための補助です。要素がなければ `false` を返します。
+- `expose(name, fn)`: ホスト側の関数を `await window[name](...args)` としてページから呼べるようにします。引数と結果は JSON で、例外は同じメッセージの拒否になります。
 - `eval(code)`: ページのグローバルでコードを実行し、結果を JSON で返します。Promise は解決まで待ち、投げた例外はそのまま `Error` になります。DOM ノードは返せないので、読み取った値を返してください。呼び出しは順番に実行されます。
 - `settle(ms?)`: ページのタイマーと `fetch` を進めます。ページの時計は `eval()` / `settle()` の間だけ進み、呼び出しの間は止まっています。
 - `serialize()` は現在の HTML、`toOptions(options)` は `render()` にそのまま渡せるオプションを返します。

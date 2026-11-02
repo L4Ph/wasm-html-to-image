@@ -17,6 +17,7 @@ try {
 ```
 
 - The DOM lives inside QuickJS, so you reach it through `eval()` and JSON values rather than a live `window`. A DOM node cannot be returned: return what you read from it.
+- `eval` also takes a function and JSON arguments (`dom.eval((sel) => document.querySelectorAll(sel).length, "a")`); `click`, `type` and `waitForSelector` drive the page; `expose(name, fn)` lets the page call a function of yours as a promise.
 - The page's clock runs only while `eval()` / `settle()` waits. `timeout` (default 10 s) counts per call.
 - Scripts are run in document order, including the ones scripts add, `type="module"` scripts (their literal `import`s are fetched up front) and `fetch` / `XMLHttpRequest` (binary safe), `history.pushState`, storage, `MutationObserver`, `customElements` and the like. React / Next.js clients hydrate and run their effects.
 - Limits: no layout of its own (`getBoundingClientRect` returns 0 until you call `setLayout()`; `wasm-html-to-image` has `measureLayout()` that fills it from its layout engine), no canvas, a smaller DOM than jsdom's, and QuickJS is an interpreter, so heavy pages are slower.
