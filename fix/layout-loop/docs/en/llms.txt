@@ -6,6 +6,8 @@
 ## Core Capabilities
 - **HTML to Image**: Render HTML strings, arrays (multi-page PDF), or remote URLs directly to PNG, JPEG, WebP, AVIF, RAW, ThumbHash, SVG, or vector PDF.
 - **Image Optimization & Conversion**: Direct image-to-image resizing, cropping, and format re-encoding (e.g., JPEG to WebP/AVIF, GIF to animated WebP) without HTML layout overhead.
+- **Mermaid Diagrams**: `renderMermaid(source, { format, theme })` / `render({ mermaid: { source } })` draw flowchart, sequence, state, class, ER, gantt, pie, quadrant, mindmap and many more Mermaid diagrams as SVG or any image format, without mermaid.js or a browser.
+- **Markdown to PDF / Image**: `wasm-html-to-image/markdown` turns GitHub-flavoured Markdown into a styled page; with a template (report, book, paper, ...), cover, table of contents, bookmarks, running header/footer, code highlighting, KaTeX math and Mermaid diagrams it becomes a PDF. The CLI does it in one command (`npx wasm-html-to-image report.md -o report.pdf`).
 - **Universal Runtime**: Runs seamlessly on Node.js (>=20), Cloudflare Workers, Vercel Edge Runtime, Browsers, Deno, and CLI.
 - **Zero Heavy Dependencies**: NO Puppeteer, Chromium, Playwright, or node-canvas required.
 
@@ -32,7 +34,10 @@ Choose the appropriate import based on runtime and use case:
 | `wasm-html-to-image/workers` | Node.js, Browsers (on workerd: no pool, falls back to direct execution) | Multi-threaded worker pool for high-throughput batch rendering. |
 | `wasm-html-to-image/react` | React (JSX) | Directly render React element trees. |
 | `wasm-html-to-image/preact` | Preact (JSX) | Directly render Preact element trees. |
-| `wasm-html-to-image/tailwind` | Tailwind CSS | Inlines UnoCSS / Tailwind utility classes into inline CSS styles. |
+| `wasm-html-to-image/tailwind` | Tailwind CSS | UnoCSS / Tailwind v4 utilities as CSS (`createCSS`), `tw="..."` → `class` (`convertTw`), `@theme` / `@apply` (`tailwind`). |
+| `wasm-html-to-image/markdown` | Any (pure JS) | Markdown to a styled page / PDF document: `markdownToHtml`, `markdownToDocument`, `listTemplates`, `defineTemplate`. |
+| `wasm-html-to-image/markdown-math` | Any | `katexMath()` renderer for `$…$` / `$$…$$` in Markdown (needs the optional dependency `katex`). |
+| `wasm-html-to-image/javascript` | Any (made for Workers) | `applyJavaScript(options)`: the page's scripts run in QuickJS (WebAssembly) on linkedom; the wasm is chosen for the runtime automatically (nothing to import on Workers). |
 | `wasm-html-to-image/index` | High-throughput servers | Manual WASM module reuse via `loadHtmlToImageModule()` and `htmlToImage()`. |
 
 ---
@@ -181,6 +186,69 @@ app.get("/ogp", async (req, res) => {
 
 ---
 
+### 7. Mermaid Diagrams (no browser, no DOM, no mermaid.js)
+
+The engine parses and draws Mermaid itself (own layout, SVG output). Use `renderMermaid` or `render({ mermaid })`:
+
+```typescript
+import { render, renderMermaid } from "wasm-html-to-image";
+
+// SVG string by default; sized to the diagram plus `padding` (16 px)
+const { data: svg } = await renderMermaid("graph LR\n  A --> B");
+
+// any other format gives bytes; theme / mode / accent / background / padding are options
+const { data: png } = await renderMermaid("flowchart TD\n  A --> B", { format: "png", theme: "dark" });
+
+// the same through render() on every entry (`edge-light` has no renderMermaid, so use this there: render({ ... }, wasm))
+const webp = await render({ mermaid: { source: "sequenceDiagram\n  A->>B: hi", theme: "nord" }, format: "webp" });
+```
+
+- **Options** (`mermaid: { source, ... }` or the second argument of `renderMermaid`): `theme` (`light`, `dark`, `neutral`, `forest`, `nord`, `dracula`, `solarized-light`, `solarized-dark`, `rose-pine`, `sepia`), `padding`, `background`, `accent`, `mode` (`"strict"` default, `"compat"`, `"recover"` repairs a misspelt keyword), `directives` (honour `%%{init}%%` and frontmatter `config:`), `onWarning` (`MERMAID_ERROR` / `MERMAID_RECOVERED`), `maxLines`, `maxSourceBytes`. `width` and `format` are the render options (`width` defaults to the diagram's width). Other render options (`fontMap`, `limits`, `onLog`, ...) apply as for a page.
+- **Diagram types**: flowchart / graph (subgraphs, swimlane), sequence, state, class, ER, requirement, gantt, pie, xychart, quadrant, journey, timeline, mindmap, kanban, gitGraph, block, C4, packet, sankey, treemap, radar, architecture, and more. An unsupported or broken source is drawn as a one-line error box (never throws; `onWarning` reports it).
+- **Markdown / CLI**: ` ```mermaid ` fences in Markdown input are drawn as diagrams; the CLI takes a `.mmd` / `.mermaid` file or `--mermaid` (`--mermaid-theme`, `--mermaid-mode`, `--mermaid-directives`).
+- **Inside HTML**: `<div class="mermaid">…source…</div>` or `<pre class="mermaid">…</pre>` in the page passed to `render({ value })` is drawn as a diagram, laid out as a block among the other elements (this is what `renderMermaid` itself builds). Configure it with CSS on the element: `--mermaid-theme: nord;` (a theme above), `--mermaid-accent: #f60;`, `--mermaid-mode: recover;`, `--mermaid-directives: on;`, `--mermaid-max-lines`, `--mermaid-max-bytes`; without a theme or a `--mermaid-bg` / `--mermaid-surface` / `--mermaid-fg` palette, a diagram on a dark page (the nearest opaque background is dark; with none, the text is light) takes the `dark` theme, otherwise the colours are derived from the element's `color`. Write the source as text (escape `<` and `&`).
+
+### 8. Markdown to PDF / Image, and the CLI
+
+```typescript
+import { writeFile } from "node:fs/promises";
+import { render } from "wasm-html-to-image";
+import { markdownToDocument, markdownToHtml, listTemplates } from "wasm-html-to-image/markdown";
+
+const md = `---
+title: Quarterly Report
+author: Taro Yamada
+template: report
+accent: "#2563eb"
+stamp: Confidential
+---
+
+# Summary
+
+Sales rose **15.2%**. A diagram works too:
+
+\`\`\`mermaid
+graph LR
+  A --> B
+\`\`\`
+`;
+
+// PDF: `paged: true` for page margins, then spread `renderOptions` (header, footer, title, author, background)
+const { html, renderOptions } = markdownToDocument(md, { paged: true });
+const { data } = await render({ value: html, format: "pdf", ...renderOptions });
+await writeFile("report.pdf", data);
+
+// a single image: markdownToHtml
+const png = await render({ value: markdownToHtml("# Hello", { theme: "dark", maxWidth: 800 }), width: 900, format: "png" });
+```
+
+- **Templates**: `default`, `report`, `proposal`, `book`, `paper`, `compact`, `manual`, `minutes`, `letter`, `slides`, `invoice` (`listTemplates()`); `defineTemplate({ extends: "report", ... })` for your own. Pick one with the `template` option or the front matter `template:`.
+- **Front matter** (YAML): `title`, `subtitle`, `author`, `date`, `template`, `accent`, `font`, `page_size`, `margin`, `orientation`, `cover`, `stamp`, `header` / `footer` (`{{pageNumber}}`, `{{totalPages}}`, `{{title}}`, `{{chapter}}`, ...), `toc`, `toc_depth`, `numbering`, `footnotes`, `mermaid_theme`, ... Precedence: template defaults < front matter < `settings` / options.
+- **Options** (`markdownToDocument(md, options)`): `template`, `settings`, `theme` (`"light"` | `"dark"`), `css`, `stylesheet`, `paged` (PDF), `padding`, `maxWidth`, `title`, `toc` (`false` | `{ depth, title }`; on by default for PDF), `highlight`, `mermaid` (`false` keeps code blocks), `frontMatter`, `math` (pass `katexMath()` from `wasm-html-to-image/markdown-math`).
+- **PDF extras** (render options): bookmarks are built from the headings (`pdfOutline: false` to drop them); `pdfTitle`, `pdfAuthor`, `pdfSubject`, `pdfKeywords`, `pdfCreator`, `pdfProducer`, `pdfMargin`, `pdfHeader`, `pdfFooter` (`{{pageNumber}}`, `{{totalPages}}`), `pdfBackground`, `pdfSkipRunning`; `colorSpace: "cmyk"` for print.
+- **Markdown syntax**: GFM, callouts (`> [!NOTE]`), figure captions from image titles, `<!-- pagebreak -->`, footnotes, highlighted code, Mermaid fences, `$…$` math.
+- **CLI** (`npx wasm-html-to-image <input> -o <output>`): the input is an HTML file, a URL, an image, Markdown (`.md`, or `--markdown` for inline text / stdin), or Mermaid (`.mmd`, or `--mermaid`); the format comes from the `-o` extension or `-f`. Common flags: `-w/--width`, `-h/--height`, `-q/--quality`, `--scale`, `--dpi`, `--color-space`, `--base-url`, `--font <path|Family=path>` (repeatable), `--animation <ms>` (`--animation-fps`, `--animation-loop`), `--js` / `--js-wait` (run page scripts in jsdom; trusted pages only). Markdown / PDF flags: `--template <name|file>`, `--list-templates`, `--page-size`, `--accent`, `--body-font`, `--stamp`, `--cover` / `--no-cover`, `--no-toc`, `--toc-depth`, `--no-outline`, `--no-math`, `--markdown-theme`, `--markdown-css`.
+
 ## Options Reference (`RenderOptions`)
 
 | Option | Type | Default | Description |
@@ -197,8 +265,24 @@ app.get("/ogp", async (req, res) => {
 | `fallbackFonts` | `(Uint8Array \| Buffer)[]` | - | Inlined custom font binaries for air-gapped / offline rendering |
 | `fonts` | `Record<string, Uint8Array \| Buffer>` | - | Font family mapping dictionary |
 | `timeout` | `number` | `10000` | Timeout in milliseconds for resource loading |
-
-Additional extension keys exist (e.g. `baseUrl`, `fit`, `animation`); see the type definitions for the full list.
+| `baseUrl` | `string` | - | Base URL for resolving relative resources |
+| `fit` | `"contain" \| "cover" \| "fill"` | - | Resize strategy (with `width` / `height`) |
+| `colorSpace` / `dpi` | `"srgb" \| "cmyk"` / `number` | `"srgb"` / `96 × scale` | `cmyk` output for `pdf` / `tiff`; resolution written into `tiff` |
+| `animation` | `{ duration, fps?, loop? }` | - | Sample `@keyframes` into animated WebP / APNG / GIF |
+| `css` | `string` | - | Extra CSS added to the page |
+| `mediaType` | `"screen" \| "print"` | `"screen"` | Media type for `@media` |
+| `textToPaths` | `boolean` | `true` | Outline text as paths in SVG output |
+| `userAgent` | `string` | Chrome's | User-Agent for resource fetches |
+| `javascript` | `boolean \| { timeout?, settleMs?, waitFor?, engine? }` | - | Run the page's scripts first, in jsdom (Node only, optional dependency `jsdom`) or with `engine: "quickjs"` in QuickJS on WebAssembly (also Workers, via `wasm-html-to-image/javascript`: `applyJavaScript(options, { quickjsWasm })` with `import quickjsWasm from "wasm-html-to-image/quickjs.wasm"`); trusted pages only |
+| `limits` | `RenderLimits` | - | Safety limits for untrusted HTML: `timeoutMs`, `maxResourceCount`, `maxTotalResourceBytes`, `allowedProtocols`, `confineFilesToBaseUrl`, ... |
+| `resolveResource` | `(url) => Promise<Uint8Array \| null>` | - | Intercept every resource fetch (return bytes, or `null` to skip) |
+| `logLevel` / `onLog` | `LogLevel` / `(level, message) => void` | silent | Log gate and receiver |
+| `diagnostics` / `onDiagnostics` | `boolean` / `(report) => void` | - | Collect a full diagnostics report |
+| `pdfTitle` `pdfAuthor` `pdfSubject` `pdfKeywords` `pdfCreator` `pdfProducer` | `string` | - | PDF metadata |
+| `pdfOutline` | `boolean` | `true` | PDF bookmarks from `h1`–`h6` |
+| `pdfMargin` / `pdfHeader` / `pdfFooter` | `{ top?, right?, bottom?, left? }` / `string` | - | Page margins; running header / footer HTML (`{{pageNumber}}`, `{{totalPages}}`) |
+| `pdfBackground` / `pdfSkipRunning` | `string` / `number` | - / `0` | Whole-page background colour; leading pages without header and footer |
+| `mermaid` | `{ source, ... }` | - | Draw a Mermaid diagram instead of `value` (section 7) |
 
 ---
 
@@ -212,7 +296,7 @@ The rendering engine couples **litehtml** (HTML/CSS layout) and **Google Skia** 
   - Container: `display: flex | inline-flex`, `flex-direction` (`row`, `column`, `row-reverse`, `column-reverse`), `flex-wrap` (`nowrap`, `wrap`, `wrap-reverse`), `flex-flow`, `justify-content` (`flex-start`, `flex-end`, `center`, `space-between`, `space-around`, `space-evenly`), `align-items` (`stretch`, `flex-start`, `flex-end`, `center`, `baseline`), `align-content`, `gap`, `row-gap`, `column-gap`.
   - Items: `flex`, `flex-grow`, `flex-shrink`, `flex-basis`, `align-self`, `order`.
 - **Grid Layout**:
-  - Container: `display: grid | inline-grid`, `grid-template-columns`, `grid-template-rows`, `gap`, `row-gap`, `column-gap`, `place-items`, `place-content`, `justify-items`, `align-items`.
+  - Container: `display: grid | inline-grid`, `grid-template-columns`, `grid-template-rows`, the `grid-template` / `grid` shorthands (`<rows> / <columns>`, template strings, `auto-flow [dense]`), `gap`, `row-gap`, `column-gap`, `place-items`, `place-content`, `justify-items`, `align-items`.
   - Items: `grid-column`, `grid-row`, `grid-column-start`, `grid-column-end`, `grid-row-start`, `grid-row-end`, `place-self`, `justify-self`, `align-self`.
 - **Positioning**: `position: static | relative | absolute | fixed`, `top`, `right`, `bottom`, `left`, `inset`, `z-index`.
 - **Box Dimensions & Margins**: `width`, `height`, `min-width`, `min-height`, `max-width`, `max-height`, `aspect-ratio`, `box-sizing` (`border-box`, `content-box`), `margin`, `padding`.
@@ -220,14 +304,18 @@ The rendering engine couples **litehtml** (HTML/CSS layout) and **Google Skia** 
 - **Floats & Clear**: `float: left | right | none`, `clear: left | right | both | none`.
 
 ### 2. Typography & Text Shaping
-- **Fonts**: `font-family`, `font-size`, `font-weight` (100–900, `bold`, `normal`), `font-style` (`italic`, `normal`), `font-variant`, `font-variant-*` longhands, `font-feature-settings`, `font-kerning` (`auto`, `normal`, `none`), `font-variation-settings` (variable font axes), `font-stretch` (keywords and percentages), `line-height`, `letter-spacing`, `word-spacing`.
+- **Fonts**: `font-family`, `font-size`, `font-weight` (100–900, `bold`, `normal`), `font-style` (`italic`, `normal`), `font-variant`, `font-variant-*` longhands, `font-feature-settings`, `font-kerning` (`auto`, `normal`, `none`), `font-variation-settings` (variable font axes), `font-stretch` (keywords and percentages), `line-height`, `letter-spacing`, `word-spacing`. `font-optical-sizing: auto | none` (auto drives the `opsz` axis from the size; an explicit `opsz` in `font-variation-settings` wins), `font-synthesis` + longhands (`none` disables synthetic bold / italic).
 - **Text Alignment & Flow**: `text-align` (`left`, `right`, `center`, `justify`), `vertical-align`, `text-transform` (`uppercase`, `lowercase`, `capitalize`, `none`).
 - **Wrapping & Breaking**: `white-space` (`normal`, `nowrap`, `pre`, `pre-wrap`, `pre-line`), `text-wrap` (`wrap`, `nowrap`, `balance`), `word-break` (`normal`, `break-all`, `keep-all`), `overflow-wrap` (`normal`, `break-word`, `anywhere`).
 - **Ellipsis & Multi-line Clamping**:
   - Single-line: `overflow: hidden; text-overflow: ellipsis; white-space: nowrap;`
   - Multi-line clamp: `-webkit-line-clamp: 2; -webkit-box-orient: vertical; display: -webkit-box; overflow: hidden;` (also supports standard `line-clamp`).
+  - Line breaking & alignment: `line-break: auto | loose | normal | strict | anywhere` (CJK kinsoku strength: `strict` keeps small kana / `ー` off the line start, `loose` lets lines start with iteration marks), `text-align-last`, `text-justify: auto | none | inter-word | inter-character | distribute`, `tab-size: <number> | <length>` (tab stops measured from the line start; `white-space: pre*`).
+  - Hyphenation: soft hyphens (`&shy;`) break and show a hyphen at the line end (`hyphens: manual`, default; `none` hides it; `-webkit-hyphens` is an alias); `hyphens: auto` hyphenates English words with a heuristic when `lang="en*"` is set (no dictionary); `hyphenate-character: auto | "<string>"` replaces the hyphen (auto is `-`).
+  - Standard clamp: `max-lines: 2` on any block container (implies `overflow: hidden`); `block-ellipsis: auto | no-ellipsis | "<string>"` replaces the end marker `text-fit: grow | shrink | grow shrink [<percentage limit>]` rescales the font so the widest line fills the container (up to 3 relayout passes).
 - **Text Stroke & Shadow**:
   - Stroke: `-webkit-text-stroke: <width> <color>` (also `-webkit-text-stroke-width`, `-webkit-text-stroke-color`, `-webkit-text-fill-color`).
+  - Stroke joins: `stroke-linejoin: miter | round | bevel` shapes `-webkit-text-stroke` corners (`miter-clip` / `arcs` fall back to `miter`; default stays `round`).
   - Text Shadow: `text-shadow: offset-x offset-y blur-radius color` (multiple comma-separated shadows supported).
   - Text Decoration: `text-decoration` (`underline`, `overline`, `line-through`, `none`, style, color, thickness, `text-underline-offset`, `text-decoration-skip-ink`, `text-underline-position`).
   - Text Emphasis: `text-emphasis` (`style`, `color`, `position`).
@@ -246,10 +334,12 @@ The rendering engine couples **litehtml** (HTML/CSS layout) and **Google Skia** 
 - **Borders & Corners**:
   - `border`, `border-width`, `border-style` (`solid`, `dashed`, `dotted`, `double`, etc.), `border-color`.
   - `border-radius`: all four corners independently (`border-top-left-radius`, etc.), elliptical radii (`Xpx / Ypx`), logical corner properties (`border-start-start-radius`, etc.).
+  - `box-decoration-break: slice | clone` (also `-webkit-` prefixed) applies to block boxes split across PDF pages: `clone` repaints a complete box (all borders, rounded corners, background) for the part on each page; `slice` (default) keeps the single sliced box. Inline boxes broken across lines are not affected.
+  - `corner-shape: round | scoop | bevel | notch | squircle | square | superellipse(<k>)` (1-4 values, top-left first; longhands `corner-top-left-shape` etc.) reshapes the `border-radius` corners of backgrounds, borders (solid, dashed, dotted, double), `box-shadow` and `overflow` clipping. Non-uniform borders on shaped boxes use the same ring fill per side.
   - `border-image`: `source`, `slice`, `width`, `outset`, `repeat`.
   - `outline`, `outline-offset`, `outline-width`, `outline-style`, `outline-color`.
 - **Box Shadows**: `box-shadow: [inset] offset-x offset-y blur spread color` (supports multiple comma-separated shadows).
-- **Clipping**: `clip-path: circle(...) | ellipse(...) | polygon(...) | path("...") | inset(...)`.
+- **Clipping**: `clip-path: circle(...) | ellipse(...) | polygon(...) | path("...") | inset(...)`. `clip-rule: evenodd` (or `polygon(evenodd, ...)`) selects the even-odd fill rule.
 - **Transforms**: `transform: translate(...) rotate(...) scale(...) matrix(...)`, `translate`, `rotate`, `scale`, `transform-origin`.
 - **Filters**:
   - `filter`: `blur(...)`, `drop-shadow(...)`.
@@ -284,18 +374,18 @@ When prompting an AI agent to generate HTML/CSS templates for `wasm-html-to-imag
 
 1. **Explicit Root Dimensions**: Always wrap the template in a root container with fixed pixel dimensions and `box-sizing: border-box;` (e.g. `width: 1200px; height: 630px;` for OGP).
 2. **Prioritize Flexbox or Grid**: Flexbox (`display: flex; flex-direction: column; justify-content: space-between;`) provides the most reliable and predictable visual layout.
-3. **Use Standard Google Fonts**: Simply set `font-family: 'Inter', sans-serif;` or `'Noto Sans JP', sans-serif;`. The library fetches and caches WOFF2 fonts automatically. For air-gapped or edge runtime execution, pass font buffers to `fallbackFonts`.
+3. **Use Standard Google Fonts**: Simply set `font-family: 'Inter', sans-serif;` or `'Noto Sans JP', sans-serif;`. The library fetches and caches WOFF2 fonts automatically; the default `sans-serif` / `serif` (Noto Sans / Serif JP) are variable fonts, so bold is a real weight (override via `fontMap` for fixed-weight URLs). For air-gapped or edge runtime execution, pass font buffers to `fallbackFonts`.
 4. **Use Inline SVGs for Icons**: Embed `<svg>` tags directly into HTML instead of using external icon fonts or canvas scripts.
 5. **Clean Text Truncation**: Use `-webkit-line-clamp: 2; -webkit-box-orient: vertical; display: -webkit-box; overflow: hidden;` for multi-line titles.
 6. **Images**: Remote `<img src="https://...">` works when network access is enabled. For offline, edge-isolated, or instant rendering, embed base64 Data URLs (`data:image/png;base64,...`).
-7. **Tailwind / UnoCSS Support**: When using utility classes, you can pre-compile them to inline CSS using `wasm-html-to-image/tailwind` (`createCSS()`).
+7. **Tailwind / UnoCSS Support**: When using utility classes, you can pre-compile them to CSS using `wasm-html-to-image/tailwind`: `createCSS(html, { css })` returns the utilities, and `tailwind(html, { css })` returns `{ html, css }` with Tailwind v4 `tw="flex gap-2"` rewritten to `class`, `@theme { --color-brand: #f00 }` expanded into `:root` variables (`--color-*` also feed utilities such as `bg-brand`) and `@apply` expanded in `<style>` blocks / `options.css` (unknown or variant utilities are skipped with a warning). Pass both to `render({ value: html, css })`.
 
 ---
 
 ## Limitations & Unsupported Features (Do NOT Use)
 
-1. **NO JavaScript Execution**: `<script>` tags, DOM events (`onclick`, `onload`), and DOM manipulations do NOT run. Always generate fully static HTML markup.
-2. **CSS Animation Is Sampled, Not Live**: `@keyframes` do not play by themselves and `transition` is not evaluated. Passing `animation: { duration, fps, loop }` (CLI: `--animation`) samples `opacity`, `transform` (`translate` / `rotate` / `scale`), and `color` / `background-color` keyframes into an animated WebP. Every other render is a static snapshot.
+1. **No JavaScript by default**: `<script>` tags, DOM events (`onclick`, `onload`), and DOM manipulations do NOT run. Always generate fully static HTML markup. In Node.js, the `javascript` option (CLI `--js`) runs the page's scripts in jsdom and renders the resulting DOM; where `eval` is not allowed (Cloudflare Workers), `wasm-html-to-image/javascript` runs them in QuickJS (WebAssembly) (trusted pages only; scripts that need browser-only APIs or layout measurements will not behave as in a browser).
+2. **CSS Animation Is Sampled, Not Live**: `@keyframes` do not play by themselves and `transition` is not evaluated. Passing `animation: { duration, fps, loop }` (CLI: `--animation`) samples `opacity`, `transform` (`translate` / `rotate` / `scale`), and `color` / `background-color` keyframes into an animated WebP (`format: "webp"`), APNG (`"apng"`) or GIF (`"gif"`, 256-color dithered). Every @keyframes block of the document animates all elements its rule selects, each with its own timing (several animations per element via `animation: a 2s, b 3s` or `animation-name: a, b` are layered, the later one winning on shared properties; `translate`, `translateX` / `translateY`, `rotate` and `scale` are interpolated). Every other render is a static snapshot.
 3. **NO HTML5 Canvas Scripting**: `<canvas>` with `canvas.getContext('2d')` does not execute JavaScript. Use `<svg>` or CSS shapes instead.
 4. **NO Interactive State Styling**: Dynamic states like `:hover`, `:active`, and `:focus` do not trigger.
 5. **NO Browser Web Storage**: `window`, `document`, `localStorage`, `sessionStorage`, and `IndexedDB` are unavailable.
