@@ -1,4 +1,4 @@
-import{n as e}from"./rolldown-runtime-WkwZ5CU-.js";import{c as t,d as n,i as r,o as i,t as a}from"./jsx-runtime-D5uw9fFd.js";import{t as o}from"./useJxlSupport-C8Zb3Ddm.js";var s=e(n(),1),c=[{id:`flowchart`,label:`Flowchart`,group:`Diagrams`,text:`flowchart TD
+import{n as e}from"./rolldown-runtime-WkwZ5CU-.js";import{c as t,d as n,i as r,o as i,t as a}from"./jsx-runtime-CV930wLV.js";import{t as o}from"./useJxlSupport-DECY-I5n.js";var s=e(n(),1),c=[{id:`flowchart`,label:`Flowchart`,group:`Diagrams`,text:`flowchart TD
   start([開始]) --> input[/注文を受け取る/]
   input --> check{在庫あり?}
   check -->|はい| ship[出荷する]
