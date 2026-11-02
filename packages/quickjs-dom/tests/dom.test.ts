@@ -634,6 +634,36 @@ describe("createDOM: observers, media queries and computed style", () => {
   });
 });
 
+describe("createDOM: WebSocket, EventSource and Worker fail the way a dead connection does", () => {
+  it("fires error (and close for a WebSocket) instead of throwing a ReferenceError", async () => {
+    const dom = await createDOM(
+      {
+        html: page(
+          "",
+          `window.seen = [];
+           var ws = new WebSocket("wss://example.com/live");
+           ws.onerror = function () { seen.push("ws.error:" + ws.readyState); };
+           ws.addEventListener("close", function (e) { seen.push("ws.close:" + e.code + ":" + e.wasClean); });
+           var es = new EventSource("/stream");
+           es.onerror = function () { seen.push("es.error:" + es.readyState); };
+           var w = new Worker("/w.js");
+           w.addEventListener("error", function () { seen.push("worker.error"); });
+           w.postMessage(1); w.terminate();
+           try { ws.send("x"); } catch (e) { seen.push("send:" + e.name); }
+           seen.push("states:" + WebSocket.OPEN + ES() + ws.readyState);
+           function ES() { return EventSource.CLOSED; }`,
+        ),
+      },
+      { settleMs: 50 },
+    );
+    expect(await dom.eval("seen")).toEqual(["send:InvalidStateError", "states:120", "ws.error:3", "ws.close:1006:false", "es.error:2", "worker.error"]);
+    expect(dom.logs.filter((l) => l.type === "console").map((l) => (l as { message: string }).message)).toEqual(
+      expect.arrayContaining([expect.stringContaining("WebSocket is not available"), expect.stringContaining("EventSource is not available")]),
+    );
+    dom.close();
+  });
+});
+
 describe("createDOM: eval with arguments, and helpers to drive the page", () => {
   it("eval(fn, ...args) passes JSON arguments; a string takes none", async () => {
     const dom = await createDOM({ html: '<ul><li class="a">1</li><li class="a">2</li><li>3</li></ul>' }, { settleMs: 0 });

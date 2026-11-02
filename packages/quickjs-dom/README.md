@@ -15,7 +15,7 @@ dom.close();
 
 **Good for:** pre-rendering single-page apps to HTML (SEO, OGP, link previews), reading data that a page builds with JavaScript, running DOM code in tests on edge runtimes, and handing a scripted page to an image renderer such as [wasm-html-to-image](https://www.npmjs.com/package/wasm-html-to-image).
 
-**Not a browser:** there is no layout of its own, no canvas, no `WebSocket` or `Worker`, and QuickJS is an interpreter, so very heavy pages are slow. See [What works](#what-works-and-what-does-not).
+**Not a browser:** there is no layout of its own, no canvas, no working `WebSocket` or `Worker`, and QuickJS is an interpreter, so very heavy pages are slow. See [What works](#what-works-and-what-does-not).
 
 ## Install
 
@@ -169,7 +169,7 @@ There is no layout inside QuickJS, so `getBoundingClientRect()`, `offsetWidth` a
 
 **Works:** inline, external, dynamically added and `type="module"` scripts (static `import`s and `import("literal")` are fetched up front); `fetch` and `XMLHttpRequest` (binary safe); timers, `requestAnimationFrame`, promises; `history.pushState`, `localStorage` / `sessionStorage` (in memory), `customElements`, `MutationObserver`, `crypto.getRandomValues` / `randomUUID`; `matchMedia` for the viewport width; `getComputedStyle` (the element's own style plus initial values); `IntersectionObserver` and `ResizeObserver` (each reports once on `observe()`, so lazy content loads). React and Next.js clients hydrate and run their effects.
 
-**Does not:** layout (see above), `canvas`, `WebSocket`, `EventSource`, `Worker`, `iframe` content, CSS cascade computation, and anything that needs a real browser engine. A DOM smaller than JSDOM's. If a script throws, the page carries on with what it had; `dom.logs` tells you what went wrong.
+**Does not:** layout (see above), `canvas`, `iframe` content, working `WebSocket`, `EventSource` and `Worker` (they exist and fail like a dead connection: an `error` event, then closed, with a warning in `dom.logs`, so code that handles failure carries on), CSS cascade computation, and anything that needs a real browser engine. A DOM smaller than JSDOM's. If a script throws, the page carries on with what it had; `dom.logs` tells you what went wrong.
 
 **Speed:** a page starts in about 3 ms (the first in a process pays about 120 ms). A typical page, including its network, takes a few hundred ms. HTML is parsed natively and building the DOM from it runs at roughly 1.3 MB/s (a 250 KB page in about 190 ms), so very large pages still take seconds.
 

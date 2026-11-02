@@ -155,6 +155,72 @@
         return { target: el, contentRect: r, borderBoxSize: box(r), contentBoxSize: box(r), devicePixelContentBoxSize: box(r) };
       });
     }
+    // There is no WebSocket, EventSource or Worker here. Code that uses one should find out the way it does when the
+    // connection fails (an `error` event, then closed) instead of dying on a ReferenceError, so these exist and fail.
+    function unavailable(Name, init) {
+      var C = class extends g.EventTarget {
+        constructor(url) {
+          super();
+          if (arguments.length === 0) throw new TypeError("Failed to construct '" + Name + "': 1 argument required, but only 0 present.");
+          var self = this;
+          this.url = String(url);
+          this.readyState = 0;
+          init.call(this, arguments);
+          g.console.warn(Name + " is not available in wasm-quickjs-dom (" + this.url + ")");
+          g.setTimeout(function () {
+            if (self.readyState === 3 || (Name === "EventSource" && self.readyState === 2)) return;
+            self.readyState = Name === "EventSource" ? 2 : 3;
+            self.__fire(new g.Event("error"));
+            if (Name === "WebSocket") {
+              var close = new g.Event("close");
+              close.code = 1006;
+              close.reason = "";
+              close.wasClean = false;
+              self.__fire(close);
+            }
+          }, 0);
+        }
+        __fire(event) {
+          var handler = this["on" + event.type];
+          if (typeof handler === "function") { try { handler.call(this, event); } catch (e) { g.console.error(e); } }
+          this.dispatchEvent(event);
+        }
+      };
+      C.CONNECTING = C.prototype.CONNECTING = 0;
+      Object.defineProperty(C, "name", { value: Name });
+      return C;
+    }
+    if (!g.WebSocket) {
+      g.WebSocket = unavailable("WebSocket", function () { this.bufferedAmount = 0; this.extensions = ""; this.protocol = ""; this.binaryType = "blob"; });
+      g.WebSocket.OPEN = g.WebSocket.prototype.OPEN = 1;
+      g.WebSocket.CLOSING = g.WebSocket.prototype.CLOSING = 2;
+      g.WebSocket.CLOSED = g.WebSocket.prototype.CLOSED = 3;
+      g.WebSocket.prototype.send = function () {
+        if (this.readyState === 0) throw new g.DOMException("Failed to execute 'send' on 'WebSocket': Still in CONNECTING state.", "InvalidStateError");
+      };
+      g.WebSocket.prototype.close = function () { this.readyState = 3; };
+    }
+    if (!g.EventSource) {
+      g.EventSource = unavailable("EventSource", function (args) { this.withCredentials = !!(args[1] && args[1].withCredentials); });
+      g.EventSource.OPEN = g.EventSource.prototype.OPEN = 1;
+      g.EventSource.CLOSED = g.EventSource.prototype.CLOSED = 2;
+      g.EventSource.prototype.close = function () { this.readyState = 2; };
+    }
+    ["Worker", "SharedWorker"].forEach(function (Name) {
+      if (g[Name]) return;
+      var W = unavailable(Name, function () { this.onmessage = null; this.onerror = null; this.port = this; });
+      W.prototype.postMessage = function () {};
+      W.prototype.terminate = function () {};
+      W.prototype.start = function () {};
+      g[Name] = W;
+    });
+    if (!g.BroadcastChannel) {
+      g.BroadcastChannel = class extends g.EventTarget {
+        constructor(name) { super(); this.name = String(name); this.onmessage = null; }
+        postMessage() {}
+        close() {}
+      };
+    }
     if (!d.getElementsByName) d.getElementsByName = function (n) { return d.querySelectorAll('[name="' + n + '"]'); };
 
     // URL-valued properties read back absolute, as in a browser (framework code does `new URL(script.src)`)
