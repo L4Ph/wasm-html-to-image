@@ -20,8 +20,9 @@
  * Nothing here knows about images: `toOptions()` only fills `value` / `baseUrl` of an options object.
  */
 // @ts-expect-error — dist/edge-js-payload.js is generated at build time
-import { guestSource } from "../dist/edge-js-payload.js";
+import { guestBytecode } from "../dist/edge-js-payload.js";
 import defaultQuickJSWasm from "#quickjs-wasm";
+import { QuickJSInstance } from "./runtime.js";
 
 /** Options of the script phase. */
 export interface JavaScriptOptions {
@@ -74,41 +75,15 @@ const STACK_LIMIT = 192 * 1024;
 
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms));
 
-let libraries: Promise<{ core: any; variant: any }> | undefined;
-function loadLibraries() {
-  libraries ??= (async () => {
-    try {
-      return {
-        core: await import("quickjs-emscripten-core"),
-        variant: (await import("@jitl/quickjs-wasmfile-release-sync")).default,
-      };
-    } catch (cause) {
-      libraries = undefined;
-      throw new Error(
-        "The QuickJS engine of the `javascript` option needs the optional dependencies `quickjs-emscripten-core` and `@jitl/quickjs-wasmfile-release-sync`. Install them with `npm i quickjs-emscripten-core @jitl/quickjs-wasmfile-release-sync`.",
-        { cause },
-      );
-    }
-  })();
-  return libraries;
-}
+// the guest program as QuickJS bytecode (made at build time by scripts/build-edge-js.mjs with this very QuickJS)
+let guestBytes: Uint8Array | undefined;
+const guest = () => (guestBytes ??= Uint8Array.from(atob(guestBytecode as string), (c) => c.charCodeAt(0)));
 
-// one QuickJS module (a WebAssembly instance) per compiled wasm; every run makes its own runtime in it
-const quickjsModules = new WeakMap<object, Promise<any>>();
-const defaultSlot = {};
-function loadQuickJS(wasm: WebAssembly.Module | undefined): Promise<any> {
-  const slot = wasm ?? defaultSlot;
-  let loaded = quickjsModules.get(slot);
-  if (!loaded) {
-    loaded = (async () => {
-      const { core, variant } = await loadLibraries();
-      const compiled = wasm ?? (await defaultQuickJSWasm());
-      return core.newQuickJSWASMModuleFromVariant(compiled ? core.newVariant(variant, { wasmModule: compiled }) : variant);
-    })();
-    loaded.catch(() => quickjsModules.delete(slot));
-    quickjsModules.set(slot, loaded);
-  }
-  return loaded;
+// every page runs in an instance of its own: a compiled module is all that is shared
+async function loadModule(wasm: WebAssembly.Module | undefined): Promise<WebAssembly.Module> {
+  const compiled = wasm ?? (await defaultQuickJSWasm());
+  if (!compiled) throw new Error("The QuickJS wasm (quickjs.wasm of wasm-quickjs-dom) could not be loaded; pass a compiled module as `quickjsWasm`.");
+  return compiled;
 }
 
 /** Options of {@link createDOM}: the script phase's, the viewport width and the QuickJS module. */
@@ -178,10 +153,12 @@ export async function createDOM(
   const timeout = opts.timeout ?? DEFAULT_TIMEOUT;
   let started = Date.now();
   let deadline = started + timeout;
+  let vmDeadline: ((ms: number) => void) | undefined;
   // every call into the page gets a fresh `timeout`
   const begin = () => {
     started = Date.now();
     deadline = started + timeout;
+    vmDeadline?.(deadline);
   };
   const remaining = () => Math.max(0, timeout - (Date.now() - started));
 
@@ -198,124 +175,90 @@ export async function createDOM(
     baseUrl = res.url || source.url;
   }
 
-  const QuickJS = await loadQuickJS(opts.quickjsWasm);
-  const runtime = QuickJS.newRuntime();
-  runtime.setMemoryLimit(MEMORY_LIMIT);
-  runtime.setMaxStackSize(STACK_LIMIT);
-  runtime.setInterruptHandler(() => Date.now() > deadline);
-  const vm = runtime.newContext();
+  const wasm = await loadModule(opts.quickjsWasm);
 
   let closed = false;
   const timers: { id: number; at: number }[] = [];
   const inflight = new Set<Promise<void>>();
-  // the promises handed to the page for its fetches
-  const deferreds = new Set<{ dispose(): void }>();
+  const debug = typeof process !== "undefined" && !!process.env?.WASM_HTML_TO_IMAGE_DEBUG;
 
-  const pump = () => {
-    if (!closed) runtime.executePendingJobs();
+  // ES modules: QuickJS loads them synchronously, so the host fetches a module's whole import graph first
+  // (static imports and `import("literal")`), then serves the sources from memory
+  const modules = new Map<string, string | Error>();
+  const resolveModule = (base: string, name: string) => {
+    try {
+      return new URL(name, base).href;
+    } catch {
+      return name;
+    }
+  };
+
+  // let the page's reactions to what happened run
+  let pump = () => {};
+  const vm = QuickJSInstance.create(
+    wasm,
+    {
+      log(level, message) {
+        if (debug) console.error("[page " + level + "]", message);
+      },
+      timer(id, ms) {
+        timers.push({ id, at: Date.now() + ms });
+      },
+      fetch(id, target, method) {
+        const settle = (ok: boolean, text: string) => {
+          if (closed) return;
+          vm.settle(id, ok, text);
+          pump();
+        };
+        const task: Promise<void> = fetch(new URL(target, baseUrl), { method })
+          .then(async (r) => ({ status: r.status, url: r.url, headers: Object.fromEntries(r.headers), body: toBase64(new Uint8Array(await r.arrayBuffer())) }))
+          .then(
+            (o) => settle(true, JSON.stringify(o)),
+            (e) => settle(false, String(e)),
+          )
+          .finally(() => {
+            inflight.delete(task);
+            pump();
+          });
+        inflight.add(task);
+      },
+      module(kind, base, name) {
+        if (kind === 0) return resolveModule(base, name);
+        const m = modules.get(base);
+        return typeof m === "string" ? m : undefined;
+      },
+    },
+    MEMORY_LIMIT,
+    STACK_LIMIT,
+  );
+  vm.setDeadline(deadline);
+  vmDeadline = (ms) => vm.setDeadline(ms);
+  pump = () => {
+    if (!closed) vm.jobs();
   };
   // evaluate code; false when it threw (a page's script error never stops the render)
   const run = (code: string, name: string, module = false): boolean => {
     if (closed) return false;
-    const result = vm.evalCode(code, name, module ? { type: "module" } : undefined);
-    if (result.error) {
-      result.error.dispose();
-      pump();
-      return false;
-    }
-    result.value.dispose();
+    const result = vm.eval(code, name, module);
     pump();
-    return true;
+    return result.type !== "error";
   };
   const call = (expression: string): unknown => {
     if (closed) return undefined;
-    const result = vm.evalCode(expression, "call.js");
-    if (result.error) {
-      result.error.dispose();
-      return undefined;
-    }
-    const value = vm.dump(result.value);
-    result.value.dispose();
+    const result = vm.eval(expression, "call.js");
+    if (result.type === "error") return undefined;
     pump();
-    return value;
+    return result.type === "undefined" ? undefined : result.type === "json" ? JSON.parse(result.value) : result.value;
   };
 
+  // the instance owns everything it allocated: letting go of it frees the runtime. A fetch still in flight finds
+  // `closed` and does nothing.
   const close = () => {
-    if (closed) return;
-    // a fetch still in flight finds `closed` and does nothing; the promises handed to the page are disposed here, or
-    // QuickJS aborts when its runtime is freed
     closed = true;
-    for (const d of deferreds) d.dispose();
-    deferreds.clear();
-    try {
-      vm.dispose();
-      runtime.dispose();
-    } catch {
-      // QuickJS asserts while freeing a runtime that still holds a very large DOM built inside a promise job; the
-      // assertion aborts that wasm instance for good. Drop it, so the next page gets a fresh one instead of every
-      // later page failing, and let this page's result stand.
-      quickjsModules.delete(opts.quickjsWasm ?? defaultSlot);
-    }
   };
 
   try {
-    const host = vm.newObject();
-    const define = (name: string, impl: (...args: any[]) => any) => {
-      const fn = vm.newFunction(name, impl);
-      vm.setProp(host, name, fn);
-      fn.dispose();
-    };
-    const debug = typeof process !== "undefined" && !!process.env?.WASM_HTML_TO_IMAGE_DEBUG;
-    define("log", (level: any, message: any) => {
-      if (debug) console.error("[page " + vm.getString(level) + "]", vm.getString(message));
-    });
-    define("timer", (id: any, ms: any) => {
-      timers.push({ id: vm.getNumber(id), at: Date.now() + vm.getNumber(ms) });
-    });
-    define("fetch", (target: any, method: any) => {
-      const deferred = vm.newPromise();
-      deferreds.add(deferred);
-      const settle = (ok: boolean, text: string) => {
-        if (closed || !deferreds.delete(deferred)) return;
-        const handle = vm.newString(text);
-        (ok ? deferred.resolve : deferred.reject)(handle);
-        handle.dispose();
-        pump();
-        deferred.dispose();
-      };
-      const task: Promise<void> = fetch(new URL(vm.getString(target), baseUrl), { method: vm.getString(method) })
-        .then(async (r) => ({ status: r.status, url: r.url, headers: Object.fromEntries(r.headers), body: toBase64(new Uint8Array(await r.arrayBuffer())) }))
-        .then(
-          (o) => settle(true, JSON.stringify(o)),
-          (e) => settle(false, String(e)),
-        )
-        .finally(() => {
-          inflight.delete(task);
-          pump();
-        });
-      inflight.add(task);
-      return deferred.handle;
-    });
-    vm.setProp(vm.global, "__host", host);
-    host.dispose();
 
-    // ES modules: QuickJS loads them synchronously, so the host fetches a module's whole import graph first
-    // (static imports and `import("literal")`), then serves the sources from memory
-    const modules = new Map<string, string | Error>();
-    const resolveModule = (base: string, name: string) => {
-      try {
-        return new URL(name, base).href;
-      } catch {
-        return name;
-      }
-    };
-    runtime.setModuleLoader(
-      (name: string) => {
-        const m = modules.get(name);
-        return m === undefined ? { error: new Error(`could not load module ${name}`) } : m instanceof Error ? { error: m } : m;
-      },
-      (base: string, name: string) => resolveModule(base, name),
-    );
     // QuickJS gives `import.meta` no `url`, so the module's own URL is written into its source
     const prefetchModules = async (source: string, name: string): Promise<string> => {
       const code = source.replace(/\bimport\.meta\.url\b/g, JSON.stringify(name));
@@ -342,14 +285,10 @@ export async function createDOM(
       return code;
     };
 
-    run(guestSource as string, "edge-js-guest.js");
-    const boot = vm.evalCode(`__edgeBoot(${JSON.stringify(html)}, ${JSON.stringify(baseUrl)}, ${Math.round(viewportWidth)})`, "boot.js");
-    if (boot.error) {
-      const detail = JSON.stringify(vm.dump(boot.error));
-      boot.error.dispose();
-      throw new Error(`The QuickJS engine could not build the page: ${detail}`);
-    }
-    boot.value.dispose();
+    const loaded = vm.evalBytecode(guest());
+    if (loaded.type === "error") throw new Error(`The QuickJS engine could not load its guest program: ${loaded.value}`);
+    const boot = vm.eval(`__edgeBoot(${JSON.stringify(html)}, ${JSON.stringify(baseUrl)}, ${Math.round(viewportWidth)})`, "boot.js");
+    if (boot.type === "error") throw new Error(`The QuickJS engine could not build the page: ${boot.value}`);
 
     // scripts in document order, the ones that scripts add included; each external one is fetched by the host
     const runScripts = async () => {

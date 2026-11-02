@@ -1,7 +1,7 @@
 {
   "name": "wasm-quickjs-dom",
   "version": "1.0.0",
-  "description": "A small JSDOM for runtimes without Node or eval: QuickJS (WebAssembly) on a linkedom DOM, for Cloudflare Workers, Vercel Edge, Deno, Bun and browsers",
+  "description": "A small JSDOM for runtimes without Node or eval: QuickJS-ng (WebAssembly) on a linkedom DOM, for Cloudflare Workers, Vercel Edge, Deno, Bun and browsers",
   "type": "module",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
@@ -39,7 +39,7 @@
     }
   },
   "scripts": {
-    "build": "tsc -b && node scripts/build-edge-js.mjs",
+    "build": "node scripts/build-quickjs.mjs && tsc -b && node scripts/build-edge-js.mjs",
     "prepublishOnly": "npm run build",
     "test": "vitest run"
   },
@@ -56,14 +56,12 @@
   },
   "files": [
     "dist",
+    "vendor/quickjs/LICENSE",
+    "THIRD-PARTY-NOTICES.md",
     "README.md",
     "LICENSE"
   ],
   "license": "MIT",
-  "dependencies": {
-    "@jitl/quickjs-wasmfile-release-sync": "0.32.0",
-    "quickjs-emscripten-core": "0.32.0"
-  },
   "devDependencies": {
     "@types/node": "26.6.5",
     "linkedom": "0.18.13",

@@ -1,6 +1,6 @@
 # wasm-quickjs-dom
 
-A small JSDOM for runtimes that have no Node and no `eval`: the page's scripts run in **QuickJS compiled to WebAssembly**, on a **linkedom** DOM. It works on Cloudflare Workers, Vercel / Next.js Edge, Deno, Bun, Node.js and in browsers. It is the engine behind the `javascript` option of [wasm-html-to-image](https://www.npmjs.com/package/wasm-html-to-image), and has no dependency on it.
+A small JSDOM for runtimes that have no Node and no `eval`: the page's scripts run in **QuickJS-ng compiled to WebAssembly**, on a **linkedom** DOM. It works on Cloudflare Workers, Vercel / Next.js Edge, Deno, Bun, Node.js and in browsers. It is the engine behind the `javascript` option of [wasm-html-to-image](https://www.npmjs.com/package/wasm-html-to-image), and has no dependency on it.
 
 ```ts
 import { createDOM } from "wasm-quickjs-dom";
@@ -26,6 +26,14 @@ The QuickJS wasm is chosen by the runtime (the `#quickjs-wasm` entry of `imports
 
 `dom.toOptions(options)` fills `value` (the serialized DOM) and `baseUrl` of an options object, so the page can be handed to a renderer such as `render()` of wasm-html-to-image.
 
+## Building
+
+The package builds its own QuickJS: `vendor/quickjs` (QuickJS-ng, unmodified) and `csrc/qjsdom.c` are compiled to a standalone `dist/quickjs.wasm` with Emscripten (`emcc` on `PATH`), and the guest program (linkedom and the browser shims) is compiled to QuickJS bytecode with that very wasm. Reading bytecode takes about a millisecond where compiling the source takes tens, so a page starts in roughly 30 ms. Each page runs in a wasm instance of its own; there is no dependency on `quickjs-emscripten`.
+
+```sh
+pnpm --filter wasm-quickjs-dom build
+```
+
 ## License
 
-MIT
+MIT. QuickJS-ng, linkedom and web-streams-polyfill are included under their own licenses: see `THIRD-PARTY-NOTICES.md`.
