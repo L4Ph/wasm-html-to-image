@@ -27,11 +27,35 @@ const linkedom = read(linkedomPath).replace(/\nexport \{([^}]*)\};?\s*$/, (_, na
 });
 if (!linkedom.includes("globalThis.__linkedom")) throw new Error("build-edge-js: linkedom's worker bundle has no export list to rewrite");
 
+// linkedom parses HTML with htmlparser2, which is slow in an interpreter. csrc/htmlparse.h is a native port of it
+// (`__native.parseHTML(markup, handlers)`); linkedom's parser goes through this wrapper so HTML takes the native path
+// and XML, or anything the port declines (it returns false), still takes htmlparser2's.
+// Setting `globalThis.__noNativeParse` turns the native path off (tests compare the two).
+const NATIVE_PARSER = `const makeParser = (isHTML, handlers, options) => {
+  let markup = "";
+  return {
+    write(chunk) { markup += chunk; },
+    end() {
+      if (isHTML && !globalThis.__noNativeParse && globalThis.__native && globalThis.__native.parseHTML(markup, handlers) === true) return;
+      const parser = new Parser(handlers, options);
+      parser.write(markup);
+      parser.end();
+    }
+  };
+};
+const parseFromString = (document, isHTML, markupLanguage) => {`;
+const parserCall = "const content = new Parser({";
+const parserHead = "const parseFromString = (document, isHTML, markupLanguage) => {";
+if (linkedom.split(parserCall).length !== 2 || linkedom.split(parserHead).length !== 2) {
+  throw new Error("build-edge-js: linkedom's parseFromString no longer looks the way the native parser hook expects");
+}
+const linkedomNative = linkedom.replace(parserCall, "const content = makeParser(isHTML, {").replace(parserHead, NATIVE_PARSER);
+
 const streamsPath = join(dirname(require.resolve("web-streams-polyfill/package.json")), "dist", "polyfill.js");
 const parts = [
   read(join(here, "edge-js", "shims.js")),
   read(streamsPath),
-  `(function () {\n${linkedom}\n})();`,
+  `(function () {\n${linkedomNative}\n})();`,
   read(join(here, "edge-js", "boot.js")),
 ];
 const source = parts.join("\n;\n");

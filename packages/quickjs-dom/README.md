@@ -171,7 +171,7 @@ There is no layout inside QuickJS, so `getBoundingClientRect()`, `offsetWidth` a
 
 **Does not:** layout (see above), `canvas`, `WebSocket`, `EventSource`, `Worker`, `iframe` content, CSS cascade computation, and anything that needs a real browser engine. A DOM smaller than JSDOM's. If a script throws, the page carries on with what it had; `dom.logs` tells you what went wrong.
 
-**Speed:** a page starts in about 3 ms (the first in a process pays about 120 ms). A typical page, including its network, takes a few hundred ms; parsing runs at roughly 0.3 MB/s, so very large pages take seconds.
+**Speed:** a page starts in about 3 ms (the first in a process pays about 120 ms). A typical page, including its network, takes a few hundred ms. HTML is parsed natively and building the DOM from it runs at roughly 1.3 MB/s (a 250 KB page in about 190 ms), so very large pages still take seconds.
 
 ## Where it runs
 
@@ -208,6 +208,8 @@ Exit code `0` is done, `1` the page could not be loaded (or `-e` threw), `2` wro
 ## How it works
 
 Each page gets its own WebAssembly instance of QuickJS-ng. The browser APIs a bare QuickJS lacks, and linkedom, are compiled to QuickJS bytecode when the package is built; the first page of a process starts that program, and every later page is a copy of that started instance, which is why a page starts in about 3 ms. Nothing is shared between pages. Each gets its own clock origin and `Math.random` seed.
+
+HTML (the page itself, and every `innerHTML` the page sets) is tokenized by a C port of htmlparser2 inside the WebAssembly module, which hands linkedom the same calls htmlparser2 would; that is about 2.5 times faster than parsing in the interpreter. Input the port does not reproduce exactly (for example non-ASCII tag names) falls back to htmlparser2 by itself.
 
 ## For contributors
 

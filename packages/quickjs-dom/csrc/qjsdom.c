@@ -289,6 +289,10 @@ static JSValue host_fetch(JSContext *c, JSValueConst self, int argc, JSValueCons
     return promise;
 }
 
+/* ---- __native: parts of the page's environment that are faster in C than in the interpreter ---- */
+
+#include "htmlparse.h"
+
 /* ---- exports ---- */
 
 /* memory_limit: bytes QuickJS may allocate; stack_limit: bytes of C stack a script may use */
@@ -308,6 +312,9 @@ EXPORT("qd_init") int qd_init(size_t memory_limit, size_t stack_limit) {
     JS_SetPropertyStr(ctx, host, "timer", JS_NewCFunction(ctx, host_timer, "timer", 2));
     JS_SetPropertyStr(ctx, host, "fetch", JS_NewCFunction(ctx, host_fetch, "fetch", 2));
     JS_SetPropertyStr(ctx, global, "__host", host);
+    JSValue native = JS_NewObject(ctx);
+    JS_SetPropertyStr(ctx, native, "parseHTML", JS_NewCFunction(ctx, native_parse_html, "parseHTML", 2));
+    JS_SetPropertyStr(ctx, global, "__native", native);
     JS_FreeValue(ctx, global);
     return 0;
 }
