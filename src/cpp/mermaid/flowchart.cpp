@@ -1,6 +1,7 @@
 #include "mermaid/flowchart.h"
 
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <cstdlib>
 #include <cstring>
@@ -603,6 +604,61 @@ std::string agentflow_statement(const std::string& line, std::vector<char>& bloc
     return head;
 }
 
+void append_utf8(std::string& out, unsigned cp) {
+    if (cp < 0x80) {
+        out += (char)cp;
+    } else if (cp < 0x800) {
+        out += (char)(0xC0 | (cp >> 6));
+        out += (char)(0x80 | (cp & 0x3F));
+    } else if (cp < 0x10000) {
+        out += (char)(0xE0 | (cp >> 12));
+        out += (char)(0x80 | ((cp >> 6) & 0x3F));
+        out += (char)(0x80 | (cp & 0x3F));
+    } else {
+        out += (char)(0xF0 | (cp >> 18));
+        out += (char)(0x80 | ((cp >> 12) & 0x3F));
+        out += (char)(0x80 | ((cp >> 6) & 0x3F));
+        out += (char)(0x80 | (cp & 0x3F));
+    }
+}
+
+// A character that would break the syntax is written `#name;` or `#123;` in a label (`#quot;`, `#9829;`): decode those,
+// as Mermaid does. A `#` that does not start such a sequence stays as it is.
+std::string decode_entities(const std::string& s) {
+    if (s.find('#') == std::string::npos) return s;
+    std::string out;
+    for (size_t i = 0; i < s.size();) {
+        size_t semi = s[i] == '#' ? s.find(';', i + 1) : std::string::npos;
+        if (semi != std::string::npos && semi - i >= 2 && semi - i <= 10) {
+            std::string ent = s.substr(i + 1, semi - i - 1);
+            std::string rep;
+            unsigned cp = 0;
+            if (ent == "quot") rep = "\"";
+            else if (ent == "amp") rep = "&";
+            else if (ent == "lt") rep = "<";
+            else if (ent == "gt") rep = ">";
+            else if (ent == "apos") rep = "'";
+            else if (ent.size() > 1 && ent[0] == 'x') {
+                char* end;
+                long v = std::strtol(ent.c_str() + 1, &end, 16);
+                if (*end == 0 && v > 0 && v < 0x110000) cp = (unsigned)v;
+            } else if (!ent.empty() && std::isdigit((unsigned char)ent[0])) {
+                char* end;
+                long v = std::strtol(ent.c_str(), &end, 10);
+                if (*end == 0 && v > 0 && v < 0x110000) cp = (unsigned)v;
+            }
+            if (!rep.empty() || cp) {
+                if (cp) append_utf8(rep, cp);
+                out += rep;
+                i = semi + 1;
+                continue;
+            }
+        }
+        out += s[i++];
+    }
+    return out;
+}
+
 bool parse(const std::string& source, Graph& g, std::string& error) {
     Parser p;
     bool agentflow = false;
@@ -683,6 +739,9 @@ bool parse(const std::string& source, Graph& g, std::string& error) {
         error = "empty diagram";
         return false;
     }
+    for (Node& n : p.g.nodes) n.label = decode_entities(n.label);
+    for (Edge& e : p.g.edges) e.label = decode_entities(e.label);
+    for (Group& gr : p.g.groups) gr.title = decode_entities(gr.title);
     for (auto& [idx, cls] : p.g.class_use) {
         auto it = p.g.classes.find(cls);
         if (it == p.g.classes.end()) continue;
