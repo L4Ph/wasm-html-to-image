@@ -63,6 +63,20 @@ describe("measureLayout: real boxes for the page's getBoundingClientRect", () =>
   }, 60_000);
 });
 
+describe("measureLayout on markup without <html>", () => {
+  it("measures every top-level element, not only the first one", async () => {
+    const { createDOM, measureLayout } = await import("../src/edge-js.js");
+    const { render } = await import("../src/single.js");
+    const dom = await createDOM({ html: '<style>#a{width:120px;height:40px}#b{width:50px;height:10px}</style><div id="a"></div><div id="b"></div>' }, { settleMs: 0, width: 300 });
+    try {
+      expect(await measureLayout(dom, render, { width: 300 })).toBeGreaterThan(1);
+      expect(await dom.eval(() => [document.getElementById("a")!.offsetWidth, document.getElementById("a")!.offsetHeight, document.getElementById("b")!.offsetWidth, document.getElementById("b")!.offsetTop])).toEqual([120, 40, 50, 40]);
+    } finally {
+      dom.close();
+    }
+  }, 60_000);
+});
+
 describe("the render `limits` also bound what the page's scripts fetch (QuickJS engine)", () => {
   it("applyJavaScript passes allowedHosts / blockPrivateHosts on, and javascript.limits wins", async () => {
     const { createServer } = await import("node:http");

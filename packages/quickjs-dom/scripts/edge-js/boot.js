@@ -218,11 +218,9 @@
   // it re-parses the markup. The marks are on a clone: the page itself is not touched, no observer sees anything.
   var boxes = null;
   g.__edgeMarkLayout = function () {
-    var d = g.document, root = d.documentElement;
-    if (!root) return "";
-    var clone = root.cloneNode(true);
-    var a = Array.prototype.slice.call(root.querySelectorAll("*")), b = Array.prototype.slice.call(clone.querySelectorAll("*"));
-    a.unshift(root); b.unshift(clone);
+    // the whole document is cloned: for markup without <html> its "documentElement" is only the first element
+    var d = g.document, clone = d.cloneNode(true);
+    var a = Array.prototype.slice.call(d.querySelectorAll("*")), b = Array.prototype.slice.call(clone.querySelectorAll("*"));
     boxes = null;
     for (var i = 0; i < a.length && i < b.length; i++) {
       a[i].__qi = i;
@@ -231,7 +229,8 @@
     }
     var n = clone.querySelectorAll("noscript");
     for (var j = 0; j < n.length; j++) n[j].remove();
-    return "<!DOCTYPE html>" + clone.outerHTML;
+    var html = clone.toString();
+    return /^<!DOCTYPE/i.test(html) ? html.replace(/^<!DOCTYPE\s*>/i, "<!DOCTYPE html>") : "<!DOCTYPE html>" + html;
   };
   // boxes: { "<number>": [x, y, width, height] } in page coordinates; an element without a box is 0 x 0
   g.__edgeSetLayout = function (json) {
