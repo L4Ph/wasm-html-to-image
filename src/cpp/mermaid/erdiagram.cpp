@@ -23,7 +23,7 @@ struct Entity {
     std::string id, title;
     std::vector<Attr> attrs;
     double w = 0, h = 0;
-    double type_w = 0, name_w = 0, key_w = 0;
+    double type_w = 0, name_w = 0, key_w = 0, comment_w = 0;
 };
 
 struct Relation {
@@ -88,7 +88,11 @@ bool add_attr(Entity& e, const std::string& raw) {
     if (tok.size() < 2) return false;
     a.type = tok[0];
     a.name = tok[1];
-    for (size_t k = 2; k < tok.size(); k++) a.keys += (a.keys.empty() ? "" : ",") + tok[k];
+    for (size_t k = 2; k < tok.size(); k++) {
+        std::string key = tok[k];
+        while (!key.empty() && key.back() == ',') key.pop_back();  // `PK, FK` tokenises with the comma on PK
+        if (!key.empty()) a.keys += (a.keys.empty() ? "" : ",") + key;
+    }
     e.attrs.push_back(a);
     return true;
 }
@@ -290,8 +294,10 @@ bool render_er(const std::string& source, const Options& options, std::string& s
             e.type_w = std::max(e.type_w, text.width(a.type, kAttrFont, 400));
             e.name_w = std::max(e.name_w, text.width(a.name, kAttrFont, 500));
             e.key_w = std::max(e.key_w, text.width(a.keys, kAttrFont - 1, 600));
+            e.comment_w = std::max(e.comment_w, text.width(a.comment, kAttrFont, 400));
         }
-        double cols = e.type_w + e.name_w + e.key_w + (e.key_w > 0 ? 3 : 2) * kCellPad * 1.0 + kCellPad;
+        int ncols = 2 + (e.key_w > 0 ? 1 : 0) + (e.comment_w > 0 ? 1 : 0);
+        double cols = e.type_w + e.name_w + e.key_w + e.comment_w + (ncols + 1) * kCellPad;
         e.w = std::max(std::max(100.0, text.width(e.title, kNodeFont, 600) + 2 * kPadX), cols);
         e.h = kHead + (e.attrs.empty() ? 8 : e.attrs.size() * kRow + 6);
         ln[k].w = e.w;
@@ -342,14 +348,18 @@ bool render_er(const std::string& source, const Options& options, std::string& s
         body += "<g class=\"node\">\n<rect x=\"" + num(x) + "\" y=\"" + num(y) + "\" width=\"" + num(e.w) + "\" height=\"" + num(e.h) + "\"" + d.sheet.paint(e.id, th.surface, th.border) + "/>\n";
         body += "<rect x=\"" + num(x) + "\" y=\"" + num(y) + "\" width=\"" + num(e.w) + "\" height=\"" + num(kHead) + "\" fill=\"" + th.group_hdr + "\" stroke=\"" + th.border + "\" stroke-width=\"1\"/>\n";
         centered_text(body, th, {e.title}, p.x, y + kHead / 2, kNodeFont, 600, th.text);
-        double type_x = x + kCellPad, name_x = type_x + e.type_w + kCellPad, key_x = x + e.w - kCellPad;
+        double type_x = x + kCellPad, name_x = type_x + e.type_w + kCellPad;
+        bool commented = e.comment_w > 0;
+        double key_x = commented ? name_x + e.name_w + kCellPad : x + e.w - kCellPad;
+        double comment_x = key_x + e.key_w + kCellPad;
         for (size_t m = 0; m < e.attrs.size(); m++) {
             const Attr& a = e.attrs[m];
             double cy = y + kHead + 3 + m * kRow + kRow / 2;
             if (m % 2 == 1) body += "<rect x=\"" + num(x + 0.5) + "\" y=\"" + num(cy - kRow / 2) + "\" width=\"" + num(e.w - 1) + "\" height=\"" + num(kRow) + "\" fill=\"" + th.group_hdr + "\"/>\n";
             aligned_text(body, th, {a.type}, type_x, cy, kAttrFont, 400, th.text_sec, "start");
             aligned_text(body, th, {a.name}, name_x, cy, kAttrFont, 500, th.text, "start");
-            if (!a.keys.empty()) aligned_text(body, th, {a.keys}, key_x, cy, kAttrFont - 1, 600, th.text_sec, "end");
+            if (!a.keys.empty()) aligned_text(body, th, {a.keys}, key_x, cy, kAttrFont - 1, 600, th.text_sec, commented ? "start" : "end");
+            if (!a.comment.empty()) aligned_text(body, th, {a.comment}, comment_x, cy, kAttrFont, 400, th.text_sec, "start");
         }
         body += "</g>\n";
     }
