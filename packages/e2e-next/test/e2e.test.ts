@@ -117,4 +117,15 @@ describe("next edge (Route Handler, edge runtime + workerd entry)", () => {
     },
     120000,
   );
+
+  it(
+    "runs a page's scripts with QuickJS, without being handed its wasm",
+    async () => {
+      const res = await fetch(`${app!.baseUrl}/api/edge-js`);
+      const body = await res.text();
+      expect(res.ok, body.slice(0, 300)).toBe(true);
+      expect(JSON.parse(body)).toEqual({ scripted: true, rendered: true });
+    },
+    120000,
+  );
 });

@@ -16,3 +16,9 @@ declare module "#quickjs-wasm" {
   const defaultQuickJSWasm: () => Promise<WebAssembly.Module | undefined>;
   export default defaultQuickJSWasm;
 }
+
+/** The `?module` form of the Vercel / Next.js Edge bundlers: a pre-compiled module (used by `src/quickjs-edge-light.ts`). */
+declare module "*.wasm?module" {
+  const module: WebAssembly.Module;
+  export default module;
+}

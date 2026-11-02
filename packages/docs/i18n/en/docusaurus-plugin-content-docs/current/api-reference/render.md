@@ -85,7 +85,7 @@ const options = await applyJavaScript({ url: "https://example.com/", javascript:
 const { data } = await render(options);
 ```
 
-- The package picks the QuickJS wasm for the runtime (`#quickjs-wasm` in the `imports` of `package.json`): a pre-compiled module on Workers, read from disk on Node.js and Bun, fetched on Deno and in browsers. To use a module of your own, pass it as `applyJavaScript(options, { quickjsWasm })`. The Node.js `single` entry also selects this engine with `javascript: { engine: "quickjs" }`.
+- The package picks the QuickJS wasm for the runtime (`#quickjs-wasm` in the `imports` of `package.json`): a pre-compiled module on Workers and on Vercel / Next.js Edge, read from disk on Node.js and Bun, fetched on Deno and in browsers. To use a module of your own, pass it as `applyJavaScript(options, { quickjsWasm })`. The Node.js `single` entry also selects this engine with `javascript: { engine: "quickjs" }`.
 - It needs the optional dependencies `quickjs-emscripten-core` and `@jitl/quickjs-wasmfile-release-sync` (a Workers bundle includes them).
 - Limits: no layout (`getBoundingClientRect` returns 0), no `canvas`, `type="module"` scripts run, but only `import`s with literal specifiers (fetched up front) resolve. The DOM is linkedom's, smaller than jsdom's, and QuickJS is an interpreter, so heavy pages are slower.
 - As with jsdom, use it with trusted pages only (the scripts can `fetch`).

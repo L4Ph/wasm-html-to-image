@@ -43,6 +43,7 @@
   "imports": {
     "#quickjs-wasm": {
       "workerd": "./dist/quickjs-workerd.js",
+      "edge-light": "./dist/quickjs-edge-light.js",
       "deno": "./dist/quickjs-web.js",
       "node": "./dist/quickjs-node.js",
       "bun": "./dist/quickjs-node.js",
