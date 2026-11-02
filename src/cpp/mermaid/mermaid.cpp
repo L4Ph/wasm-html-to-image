@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <cstdlib>
 
 #include "mermaid/classdiagram.h"
 #include "mermaid/erdiagram.h"
@@ -390,6 +391,43 @@ static void take_accessibility(std::string& source, std::string& title, std::str
     source = out;
 }
 
+// A frontmatter `title:` is drawn above the diagram, as Mermaid draws it: the canvas grows by a band, the
+// drawing shifts down into it, and the title sits centred in the band.
+void add_title_band(std::string& svg, const std::string& title, const Options& options) {
+    size_t vb = svg.find("viewBox=\"0 0 ");
+    if (vb == std::string::npos) return;
+    size_t vs = vb + 13, ve = svg.find('"', vs);
+    if (ve == std::string::npos) return;
+    char* e1 = nullptr;
+    double w = std::strtod(svg.c_str() + vs, &e1);
+    double h = e1 ? std::strtod(e1, nullptr) : 0;
+    if (w <= 0 || h <= 0) return;
+    constexpr double kBand = 36;
+    svg.replace(vs, ve - vs, num(w) + " " + num(h + kBand));
+    size_t ha = svg.find("height=\"", ve);
+    if (ha != std::string::npos) {
+        size_t hs = ha + 8, he = svg.find('"', hs);
+        if (he != std::string::npos) svg.replace(hs, he - hs, num(h + kBand));
+    }
+    size_t root_end = svg.find('>');
+    if (root_end == std::string::npos) return;
+    size_t at = root_end + 1;
+    if (svg.compare(at + 1, 5, "<rect") == 0) {  // a painted background comes first (on its own line) and grows too
+        size_t re = svg.find("/>", at);
+        if (re == std::string::npos) return;
+        size_t bh = svg.find("height=\"", at);
+        if (bh != std::string::npos && bh < re) {
+            size_t bs = bh + 8, be = svg.find('"', bs);
+            if (be != std::string::npos && be < re) svg.replace(bs, be - bs, num(h + kBand));
+        }
+        at = svg.find("/>", at) + 2;
+    }
+    svg.insert(at, "\n<text x=\"" + num(w / 2) + "\" y=\"" + num(kBand / 2 + 6) + "\" text-anchor=\"middle\" font-size=\"16\" font-weight=\"600\" font-family=\"" +
+                       esc(options.font_family) + "\" fill=\"" + esc(options.fg) + "\">" + esc(title) + "</text>\n<g transform=\"translate(0 " + num(kBand) + ")\">\n");
+    size_t close = svg.rfind("</svg>");
+    if (close != std::string::npos) svg.insert(close, "</g>\n");
+}
+
 bool render(const std::string& input, const Options& options, std::string& svg, std::string& error, std::vector<std::string>* warnings) {
     if (options.max_source_bytes && input.size() > options.max_source_bytes) {
         error = "the diagram source is too large (" + std::to_string(input.size()) + " bytes; the limit is " + std::to_string(options.max_source_bytes) + ")";
@@ -423,6 +461,8 @@ bool render(const std::string& input, const Options& options, std::string& svg, 
     bool tried_close = false;
     for (int round = 0; round < 40; round++) {
         if (render_once(source, options, svg, error)) {
+            std::string fm_src = source, fm_title = find_value(take_frontmatter(fm_src), "title");
+            if (!fm_title.empty()) add_title_band(svg, fm_title, options);
             size_t root_end = svg.find('>');
             if ((!acc_title.empty() || !acc_descr.empty()) && root_end != std::string::npos) {
                 std::string text;

@@ -18,6 +18,7 @@ enum class Kind { State, Start, End, Choice, Fork, Note };
 struct Node {
     std::string name;
     std::vector<std::string> desc;
+    bool named = false;  // declared with a quoted name (`state "Name" as id`), so the name is a label line
     Kind kind = Kind::State;
     int group = -1;
     double w = 0, h = 0;
@@ -27,6 +28,7 @@ struct Node {
 struct Group {
     std::string title;
     int parent = -1;
+    bool desc_title = false;  // the title is the bare id, so an `id : description` line may replace it
 };
 
 struct Edge {
@@ -41,6 +43,8 @@ struct Doc {
     std::vector<Edge> edges;
     std::map<std::string, int> index;      // key -> node
     std::map<std::string, int> composite;  // id -> group
+    std::map<std::string, std::string> comp_desc;  // composite id -> the description an `id : ...` line gave it
+    std::map<std::string, int> group_index;        // composite id -> the group once its block is parsed
     Direction dir = Direction::TD;
     StyleSheet sheet;
 };
@@ -190,14 +194,20 @@ bool parse(const std::string& source, Doc& d, std::string& error) {
             if (open) {
                 Group g;
                 g.title = name.empty() ? id : name;
+                g.desc_title = name.empty();
+                if (g.desc_title) {  // an `id : description` line before the block names it already
+                    auto it = d.comp_desc.find(id);
+                    if (it != d.comp_desc.end()) g.title = it->second;
+                }
                 g.parent = scope;
                 d.groups.push_back(g);
                 d.composite[id] = (int)d.groups.size() - 1;
+                d.group_index[id] = (int)d.groups.size() - 1;
                 scopes.push_back((int)d.groups.size() - 1);
             } else {
                 int n = node_for(d, id, scope, false);
                 if (n >= 0) {
-                    if (!name.empty()) d.nodes[n].name = name;
+                    if (!name.empty()) d.nodes[n].name = name, d.nodes[n].named = true;
                     d.nodes[n].kind = kind;
                 }
             }
@@ -230,8 +240,16 @@ bool parse(const std::string& source, Doc& d, std::string& error) {
         }
         size_t colon = line.find(':');
         if (colon != std::string::npos) {  // `id : description`
+            std::string id = strip_class(trim(line.substr(0, colon)));
+            std::string desc = trim(line.substr(colon + 1));
             int n = node_for(d, line.substr(0, colon), scope, false);
-            if (n >= 0) d.nodes[n].desc.push_back(trim(line.substr(colon + 1)));
+            if (n >= 0) {
+                d.nodes[n].desc.push_back(desc);
+            } else {  // a composite state: the description is its heading, as Mermaid draws it
+                d.comp_desc[id] = desc;
+                auto gi = d.group_index.find(id);
+                if (gi != d.group_index.end() && d.groups[gi->second].desc_title) d.groups[gi->second].title = desc;
+            }
             continue;
         }
         node_for(d, line, scope, false);  // a bare state id
@@ -311,14 +329,16 @@ bool render_state(const std::string& source, const Options& options, std::string
                 break;
             }
             case Kind::State: {
-                n.title_lines = wrap_lines(text, split_lines(n.name), kNodeFont, kNodeWeight, kWrapWidth);
-                n.desc = wrap_lines(text, n.desc, kEdgeFont, 400, kWrapWidth);
+                // the label: a quoted name first, then each `id : description` line; a bare id labels itself only when it has neither
+                std::vector<std::string> label;
+                if (n.named) label.push_back(n.name);
+                for (auto& s : n.desc)
+                    if (!s.empty()) label.push_back(s);
+                if (label.empty()) label.push_back(n.name);
+                n.title_lines = wrap_lines(text, label, kNodeFont, kNodeWeight, kWrapWidth);
+                n.desc.clear();  // consumed into the label; there is no separate description section
                 double w = text.block_width(n.title_lines, kNodeFont, kNodeWeight);
                 double h = n.title_lines.size() * lh;
-                if (!n.desc.empty()) {
-                    w = std::max(w, text.block_width(n.desc, kEdgeFont, 400));
-                    h += 10 + n.desc.size() * dlh;
-                }
                 n.w = std::max(60.0, w + 2 * kPadX);
                 n.h = h + 2 * kPadY;
                 break;

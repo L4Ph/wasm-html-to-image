@@ -26,13 +26,11 @@ std::string unquote(std::string s) {
     return s;
 }
 
-/// The percentage as text: one decimal unless it is whole.
+/// The percentage as text: rounded to a whole number, as Mermaid draws it.
 std::string percent(double v) {
     char buf[32];
-    std::snprintf(buf, sizeof(buf), "%.1f", v);
-    std::string s = buf;
-    if (s.size() > 2 && s.compare(s.size() - 2, 2, ".0") == 0) s.resize(s.size() - 2);
-    return s + "%";
+    std::snprintf(buf, sizeof(buf), "%.0f", v);
+    return std::string(buf) + "%";
 }
 
 }  // namespace
@@ -121,7 +119,7 @@ bool render_pie(const std::string& source, const Options& options, std::string& 
             body += "<path class=\"slice\" d=\"M" + num(cx) + "," + num(cy) + " L" + num(x0) + "," + num(y0) + " A" + num(R) + "," + num(R) + " 0 " + (frac > 0.5 ? "1" : "0") + " 1 " +
                     num(x1) + "," + num(y1) + " Z\" fill=\"" + fill + "\"" + (scaled ? " fill-opacity=\"0.7\"" : "") + " stroke=\"" + th.scale_stroke + "\" stroke-width=\"2\" stroke-linejoin=\"round\"/>\n";
         }
-        if (frac >= 0.04) {
+        if (frac > 0) {  // every slice is labelled, however thin, as Mermaid draws it
             double mid = (angle + a1) / 2;
             int pct_shade = slices.size() <= 1 ? 80 : 88 - (int)(70.0 * k / (slices.size() - 1));
             centered_text(body, th, {percent(frac * 100)}, cx + R * 0.66 * std::cos(mid), cy + R * 0.66 * std::sin(mid), 11, 600, scaled ? th.text : pct_shade > 50 ? th.bg : th.fg);

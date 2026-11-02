@@ -46,7 +46,7 @@
     ]
   },
   "sequence@light": {
-    "width": 360.18,
+    "width": 351,
     "height": 487,
     "tags": {
       "svg": 2,
@@ -54,7 +54,7 @@
       "g": 1,
       "line": 10,
       "rect": 9,
-      "text": 16,
+      "text": 22,
       "polygon": 6
     },
     "colors": [
@@ -68,7 +68,7 @@
     ]
   },
   "sequence@dark": {
-    "width": 360.18,
+    "width": 351,
     "height": 487,
     "tags": {
       "svg": 2,
@@ -76,7 +76,7 @@
       "g": 1,
       "line": 10,
       "rect": 9,
-      "text": 16,
+      "text": 22,
       "polygon": 6
     },
     "colors": [
@@ -134,7 +134,7 @@
     ]
   },
   "class@light": {
-    "width": 320.17,
+    "width": 326.19,
     "height": 328.3,
     "tags": {
       "svg": 2,
@@ -156,7 +156,7 @@
     ]
   },
   "class@dark": {
-    "width": 320.17,
+    "width": 326.19,
     "height": 328.3,
     "tags": {
       "svg": 2,
@@ -631,9 +631,9 @@
     "tags": {
       "svg": 2,
       "defs": 1,
-      "g": 6,
-      "rect": 6,
-      "text": 10
+      "g": 7,
+      "rect": 7,
+      "text": 13
     },
     "colors": [
       "#333333",
@@ -650,9 +650,9 @@
     "tags": {
       "svg": 2,
       "defs": 1,
-      "g": 6,
-      "rect": 6,
-      "text": 10
+      "g": 7,
+      "rect": 7,
+      "text": 13
     },
     "colors": [
       "#1f2020",
@@ -1012,14 +1012,14 @@
     ]
   },
   "treeview@light": {
-    "width": 171.28,
-    "height": 170,
+    "width": 195.28,
+    "height": 196,
     "tags": {
       "svg": 2,
       "defs": 1,
-      "line": 6,
-      "path": 5,
-      "text": 5
+      "line": 10,
+      "path": 6,
+      "text": 6
     },
     "colors": [
       "#333333",
@@ -1028,14 +1028,14 @@
     ]
   },
   "treeview@dark": {
-    "width": 171.28,
-    "height": 170,
+    "width": 195.28,
+    "height": 196,
     "tags": {
       "svg": 2,
       "defs": 1,
-      "line": 6,
-      "path": 5,
-      "text": 5
+      "line": 10,
+      "path": 6,
+      "text": 6
     },
     "colors": [
       "#1f2020",
@@ -1048,7 +1048,7 @@
     "tags": {
       "svg": 2,
       "defs": 1,
-      "text": 16,
+      "text": 14,
       "rect": 1,
       "path": 5,
       "line": 5,
@@ -1069,7 +1069,7 @@
     "tags": {
       "svg": 2,
       "defs": 1,
-      "text": 16,
+      "text": 14,
       "rect": 1,
       "path": 5,
       "line": 5,
@@ -1091,7 +1091,7 @@
     "tags": {
       "svg": 2,
       "defs": 1,
-      "text": 24,
+      "text": 25,
       "rect": 15,
       "path": 7,
       "ellipse": 1,
@@ -1115,7 +1115,7 @@
     "tags": {
       "svg": 2,
       "defs": 1,
-      "text": 24,
+      "text": 25,
       "rect": 15,
       "path": 7,
       "ellipse": 1,
@@ -1136,11 +1136,11 @@
   },
   "railroad@light": {
     "width": 504.04,
-    "height": 838,
+    "height": 808,
     "tags": {
       "svg": 2,
       "defs": 1,
-      "text": 27,
+      "text": 26,
       "circle": 10,
       "path": 89,
       "rect": 21
@@ -1155,11 +1155,11 @@
   },
   "railroad@dark": {
     "width": 504.04,
-    "height": 838,
+    "height": 808,
     "tags": {
       "svg": 2,
       "defs": 1,
-      "text": 27,
+      "text": 26,
       "circle": 10,
       "path": 89,
       "rect": 21
@@ -1523,17 +1523,18 @@
   },
   "frontmatter@light": {
     "width": 364.44,
-    "height": 116.91,
+    "height": 152.91,
     "tags": {
       "svg": 2,
       "defs": 1,
+      "text": 3,
+      "g": 3,
       "polyline": 1,
       "polygon": 1,
-      "g": 2,
-      "rect": 2,
-      "text": 2
+      "rect": 2
     },
     "colors": [
+      "#333333",
       "#3b4252",
       "#4c566a",
       "#81a1c1",
@@ -1543,21 +1544,22 @@
   },
   "frontmatter@dark": {
     "width": 364.44,
-    "height": 116.91,
+    "height": 152.91,
     "tags": {
       "svg": 2,
       "defs": 1,
+      "text": 3,
+      "g": 3,
       "polyline": 1,
       "polygon": 1,
-      "g": 2,
-      "rect": 2,
-      "text": 2
+      "rect": 2
     },
     "colors": [
       "#3b4252",
       "#4c566a",
       "#81a1c1",
       "#88c0d0",
+      "#cccccc",
       "#eceff4"
     ]
   },

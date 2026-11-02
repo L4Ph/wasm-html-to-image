@@ -14,9 +14,14 @@ using litehtml::svgutil::trim;
 
 enum Mark { kNoMark = 0, kTriangle, kDiamondFilled, kDiamondHollow, kArrow };
 
+struct Member {
+    std::string text;
+    bool statik = false, abstrakt = false;  // the `$` and `*` classifiers
+};
+
 struct Class {
-    std::string name, annotation;
-    std::vector<std::string> attrs, methods;
+    std::string name, display, annotation;
+    std::vector<Member> attrs, methods;
     double w = 0, h = 0, head_h = 0, attrs_h = 0;
     int ns = -1;  // the `namespace` it was declared in
 };
@@ -51,18 +56,59 @@ std::string clean_name(std::string n) {
     if (p != std::string::npos) n = trim(n.substr(0, p));
     p = n.find('~');  // generics: Box~T~
     if (p != std::string::npos) n = trim(n.substr(0, p));
+    p = n.find("[\"");  // a label: Box["the label"]
+    if (p != std::string::npos) n = trim(n.substr(0, p));
     if (n.size() >= 2 && n.front() == '`' && n.back() == '`') n = n.substr(1, n.size() - 2);
     return n;
+}
+
+// How the class is headed: a ["label"] is the heading; otherwise generics `Box~T~` read `Box<T>`, as Mermaid draws them.
+std::string display_name(const std::string& raw, const std::string& name) {
+    size_t br = raw.find("[\"");
+    if (br != std::string::npos) {
+        size_t q = raw.find("\"]", br + 2);
+        if (q != std::string::npos) return raw.substr(br + 2, q - br - 2);
+    }
+    size_t t1 = raw.find('~'), t2 = t1 == std::string::npos ? std::string::npos : raw.find('~', t1 + 1);
+    if (t1 != std::string::npos && t2 != std::string::npos && t2 > t1 + 1) return name + "<" + raw.substr(t1 + 1, t2 - t1 - 1) + ">";
+    return name;
+}
+
+// `<<interface>>` is drawn with guillemets, as Mermaid draws it.
+std::string stereotype(const std::string& m) {
+    if (m.size() > 4 && starts(m, "<<") && m.compare(m.size() - 2, 2, ">>") == 0) return "«" + m.substr(2, m.size() - 4) + "»";
+    return m;
+}
+
+// Generics in a member's type: `List~int~` reads `List<int>`, as Mermaid draws it.
+std::string angle_generics(std::string m) {
+    std::string out;
+    for (size_t i = 0; i < m.size();) {
+        size_t t1 = m.find('~', i);
+        size_t t2 = t1 == std::string::npos ? std::string::npos : m.find('~', t1 + 1);
+        if (t1 == std::string::npos || t2 == std::string::npos) {
+            out += m.substr(i);
+            break;
+        }
+        out += m.substr(i, t1 - i) + "<" + m.substr(t1 + 1, t2 - t1 - 1) + ">";
+        i = t2 + 1;
+    }
+    return out;
 }
 
 int class_for(Doc& d, const std::string& raw) {
     std::string name = clean_name(raw);
     size_t cls_at = raw.find(":::");
     if (cls_at != std::string::npos) d.sheet.use(name, trim(raw.substr(cls_at + 3)));
+    std::string display = display_name(raw, name);
     auto it = d.index.find(name);
-    if (it != d.index.end()) return it->second;
+    if (it != d.index.end()) {
+        if (display != name) d.classes[it->second].display = display;  // a later declaration may name the label or generics
+        return it->second;
+    }
     Class c;
     c.name = name;
+    c.display = display;
     c.ns = d.cur_ns;
     d.classes.push_back(c);
     return d.index[name] = (int)d.classes.size() - 1;
@@ -72,10 +118,42 @@ void add_member(Class& c, const std::string& raw) {
     std::string m = trim(raw);
     if (m.empty()) return;
     if (starts(m, "<<") && m.size() > 4 && m.compare(m.size() - 2, 2, ">>") == 0) {
-        c.annotation = m;
+        c.annotation = stereotype(m);
         return;
     }
-    (m.find('(') != std::string::npos ? c.methods : c.attrs).push_back(m);
+    m = angle_generics(m);
+    Member mem;
+    bool method = m.find('(') != std::string::npos;
+    size_t close = method ? m.find(')', m.find('(')) : std::string::npos;
+    // the classifier, `*` for abstract and `$` for static: right after a method's parameters, or at the very end
+    char mark = 0;
+    if (close != std::string::npos && close + 1 < m.size() && (m[close + 1] == '$' || m[close + 1] == '*')) {
+        mark = m[close + 1];
+        m.erase(close + 1, 1);
+    } else if (!m.empty() && (m.back() == '$' || m.back() == '*')) {
+        mark = m.back();
+        m = trim(m.substr(0, m.size() - 1));
+    }
+    mem.statik = mark == '$';
+    mem.abstrakt = mark == '*';
+    if (method) {  // a return type after the parameters reads `name(params) : Type`, as Mermaid draws it
+        size_t cp = m.find(')', m.find('('));
+        if (cp != std::string::npos) {
+            std::string rest = trim(m.substr(cp + 1));
+            if (!rest.empty() && rest[0] != ':') m = trim(m.substr(0, cp + 1)) + " : " + rest;
+        }
+    }
+    mem.text = m;
+    (method ? c.methods : c.attrs).push_back(mem);
+}
+
+// One member row: like aligned_text, with the classifier's styling (abstract italic, static underlined).
+void member_text(std::string& out, const Theme& th, const Member& m, double x, double cy, double size, const std::string& fill) {
+    out += "<text x=\"" + num(x) + "\" y=\"" + num(cy + size * 0.35) + "\" text-anchor=\"start\" font-size=\"" + num(size) +
+           "\" font-weight=\"400\" font-family=\"" + esc(th.font) + "\" fill=\"" + fill + "\"";
+    if (m.abstrakt) out += " font-style=\"italic\"";
+    if (m.statik) out += " text-decoration=\"underline\"";
+    out += ">" + text_content(m.text) + "</text>\n";
 }
 
 struct Op {
@@ -214,8 +292,22 @@ bool parse(const std::string& source, Doc& d, std::string& error) {
             std::string rest = trim(line.substr(6));
             bool brace = !rest.empty() && rest.back() == '{';
             if (brace) rest = trim(rest.substr(0, rest.size() - 1));
-            size_t sp = rest.find(' ');
-            int c = class_for(d, sp == std::string::npos ? rest : rest.substr(0, sp));
+            // the name spec runs to the first space outside a ["..."] label (a label may itself hold spaces)
+            size_t end = rest.size();
+            for (size_t k = 0; k < rest.size(); k++) {
+                if (rest.compare(k, 2, "[\"") == 0) {
+                    size_t q = rest.find("\"]", k + 2);
+                    if (q != std::string::npos) {
+                        k = q + 1;
+                        continue;
+                    }
+                }
+                if (rest[k] == ' ') {
+                    end = k;
+                    break;
+                }
+            }
+            int c = class_for(d, rest.substr(0, end));
             if (brace) open = c;
             continue;
         }
@@ -223,7 +315,7 @@ bool parse(const std::string& source, Doc& d, std::string& error) {
             size_t close = line.find(">>");
             if (close != std::string::npos) {
                 int c = class_for(d, line.substr(close + 2));
-                d.classes[c].annotation = line.substr(0, close + 2);
+                d.classes[c].annotation = stereotype(line.substr(0, close + 2));
                 continue;
             }
         }
@@ -289,10 +381,10 @@ bool render_class(const std::string& source, const Options& options, std::string
     std::vector<LayoutNode> ln(d.classes.size());
     for (size_t k = 0; k < d.classes.size(); k++) {
         Class& c = d.classes[k];
-        double w = text.width(c.name, kNodeFont, 600);
+        double w = text.width(c.display, kNodeFont, 600);
         if (!c.annotation.empty()) w = std::max(w, text.width(c.annotation, kEdgeFont, 400));
-        for (auto& m : c.attrs) w = std::max(w, text.width(m, kEdgeFont + 1, 400));
-        for (auto& m : c.methods) w = std::max(w, text.width(m, kEdgeFont + 1, 400));
+        for (auto& m : c.attrs) w = std::max(w, text.width(m.text, kEdgeFont + 1, 400));
+        for (auto& m : c.methods) w = std::max(w, text.width(m.text, kEdgeFont + 1, 400));
         c.w = std::max(80.0, w + 2 * kTextPad);
         c.head_h = kHead + (c.annotation.empty() ? 0 : kAnnot);
         c.attrs_h = c.attrs.empty() ? kSection : c.attrs.size() * kRow + kSection;
@@ -446,14 +538,14 @@ bool render_class(const std::string& source, const Options& options, std::string
             centered_text(body, th, {c.annotation}, p.x, y + 4 + kAnnot / 2 + 2, kEdgeFont, 400, th.text_sec);
             ty = y + kAnnot + kHead / 2;
         }
-        centered_text(body, th, {c.name}, p.x, ty, kNodeFont, 600, th.text);
+        centered_text(body, th, {c.display}, p.x, ty, kNodeFont, 600, th.text);
         double ay = y + c.head_h;
         for (size_t m = 0; m < c.attrs.size(); m++)
-            aligned_text(body, th, {c.attrs[m]}, x + kTextPad, ay + kSection / 2 + m * kRow + kRow / 2, kEdgeFont + 1, 400, th.text, "start");
+            member_text(body, th, c.attrs[m], x + kTextPad, ay + kSection / 2 + m * kRow + kRow / 2, kEdgeFont + 1, th.text);
         double my = ay + c.attrs_h;
         body += "<line x1=\"" + num(x) + "\" y1=\"" + num(my) + "\" x2=\"" + num(x + c.w) + "\" y2=\"" + num(my) + "\" stroke=\"" + th.border + "\" stroke-width=\"1\"/>\n";
         for (size_t m = 0; m < c.methods.size(); m++)
-            aligned_text(body, th, {c.methods[m]}, x + kTextPad, my + kSection / 2 + m * kRow + kRow / 2, kEdgeFont + 1, 400, th.text, "start");
+            member_text(body, th, c.methods[m], x + kTextPad, my + kSection / 2 + m * kRow + kRow / 2, kEdgeFont + 1, th.text);
         body += "</g>\n";
     }
     svg = svg_document(th, bx1 - bx0 + 2 * kMargin, by1 - by0 + 2 * kMargin, body);

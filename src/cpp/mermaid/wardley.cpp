@@ -149,7 +149,7 @@ bool render_wardley(const std::string& source, const Options& options, std::stri
     std::vector<Annotation> annotations;
     bool has_annotation_box = false;
     double box_vis = 0, box_evo = 0;
-    std::vector<std::string> stages = {"Genesis", "Custom Built", "Product (+rental)", "Commodity (+utility)"};
+    std::vector<std::string> stages = {"Genesis", "Custom Built", "Product", "Commodity"};
     std::vector<double> bounds = {0.25, 0.5, 0.75, 1.0};
     bool in_pipeline = false;
     bool first = true;
@@ -388,9 +388,7 @@ bool render_wardley(const std::string& source, const Options& options, std::stri
     {
         double cx = 22, cy = top + ph / 2;
         body += "<text transform=\"rotate(-90 " + num(cx) + " " + num(cy) + ")\" x=\"" + num(cx) + "\" y=\"" + num(cy + 4) + "\" text-anchor=\"middle\" font-size=\"12\" font-weight=\"600\" font-family=\"" + esc(th.font) + "\" fill=\"" + th.text +
-                "\">Value Chain</text>\n";
-        aligned_text(body, th, {"Visible"}, left - 8, top + 8, 11, 400, th.text_sec, "end");
-        aligned_text(body, th, {"Invisible"}, left - 8, top + ph - 8, 11, 400, th.text_sec, "end");
+                "\">Visibility</text>\n";
     }
 
     auto arrow_head = [&](std::string& out, Pt tip, Pt from_pt, const std::string& color) {

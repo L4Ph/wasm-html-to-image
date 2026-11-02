@@ -24,11 +24,11 @@ struct DomainInfo {
 };
 
 const DomainInfo kInfo[kDomains] = {
-    {"complex", "Complex", "Probe - Sense - Respond", "Emergent practice", 14},
-    {"complicated", "Complicated", "Sense - Analyze - Respond", "Good practice", 9},
-    {"chaotic", "Chaotic", "Act - Sense - Respond", "Novel practice", 18},
-    {"clear", "Clear", "Sense - Categorize - Respond", "Best practice", 5},
-    {"confusion", "Confusion", "", "", 12},
+    {"complex", "Complex", "Probe → Sense → Respond", "Emergent Practices", 14},
+    {"complicated", "Complicated", "Sense → Analyse → Respond", "Good Practices", 9},
+    {"chaotic", "Chaotic", "Act → Sense → Respond", "Novel Practices", 18},
+    {"clear", "Clear", "Sense → Categorise → Respond", "Best Practices", 5},
+    {"confusion", "Confusion", "Disorder", "", 12},
 };
 
 /// The official themes give each domain a colour of its own, drawn at 40% over the background.
@@ -187,9 +187,10 @@ bool render_cynefin(const std::string& source, const Options& options, std::stri
     {
         double rx = 92, ry = 56;
         body += "<ellipse cx=\"" + num(mx) + "\" cy=\"" + num(my) + "\" rx=\"" + num(rx) + "\" ry=\"" + num(ry) + "\" fill=\"" + domain_fill(th, Confusion) + "\"" + domain_opacity(th) + " stroke=\"" + boundary + "\" stroke-width=\"2\"/>\n";
-        double y = items[Confusion].empty() ? my : my - 22;
+        double y = items[Confusion].empty() ? my - 9 : my - 26;
         centered_text(body, th, {kInfo[Confusion].title}, mx, y, 14, 700, th.text);
-        double iy = y + 12;
+        centered_text(body, th, {kInfo[Confusion].sense}, mx, y + 18, 11, 400, th.text_sec);  // the centre is Disorder
+        double iy = y + 30;
         size_t shown = std::min<size_t>(items[Confusion].size(), 3);
         for (size_t k = 0; k < shown; k++) {
             badge(mx, iy, items[Confusion][k], 2 * rx - 36);

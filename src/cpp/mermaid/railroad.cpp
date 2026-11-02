@@ -679,12 +679,12 @@ bool render_railroad(const std::string& source, const Options& options, std::str
 
     Painter p{th, text, "", "stroke=\"" + th.line + "\" stroke-width=\"1.5\""};
     const double kEnd = 16;  // the start and end markers and the lines to them
-    double top = kMargin + (title.empty() ? 0 : 30), y = top, maxw = 0;
+    double top = kMargin, y = top, maxw = 0;  // Mermaid draws no title on a railroad diagram (the parsed title only takes the line)
     std::string rule_art;
     for (auto& r : rules) {
         double w = kEnd * 2 + r.body.w + 2 * 8;
         maxw = std::max(maxw, w);
-        aligned_text(p.out, th, {r.name}, kMargin, y + 8, 14, 700, th.label, "start");
+        aligned_text(p.out, th, {r.name + " ="}, kMargin, y + 8, 14, 700, th.label, "start");
         double base = y + 24 + r.body.up;
         // start marker, the diagram, end marker
         p.out += "<circle cx=\"" + num(kMargin + 4) + "\" cy=\"" + num(base) + "\" r=\"4\" fill=\"" + th.line + "\"/>\n";
@@ -697,7 +697,6 @@ bool render_railroad(const std::string& source, const Options& options, std::str
     }
     double W = maxw + 2 * kMargin, H = y - 36 + kMargin;
     std::string body;
-    if (!title.empty()) centered_text(body, th, {title}, W / 2, kMargin, 18, 600, th.label);
     body += p.out;
     svg = svg_document(th, W, H, body);
     return true;

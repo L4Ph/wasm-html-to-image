@@ -20,6 +20,7 @@ struct Event {
     Ev kind = Ev::Message;
     int a = -1, b = -1;
     std::string text, label;
+    std::string num;  // the autonumber, drawn apart from the text
     bool dashed = false;
     int head = kNone;
     int act = 0;   // +1: the message activates its target, -1: it deactivates its sender
@@ -39,6 +40,7 @@ struct Doc {
     std::vector<Participant> ps;
     std::vector<Event> ev;
     std::vector<BoxGroup> boxes;
+    std::vector<std::pair<int, std::string>> links;  // actor link-menu entries (participant, label)
 };
 
 std::string lower(std::string s) {
@@ -103,7 +105,7 @@ bool parse(const std::string& text, Doc& d, std::string& error) {
         break;
     }
     bool autonumber = false, in_box = false;
-    int counter = 0, depth = 0, box_first = 0;
+    int counter = 1, step = 1, depth = 0, box_first = 0;
     std::string box_label;
     bool first = true;
     size_t i = 0;
@@ -123,14 +125,36 @@ bool parse(const std::string& text, Doc& d, std::string& error) {
             std::string r2;
             if (word(rest, "participant", r2) || word(rest, "actor", r2)) line = "participant " + r2;
         }
-        // `destroy X`, `link X: ...` and `links X: ...` need no drawing
+        // `destroy X` needs no drawing; `link`/`links` feed the actor menus drawn under the actor boxes
         if (word(line, "destroy", rest)) {
             find_or_add(d, rest);
             continue;
         }
-        if (word(line, "links", rest) || word(line, "link", rest)) {
-            find_or_add(d, trim(rest.substr(0, rest.find(':'))));
-            continue;
+        {
+            std::string lr;
+            bool plural = word(line, "links", lr);
+            if (plural || word(line, "link", lr)) {  // `link A: Label @ url`, or `links A: {"Label": "url", ...}`
+                size_t colon = lr.find(':');
+                int pi = find_or_add(d, trim(lr.substr(0, colon)));
+                std::string tail = colon == std::string::npos ? "" : trim(lr.substr(colon + 1));
+                if (plural) {  // the JSON form: every quoted key is a menu label
+                    for (size_t q = tail.find('"'); q != std::string::npos;) {
+                        size_t q2 = tail.find('"', q + 1);
+                        if (q2 == std::string::npos) break;
+                        size_t after = tail.find_first_not_of(" \t", q2 + 1);
+                        if (after != std::string::npos && tail[after] == ':') {
+                            std::string label = tail.substr(q + 1, q2 - q - 1);
+                            if (!label.empty()) d.links.push_back({pi, label});
+                        }
+                        q = tail.find('"', q2 + 1);
+                    }
+                } else {
+                    size_t at = tail.find(" @ ");
+                    std::string label = trim(at == std::string::npos ? tail : tail.substr(0, at));
+                    if (!label.empty()) d.links.push_back({pi, label});
+                }
+                continue;
+            }
         }
         if (word(line, "box", rest)) {
             in_box = true;
@@ -156,6 +180,17 @@ bool parse(const std::string& text, Doc& d, std::string& error) {
         }
         if (word(line, "autonumber", rest)) {
             autonumber = true;
+            // `autonumber`, `autonumber 10`, `autonumber 10 5`: an optional start and step
+            std::vector<int> args;
+            for (size_t p = 0; p < rest.size();) {
+                size_t sp = rest.find(' ', p);
+                std::string tok = trim(rest.substr(p, sp == std::string::npos ? std::string::npos : sp - p));
+                if (!tok.empty() && tok.find_first_not_of("0123456789-") == std::string::npos) args.push_back(std::stoi(tok));
+                if (sp == std::string::npos) break;
+                p = sp + 1;
+            }
+            if (!args.empty()) counter = args[0];
+            if (args.size() > 1) step = args[1];
             continue;
         }
         if (word(line, "activate", rest) || word(line, "deactivate", rest)) {
@@ -260,7 +295,10 @@ bool parse(const std::string& text, Doc& d, std::string& error) {
         }
         ev.a = find_or_add(d, from);
         ev.b = find_or_add(d, to);
-        if (autonumber) ev.text = std::to_string(++counter) + ". " + ev.text;
+        if (autonumber) {
+            ev.num = std::to_string(counter);
+            counter += step;
+        }
         d.ev.push_back(ev);
     }
     while (depth-- > 0) {
@@ -421,6 +459,8 @@ bool render_sequence(const std::string& source, const Options& options, std::str
                     centered_text(msgs, th, lines, (x1 + x2) / 2, y + labelh / 2 + 2, kMsgFont, 400, th.text);
                     y = yline + 14;
                 }
+                if (!e.num.empty())  // the sequence number sits under the line, on the sender's lifeline
+                    centered_text(msgs, th, {e.num}, cx[e.a], yline + 10, kMsgFont, 400, th.text);
                 if (e.act > 0) activate(e.b, yline);
                 else if (e.act < 0) deactivate(e.a, yline);
                 break;
@@ -512,7 +552,13 @@ bool render_sequence(const std::string& source, const Options& options, std::str
         groups += rect(x0, -box_top, x1 - x0, bottom + hh + box_top + 8, mix(th.fg, th.bg, 5), th.border, 6);
         if (!b.label.empty()) centered_text(groups, th, {b.label}, (x0 + x1) / 2, -box_top / 2 - 2, metrics::kNodeFont, 600, th.text);
     }
-    std::string body = "<g transform=\"translate(" + num(margin - minx) + "," + num(margin + box_top) + ")\">\n" + groups + lifelines + frames + bars_svg + msgs + boxes + "</g>\n";
+    std::string menus;  // actor link menus hang under the top actor boxes, over the messages, as Mermaid draws them
+    {
+        std::map<int, int> row;
+        for (auto& [pi, label] : d.links)
+            aligned_text(menus, th, {label}, cx[pi] - w[pi] / 2, hh + 40 + row[pi]++ * 17, 14, 400, th.text, "start");
+    }
+    std::string body = "<g transform=\"translate(" + num(margin - minx) + "," + num(margin + box_top) + ")\">\n" + groups + lifelines + frames + bars_svg + msgs + boxes + menus + "</g>\n";
     svg = svg_document(th, maxx - minx + 2 * margin, bottom + hh + 2 * margin + box_top + (d.boxes.empty() ? 0 : 8), body);
     return true;
 }

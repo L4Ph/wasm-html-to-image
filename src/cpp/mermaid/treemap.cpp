@@ -195,7 +195,7 @@ bool render_treemap(const std::string& source, const Options& options, std::stri
     for (auto& k : root.kids)
         if (k->value > 0) top_items.push_back(k.get());
     std::sort(top_items.begin(), top_items.end(), [](Item* a, Item* b) { return a->value > b->value; });
-    squarify(top_items, pad, top, W - 2 * pad, H - top - pad);
+    squarify(top_items, pad, top + kHeader, W - 2 * pad, H - top - kHeader - pad);
     for (size_t k = 0; k < top_items.size(); k++) {
         std::vector<Item*> stackv{top_items[k]};
         while (!stackv.empty()) {
@@ -212,6 +212,11 @@ bool render_treemap(const std::string& source, const Options& options, std::stri
 
     std::string body;
     if (!title.empty()) centered_text(body, th, {title}, W / 2, pad + 8, 15, 600, th.text);
+    // the root is a section too, headed by the grand total alone, as Mermaid draws it
+    body += "<g class=\"section root\">\n<rect x=\"" + num(root.x) + "\" y=\"" + num(root.y) + "\" width=\"" + num(root.w) + "\" height=\"" + num(root.h) + "\" fill=\"" + th.surface +
+            "\" stroke=\"" + th.border + "\" stroke-width=\"1\"/>\n";
+    aligned_text(body, th, {fmt(root.value)}, root.x + root.w - 6, root.y + kPad + kHeader / 2, 11, 400, th.text_sec, "end");
+    body += "</g>\n";
     // sections first (outer to inner), then leaves on top of them
     std::vector<Item*> order, leaves;
     std::vector<Item*> walk(top_items.begin(), top_items.end());
@@ -228,7 +233,11 @@ bool render_treemap(const std::string& source, const Options& options, std::stri
         if (it->h > 2 * kHeader && it->w > 40) {
             std::string label = it->name;
             if (text.width(label, 12, 600) > it->w - 12) label.clear();
-            if (!label.empty()) aligned_text(body, th, {label}, it->x + 6, it->y + kHeader / 2, 12, 600, th.text, "start");
+            if (!label.empty()) {
+                aligned_text(body, th, {label}, it->x + 6, it->y + kHeader / 2, 12, 600, th.text, "start");
+                std::string value = fmt(it->value);  // a section is headed by its total too, as Mermaid draws it
+                if (text.width(value, 11, 400) <= it->w - 12) aligned_text(body, th, {value}, it->x + it->w - 6, it->y + kHeader / 2, 11, 400, th.text_sec, "end");
+            }
         }
         body += "</g>\n";
     }
