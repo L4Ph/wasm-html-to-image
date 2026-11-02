@@ -6,6 +6,7 @@ on:
       - master
     paths:
       - "packages/html-to-image/package.json"
+      - "packages/quickjs-dom/package.json"
   workflow_dispatch:
 
 concurrency:
@@ -19,6 +20,7 @@ jobs:
       should_release: ${{ steps.check.outputs.should_release }}
       version: ${{ steps.check.outputs.version }}
       tag: ${{ steps.check.outputs.tag }}
+      publish_qjs: ${{ steps.qjs.outputs.publish_qjs }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -47,9 +49,22 @@ jobs:
             echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           fi
 
+      # wasm-quickjs-dom is versioned on its own: a new version there is published even when wasm-html-to-image has none
+      - name: Check wasm-quickjs-dom version on npm
+        id: qjs
+        run: |
+          QJS_VERSION=$(node -p "require('./packages/quickjs-dom/package.json').version")
+          if [ -z "$(npm view "wasm-quickjs-dom@$QJS_VERSION" version 2>/dev/null)" ]; then
+            echo "wasm-quickjs-dom@$QJS_VERSION is not on npm. It will be published."
+            echo "publish_qjs=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "wasm-quickjs-dom@$QJS_VERSION is already on npm."
+            echo "publish_qjs=false" >> "$GITHUB_OUTPUT"
+          fi
+
   release:
     needs: check-version
-    if: needs.check-version.outputs.should_release == 'true'
+    if: needs.check-version.outputs.should_release == 'true' || needs.check-version.outputs.publish_qjs == 'true'
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -85,6 +100,7 @@ jobs:
         run: pnpm test
 
       - name: Create and push git tag
+        if: needs.check-version.outputs.should_release == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
@@ -92,6 +108,7 @@ jobs:
           git push origin "${{ needs.check-version.outputs.tag }}"
 
       - name: Create GitHub Release
+        if: needs.check-version.outputs.should_release == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -103,8 +120,9 @@ jobs:
         run: |
           npm install -g npm@latest
           # wasm-html-to-image depends on wasm-quickjs-dom, so that one goes first (only when its version is new)
-          QJS_VERSION=$(node -p "require('./packages/quickjs-dom/package.json').version")
-          if [ -z "$(npm view "wasm-quickjs-dom@$QJS_VERSION" version 2>/dev/null)" ]; then
+          if [ "${{ needs.check-version.outputs.publish_qjs }}" = "true" ]; then
             pnpm --filter wasm-quickjs-dom publish --provenance --access public --no-git-checks
           fi
-          pnpm --filter wasm-html-to-image publish --provenance --access public --no-git-checks
+          if [ "${{ needs.check-version.outputs.should_release }}" = "true" ]; then
+            pnpm --filter wasm-html-to-image publish --provenance --access public --no-git-checks
+          fi
