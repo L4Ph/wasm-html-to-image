@@ -27,6 +27,7 @@ struct Node {
 struct Group {
     std::string title;
     int parent = -1;
+    bool desc_title = false;  // the title is the bare id, so an `id : description` line may replace it
 };
 
 struct Edge {
@@ -41,6 +42,8 @@ struct Doc {
     std::vector<Edge> edges;
     std::map<std::string, int> index;      // key -> node
     std::map<std::string, int> composite;  // id -> group
+    std::map<std::string, std::string> comp_desc;  // composite id -> the description an `id : ...` line gave it
+    std::map<std::string, int> group_index;        // composite id -> the group once its block is parsed
     Direction dir = Direction::TD;
     StyleSheet sheet;
 };
@@ -190,9 +193,15 @@ bool parse(const std::string& source, Doc& d, std::string& error) {
             if (open) {
                 Group g;
                 g.title = name.empty() ? id : name;
+                g.desc_title = name.empty();
+                if (g.desc_title) {  // an `id : description` line before the block names it already
+                    auto it = d.comp_desc.find(id);
+                    if (it != d.comp_desc.end()) g.title = it->second;
+                }
                 g.parent = scope;
                 d.groups.push_back(g);
                 d.composite[id] = (int)d.groups.size() - 1;
+                d.group_index[id] = (int)d.groups.size() - 1;
                 scopes.push_back((int)d.groups.size() - 1);
             } else {
                 int n = node_for(d, id, scope, false);
@@ -230,8 +239,16 @@ bool parse(const std::string& source, Doc& d, std::string& error) {
         }
         size_t colon = line.find(':');
         if (colon != std::string::npos) {  // `id : description`
+            std::string id = strip_class(trim(line.substr(0, colon)));
+            std::string desc = trim(line.substr(colon + 1));
             int n = node_for(d, line.substr(0, colon), scope, false);
-            if (n >= 0) d.nodes[n].desc.push_back(trim(line.substr(colon + 1)));
+            if (n >= 0) {
+                d.nodes[n].desc.push_back(desc);
+            } else {  // a composite state: the description is its heading, as Mermaid draws it
+                d.comp_desc[id] = desc;
+                auto gi = d.group_index.find(id);
+                if (gi != d.group_index.end() && d.groups[gi->second].desc_title) d.groups[gi->second].title = desc;
+            }
             continue;
         }
         node_for(d, line, scope, false);  // a bare state id
