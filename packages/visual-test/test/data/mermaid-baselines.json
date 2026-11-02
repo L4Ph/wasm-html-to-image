@@ -46,7 +46,7 @@
     ]
   },
   "sequence@light": {
-    "width": 360.18,
+    "width": 351,
     "height": 487,
     "tags": {
       "svg": 2,
@@ -54,7 +54,7 @@
       "g": 1,
       "line": 10,
       "rect": 9,
-      "text": 16,
+      "text": 22,
       "polygon": 6
     },
     "colors": [
@@ -68,7 +68,7 @@
     ]
   },
   "sequence@dark": {
-    "width": 360.18,
+    "width": 351,
     "height": 487,
     "tags": {
       "svg": 2,
@@ -76,7 +76,7 @@
       "g": 1,
       "line": 10,
       "rect": 9,
-      "text": 16,
+      "text": 22,
       "polygon": 6
     },
     "colors": [
