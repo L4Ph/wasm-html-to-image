@@ -20,6 +20,7 @@ struct Event {
     Ev kind = Ev::Message;
     int a = -1, b = -1;
     std::string text, label;
+    std::string num;  // the autonumber, drawn apart from the text
     bool dashed = false;
     int head = kNone;
     int act = 0;   // +1: the message activates its target, -1: it deactivates its sender
@@ -104,7 +105,7 @@ bool parse(const std::string& text, Doc& d, std::string& error) {
         break;
     }
     bool autonumber = false, in_box = false;
-    int counter = 0, depth = 0, box_first = 0;
+    int counter = 1, step = 1, depth = 0, box_first = 0;
     std::string box_label;
     bool first = true;
     size_t i = 0;
@@ -179,6 +180,17 @@ bool parse(const std::string& text, Doc& d, std::string& error) {
         }
         if (word(line, "autonumber", rest)) {
             autonumber = true;
+            // `autonumber`, `autonumber 10`, `autonumber 10 5`: an optional start and step
+            std::vector<int> args;
+            for (size_t p = 0; p < rest.size();) {
+                size_t sp = rest.find(' ', p);
+                std::string tok = trim(rest.substr(p, sp == std::string::npos ? std::string::npos : sp - p));
+                if (!tok.empty() && tok.find_first_not_of("0123456789-") == std::string::npos) args.push_back(std::stoi(tok));
+                if (sp == std::string::npos) break;
+                p = sp + 1;
+            }
+            if (!args.empty()) counter = args[0];
+            if (args.size() > 1) step = args[1];
             continue;
         }
         if (word(line, "activate", rest) || word(line, "deactivate", rest)) {
@@ -283,7 +295,10 @@ bool parse(const std::string& text, Doc& d, std::string& error) {
         }
         ev.a = find_or_add(d, from);
         ev.b = find_or_add(d, to);
-        if (autonumber) ev.text = std::to_string(++counter) + ". " + ev.text;
+        if (autonumber) {
+            ev.num = std::to_string(counter);
+            counter += step;
+        }
         d.ev.push_back(ev);
     }
     while (depth-- > 0) {
@@ -444,6 +459,8 @@ bool render_sequence(const std::string& source, const Options& options, std::str
                     centered_text(msgs, th, lines, (x1 + x2) / 2, y + labelh / 2 + 2, kMsgFont, 400, th.text);
                     y = yline + 14;
                 }
+                if (!e.num.empty())  // the sequence number sits under the line, on the sender's lifeline
+                    centered_text(msgs, th, {e.num}, cx[e.a], yline + 10, kMsgFont, 400, th.text);
                 if (e.act > 0) activate(e.b, yline);
                 else if (e.act < 0) deactivate(e.a, yline);
                 break;
