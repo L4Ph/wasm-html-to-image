@@ -190,3 +190,13 @@ describe("notes in state and class diagrams", () => {
     expect((data.match(/note-link/g) ?? []).length).toBe(1);
   });
 });
+
+describe("gantt vertical markers", () => {
+  it("draws a `vert` task as a marker line with its name, not as a row", async () => {
+    const src = ["gantt", "  dateFormat YYYY-MM-DD", "  section S", "  Build :a1, 2024-01-01, 5d", "  Freeze :vert, v1, 2024-01-03, 0d"].join("\n");
+    const { data } = await renderMermaid(src);
+    expect(data).toContain('class="marker"');
+    expect(data).toContain("Freeze");
+    expect((data.match(/class="task"/g) ?? []).length).toBe(1);
+  });
+});
