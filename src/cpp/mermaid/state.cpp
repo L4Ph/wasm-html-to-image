@@ -18,6 +18,7 @@ enum class Kind { State, Start, End, Choice, Fork, Note };
 struct Node {
     std::string name;
     std::vector<std::string> desc;
+    bool named = false;  // declared with a quoted name (`state "Name" as id`), so the name is a label line
     Kind kind = Kind::State;
     int group = -1;
     double w = 0, h = 0;
@@ -206,7 +207,7 @@ bool parse(const std::string& source, Doc& d, std::string& error) {
             } else {
                 int n = node_for(d, id, scope, false);
                 if (n >= 0) {
-                    if (!name.empty()) d.nodes[n].name = name;
+                    if (!name.empty()) d.nodes[n].name = name, d.nodes[n].named = true;
                     d.nodes[n].kind = kind;
                 }
             }
@@ -328,14 +329,16 @@ bool render_state(const std::string& source, const Options& options, std::string
                 break;
             }
             case Kind::State: {
-                n.title_lines = wrap_lines(text, split_lines(n.name), kNodeFont, kNodeWeight, kWrapWidth);
-                n.desc = wrap_lines(text, n.desc, kEdgeFont, 400, kWrapWidth);
+                // the label: a quoted name first, then each `id : description` line; a bare id labels itself only when it has neither
+                std::vector<std::string> label;
+                if (n.named) label.push_back(n.name);
+                for (auto& s : n.desc)
+                    if (!s.empty()) label.push_back(s);
+                if (label.empty()) label.push_back(n.name);
+                n.title_lines = wrap_lines(text, label, kNodeFont, kNodeWeight, kWrapWidth);
+                n.desc.clear();  // consumed into the label; there is no separate description section
                 double w = text.block_width(n.title_lines, kNodeFont, kNodeWeight);
                 double h = n.title_lines.size() * lh;
-                if (!n.desc.empty()) {
-                    w = std::max(w, text.block_width(n.desc, kEdgeFont, 400));
-                    h += 10 + n.desc.size() * dlh;
-                }
                 n.w = std::max(60.0, w + 2 * kPadX);
                 n.h = h + 2 * kPadY;
                 break;
