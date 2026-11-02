@@ -18,6 +18,7 @@ struct Class {
     std::string name, annotation;
     std::vector<std::string> attrs, methods;
     double w = 0, h = 0, head_h = 0, attrs_h = 0;
+    int ns = -1;  // the `namespace` it was declared in
 };
 
 struct Relation {
@@ -30,6 +31,8 @@ struct Relation {
 struct Doc {
     std::vector<Class> classes;
     std::vector<Relation> rels;
+    std::vector<std::string> namespaces;
+    int cur_ns = -1;  // while parsing: the namespace block that is open
     std::map<std::string, int> index;
     Direction dir = Direction::TD;
     StyleSheet sheet;
@@ -55,6 +58,7 @@ int class_for(Doc& d, const std::string& raw) {
     if (it != d.index.end()) return it->second;
     Class c;
     c.name = name;
+    c.ns = d.cur_ns;
     d.classes.push_back(c);
     return d.index[name] = (int)d.classes.size() - 1;
 }
@@ -165,8 +169,20 @@ bool parse(const std::string& source, Doc& d, std::string& error) {
             continue;
         }
         if (d.sheet.take(line, false)) continue;
+        if (starts(line, "namespace ")) {  // `namespace Name {`: the classes declared up to its `}` are framed together
+            std::string name = trim(line.substr(10));
+            if (!name.empty() && name.back() == '{') name = trim(name.substr(0, name.size() - 1));
+            if (name.size() >= 2 && name.front() == '`' && name.back() == '`') name = name.substr(1, name.size() - 2);
+            d.namespaces.push_back(name);
+            d.cur_ns = (int)d.namespaces.size() - 1;
+            continue;
+        }
+        if (line == "}" && d.cur_ns >= 0) {
+            d.cur_ns = -1;
+            continue;
+        }
         if (starts(line, "note") || starts(line, "style ") || starts(line, "classDef ") || starts(line, "cssClass ") || starts(line, "click ") ||
-            starts(line, "link ") || starts(line, "callback ") || starts(line, "namespace ") || starts(line, "title ") || line == "}")
+            starts(line, "link ") || starts(line, "callback ") || starts(line, "title ") || line == "}")
             continue;
         if (starts(line, "class ")) {
             std::string rest = trim(line.substr(6));
@@ -273,11 +289,50 @@ bool render_class(const std::string& source, const Options& options, std::string
             le[k].label_h = label_lines[k].size() * kEdgeFont * kLineHeight + 16;
         }
     }
-    LayoutResult lay = layout_layered(ln, le, d.dir);
-    const double ox = kMargin, oy = kMargin;
+    std::vector<int> group_parent(d.namespaces.size(), -1);
+    std::vector<double> group_min_w;  // a frame is wide enough for its title
+    for (const std::string& n : d.namespaces) group_min_w.push_back(std::ceil(text.width(n, kGroupFont, kGroupWeight)) + 24 + 4);
+    for (size_t k = 0; k < d.classes.size(); k++) ln[k].group = d.classes[k].ns;
+    LayoutResult lay = layout_layered(ln, le, d.dir, group_parent, group_min_w);
+
+    // namespace frames, around the classes declared in them
+    struct Frame {
+        double x0 = 0, y0 = 0, x1 = 0, y1 = 0;
+        bool used = false;
+    };
+    constexpr double kFramePad = 16, kHeader = 26;
+    std::vector<Frame> frames(d.namespaces.size());
+    for (size_t k = 0; k < d.classes.size(); k++) {
+        int g = d.classes[k].ns;
+        if (g < 0) continue;
+        double x0 = lay.center[k].x - d.classes[k].w / 2, y0 = lay.center[k].y - d.classes[k].h / 2, x1 = lay.center[k].x + d.classes[k].w / 2, y1 = lay.center[k].y + d.classes[k].h / 2;
+        Frame& f = frames[g];
+        f = f.used ? Frame{std::min(f.x0, x0), std::min(f.y0, y0), std::max(f.x1, x1), std::max(f.y1, y1), true} : Frame{x0, y0, x1, y1, true};
+    }
+    double bx0 = 0, by0 = 0, bx1 = lay.width, by1 = lay.height;
+    for (size_t g = 0; g < frames.size(); g++) {
+        Frame& f = frames[g];
+        if (!f.used) continue;
+        f = {f.x0 - kFramePad, f.y0 - kFramePad - kHeader, f.x1 + kFramePad, f.y1 + kFramePad, true};
+        f.x1 = std::max(f.x1, f.x0 + group_min_w[g]);
+        bx0 = std::min(bx0, f.x0), by0 = std::min(by0, f.y0), bx1 = std::max(bx1, f.x1), by1 = std::max(by1, f.y1);
+    }
+    const double ox = kMargin - bx0, oy = kMargin - by0;
     auto at = [&](Pt p) { return Pt{p.x + ox, p.y + oy}; };
 
     std::string body;
+    for (size_t g = 0; g < frames.size(); g++) {
+        const Frame& f = frames[g];
+        if (!f.used) continue;
+        body += "<g class=\"namespace\">\n<rect x=\"" + num(f.x0 + ox) + "\" y=\"" + num(f.y0 + oy) + "\" width=\"" + num(f.x1 - f.x0) + "\" height=\"" + num(f.y1 - f.y0) +
+                "\" rx=\"5\" ry=\"5\" fill=\"" + th.composite_fill + "\" stroke=\"" + th.border + "\" stroke-width=\"1\"/>\n";
+        if (!th.composite_header.empty())
+            body += "<rect x=\"" + num(f.x0 + ox) + "\" y=\"" + num(f.y0 + oy) + "\" width=\"" + num(f.x1 - f.x0) + "\" height=\"" + num(kHeader) + "\" rx=\"5\" ry=\"5\" fill=\"" + th.composite_header + "\" stroke=\"" + th.border + "\" stroke-width=\"1\"/>\n";
+        body += "<text x=\"" + num(f.x0 + ox + 12) + "\" y=\"" + num(f.y0 + oy + kHeader / 2 + kGroupFont * 0.35) + "\" font-size=\"" + num(kGroupFont) + "\" font-weight=\"" +
+                std::to_string(kGroupWeight) + "\" font-family=\"" + esc(th.font) + "\" fill=\"" + th.text + "\">" + esc(d.namespaces[g]) + "</text>\n";
+        body += "<line x1=\"" + num(f.x0 + ox) + "\" y1=\"" + num(f.y0 + oy + kHeader) + "\" x2=\"" + num(f.x1 + ox) + "\" y2=\"" + num(f.y0 + oy + kHeader) + "\" stroke=\"" + th.border +
+                "\" stroke-width=\"1\"/>\n</g>\n";
+    }
     for (size_t k = 0; k < d.rels.size(); k++) {
         const Relation& r = d.rels[k];
         if (lay.points[k].size() < 2) continue;
@@ -335,7 +390,7 @@ bool render_class(const std::string& source, const Options& options, std::string
             aligned_text(body, th, {c.methods[m]}, x + kTextPad, my + kSection / 2 + m * kRow + kRow / 2, kEdgeFont + 1, 400, th.text, "start");
         body += "</g>\n";
     }
-    svg = svg_document(th, lay.width + 2 * kMargin, lay.height + 2 * kMargin, body);
+    svg = svg_document(th, bx1 - bx0 + 2 * kMargin, by1 - by0 + 2 * kMargin, body);
     return true;
 }
 

@@ -159,3 +159,14 @@ describe("frame titles longer than the frame's contents", () => {
     roomFor(await width(`sequenceDiagram\n box ${T}\n participant A\n participant B\n end\n A->>B: hi`));
   });
 });
+
+describe("class diagram namespaces", () => {
+  it("frames the classes declared in a namespace, titled with its name", async () => {
+    const src = "classDiagram\n  namespace BaseShapes {\n    class Triangle\n    class Rectangle\n  }\n  class Lone\n  Triangle --|> Rectangle\n  Lone --> Triangle";
+    const { data } = await renderMermaid(src);
+    expect(data).toContain('class="namespace"');
+    expect(data).toContain("BaseShapes");
+    for (const name of ["Triangle", "Rectangle", "Lone"]) expect(data).toContain(name);
+    expect((data.match(/class="namespace"/g) ?? []).length).toBe(1);
+  });
+});
