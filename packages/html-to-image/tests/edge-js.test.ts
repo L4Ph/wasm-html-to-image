@@ -232,3 +232,22 @@ describe("javascript option, QuickJS engine: browser APIs that apps use", () => 
     expect(out.html).toContain('data-mo="1"');
   });
 });
+
+describe("javascript option, QuickJS engine: client-side routing", () => {
+  it("routers can fire popstate/hashchange events after pushState", async () => {
+    const out = await runPageScriptsQuickJS(
+      {
+        baseUrl: "http://h.test/",
+        html: page(
+          "",
+          `addEventListener("popstate", () => document.body.setAttribute("data-r", location.pathname));
+           history.pushState({}, "", "/list"); dispatchEvent(new PopStateEvent("popstate", { state: {} }));
+           document.body.setAttribute("data-h", typeof HashChangeEvent);`,
+        ),
+      },
+      { settleMs: 0 },
+    );
+    expect(out.html).toContain('data-r="/list"');
+    expect(out.html).toContain('data-h="function"');
+  });
+});

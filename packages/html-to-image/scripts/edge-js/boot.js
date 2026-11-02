@@ -35,6 +35,9 @@
       replaceState: function (s, t, u) { this.state = s; moveTo(u); },
       back: function () {}, forward: function () {}, go: function () {},
     };
+    ["PopStateEvent", "HashChangeEvent", "PageTransitionEvent", "ErrorEvent", "ProgressEvent"].forEach(function (n) {
+      if (!g[n]) g[n] = class extends g.Event { constructor(t, i) { super(t, i); Object.assign(this, i || {}); } };
+    });
     g.screen = { width: width, height: Math.round(width * 0.75) };
     g.innerWidth = g.outerWidth = width;
     g.innerHeight = g.outerHeight = Math.round(width * 0.75);

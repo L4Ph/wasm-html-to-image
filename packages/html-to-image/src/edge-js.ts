@@ -177,7 +177,10 @@ export async function runPageScriptsQuickJS(
       vm.setProp(host, name, fn);
       fn.dispose();
     };
-    define("log", () => {});
+    const debug = typeof process !== "undefined" && !!process.env?.WASM_HTML_TO_IMAGE_DEBUG;
+    define("log", (level: any, message: any) => {
+      if (debug) console.error("[page " + vm.getString(level) + "]", vm.getString(message));
+    });
     define("timer", (id: any, ms: any) => {
       timers.push({ id: vm.getNumber(id), at: Date.now() + vm.getNumber(ms) });
     });
