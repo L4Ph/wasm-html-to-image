@@ -232,8 +232,15 @@ export async function createDOM(
     closed = true;
     for (const d of deferreds) d.dispose();
     deferreds.clear();
-    vm.dispose();
-    runtime.dispose();
+    try {
+      vm.dispose();
+      runtime.dispose();
+    } catch {
+      // QuickJS asserts while freeing a runtime that still holds a very large DOM built inside a promise job; the
+      // assertion aborts that wasm instance for good. Drop it, so the next page gets a fresh one instead of every
+      // later page failing, and let this page's result stand.
+      quickjsModules.delete(opts.quickjsWasm ?? defaultSlot);
+    }
   };
 
   try {

@@ -398,6 +398,15 @@ describe("createDOM: a page kept open", () => {
     }
   });
 
+  it("survives QuickJS aborting while it frees a large DOM, and the next page still works", async () => {
+    const rows = Array.from({ length: 2000 }, (_, i) => `<tr><td>${i}</td><td><a href="/x/${i}">link ${i}</a></td></tr>`).join("");
+    const script = `Promise.resolve().then(() => { const d = document.createElement('div'); d.innerHTML = document.querySelector('table').outerHTML; document.body.setAttribute('data-done', '1'); });`;
+    const out = await runPageScriptsQuickJS({ html: `<!doctype html><body><table>${rows}</table><script>${script}</script></body>` }, { settleMs: 50 });
+    expect(out.html).toContain('data-done="1"');
+    const next = await runPageScriptsQuickJS({ html: page('<p id="p"></p>', 'document.getElementById("p").textContent = "after";') }, { settleMs: 0 });
+    expect(next.html).toContain(">after<");
+  }, 60_000);
+
   it("refuses to be used after close()", async () => {
     const dom = await createDOM({ html: "" }, { settleMs: 0 });
     dom.close();
