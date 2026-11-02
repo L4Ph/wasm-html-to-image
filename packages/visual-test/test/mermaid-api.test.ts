@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { PNG } from "pngjs";
-import { renderMermaid } from "wasm-html-to-image/single";
+import { render, renderMermaid } from "wasm-html-to-image/single";
 
 const GRAPH = "graph LR\n  A[開始] --> B{判定}\n  B -->|はい| C[完了]";
 
@@ -124,5 +124,22 @@ describe("renderMermaid", () => {
     let red = 0;
     for (let i = 0; i < png.data.length; i += 4) if (png.data[i] > 180 && png.data[i + 1] < 80 && png.data[i + 2] < 80) red++;
     expect(red).toBeGreaterThan(20);
+  });
+});
+
+describe("a diagram in HTML on a dark page", () => {
+  const diagram = '<div class="mermaid">graph LR\n A --> B</div>';
+  const fill = async (html: string) => ((await render({ value: html, width: 400, format: "svg" })).data as string).includes('fill="#1f2020"');
+
+  it("takes the dark theme without a theme being named, and not on a light page", async () => {
+    expect(await fill(`<body style="background:#111;color:#eee">${diagram}</body>`)).toBe(true);
+    expect(await fill(`<body style="color:#eee">${diagram}</body>`)).toBe(true); // no background: light text decides
+    expect(await fill(`<body style="background:#fff;color:#111">${diagram}</body>`)).toBe(false);
+    expect(await fill(diagram)).toBe(false);
+  });
+
+  it("leaves a theme or a palette the page names alone", async () => {
+    expect(await fill(`<body style="background:#111;color:#eee"><div style="--mermaid-theme:light">${diagram}</div></body>`)).toBe(false);
+    expect(await fill(`<body style="background:#111;color:#eee"><div style="--mermaid-bg:#fff">${diagram}</div></body>`)).toBe(false);
   });
 });

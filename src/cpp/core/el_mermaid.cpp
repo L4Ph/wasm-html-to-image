@@ -116,7 +116,24 @@ void el_mermaid::ensure_svg() {
     };
     opt.fg = color_to_string(css().get_color());
     // a named theme first, then every colour the page sets itself on top of it
-    if (auto t = prop("--mermaid-theme"); !t.empty()) mermaid::apply_theme(t, opt);
+    if (auto t = prop("--mermaid-theme"); !t.empty()) {
+        mermaid::apply_theme(t, opt);
+    } else if (prop("--mermaid-bg").empty() && prop("--mermaid-surface").empty() && prop("--mermaid-fg").empty()) {
+        // no theme and no palette: a diagram on a dark page takes the dark theme (the nearest opaque background decides;
+        // with none, light text does), keeping the page's own text colour
+        auto dark = [](const web_color& c) { return 0.2126 * c.red + 0.7152 * c.green + 0.0722 * c.blue < 128.0; };
+        bool is_dark = false, decided = false;
+        for (auto e = parent(); e && !decided; e = e->parent()) {
+            const web_color& bg = e->css().get_bg().m_color;
+            if (bg.alpha == 255) is_dark = dark(bg), decided = true;
+        }
+        if (!decided) is_dark = !dark(css().get_color());
+        if (is_dark) {
+            const std::string page_fg = opt.fg;
+            mermaid::apply_theme("dark", opt);
+            opt.fg = page_fg;
+        }
+    }
     auto over = [&](const char* name, std::string& dst) {
         if (auto v = prop(name); !v.empty()) dst = v;
     };

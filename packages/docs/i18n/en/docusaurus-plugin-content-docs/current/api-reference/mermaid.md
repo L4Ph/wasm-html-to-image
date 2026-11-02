@@ -44,7 +44,7 @@ In a PDF a diagram is never split across pages, and its text stays selectable ve
 `<pre class="mermaid">` works the same. The element's text is the diagram source. Colours and behaviour come from the page's CSS ([CSS control](#3-css-control)).
 
 - Write the source as text: escape `<` and `&` (`A --&gt; B`).
-- Without a theme the colours come from the element's `color` only; the page background is not looked at. On a dark page set `--mermaid-theme: dark;` (or `nord`, ...).
+- With no theme and no `--mermaid-bg` / `--mermaid-surface` / `--mermaid-fg`, a diagram on a dark page (the nearest opaque background is dark; with none, the text colour is light) takes the `dark` theme automatically, keeping the page's `color` for text. On a light page the colours come from the element's `color`. For another look set `--mermaid-theme: nord;` (or another theme).
 - The diagram sits among the other elements as a block.
 
 ### From the command line
