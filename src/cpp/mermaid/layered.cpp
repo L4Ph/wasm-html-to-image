@@ -732,6 +732,24 @@ LayoutResult layout_layered(const std::vector<LayoutNode>& nodes, const std::vec
     std::vector<double> layer_dp(max_layer + 1, 0), layer_d(max_layer + 1, 0);
     for (auto& v : ln)
         if (v.node >= 0) layer_dp[v.layer] = std::max(layer_dp[v.layer], v.dp);
+    // left-right: a frame runs along the layers, so its title needs them far enough apart; inner frames first, as they widen the outer ones
+    if (horiz && (int)group_min_w.size() >= ngroups) {
+        std::vector<int> order;
+        for (int g = 0; g < ngroups; g++)
+            if (gmax[g] >= 0) order.push_back(g);
+        std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return chain_of(a).size() > chain_of(b).size(); });
+        for (int g : order) {
+            double have = 2 * kFramePad;
+            for (int l = gmin[g]; l <= gmax[g]; l++) {
+                have += layer_dp[l];
+                if (l < gmax[g]) have += kLayerGap + (label_extra[l] > 0 ? label_extra[l] + kLabelGap : 0) + group_gap[l];
+            }
+            const double need = group_min_w[g] - have;
+            if (need <= 0) continue;
+            if (gmax[g] > gmin[g]) group_gap[gmin[g]] += need;
+            else layer_dp[gmin[g]] += need;
+        }
+    }
     double cur = 0;
     for (int l = 0; l <= max_layer; l++) {
         layer_d[l] = cur + layer_dp[l] / 2;

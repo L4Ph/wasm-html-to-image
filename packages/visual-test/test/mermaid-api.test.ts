@@ -16,6 +16,25 @@ describe("renderMermaid", () => {
     expect(Number(outer[2])).toBeGreaterThan(40);
   });
 
+  it("widens left-right subgraph frames to hold a long title, without frames meeting", async () => {
+    const src = [
+      "flowchart LR",
+      '  subgraph S1["A very long subgraph title that is much wider than its contents"]',
+      "    A --> B",
+      "  end",
+      '  subgraph S2["Another quite long frame title for the second group"]',
+      "    C --> D",
+      "  end",
+      "  B --> C",
+    ].join("\n");
+    const { data } = await renderMermaid(src);
+    const frames = [...data.matchAll(/<rect x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="(?!26")[\d.]+" rx="2"/g)].map((m) => ({ x: +m[1], w: +m[3] }));
+    const titles = [...data.matchAll(/<text x="([\d.]+)"[^>]*font-weight="600"[^>]*>([^<]+)/g)].map((m) => ({ x: +m[1], len: m[2].length }));
+    expect(frames).toHaveLength(2);
+    expect(frames[0].x + frames[0].w).toBeLessThan(frames[1].x); // side by side, not overlapping
+    expect(titles[0].x + titles[0].len * 5.5).toBeLessThan(frames[0].x + frames[0].w); // the title fits in its frame
+  });
+
   it("keeps accTitle and accDescr out of the picture and in the SVG", async () => {
     const plain = await renderMermaid(GRAPH, { format: "png" });
     const described = await renderMermaid(`graph LR\n  accTitle: 判定の流れ\n  accDescr {\n  開始から完了まで\n  }\n${GRAPH.split("\n").slice(1).join("\n")}`, { format: "png" });
