@@ -147,6 +147,8 @@ try {
 - `serialize()` は現在の HTML、`toOptions(options)` は `render()` にそのまま渡せるオプションを返します。
 - `createDOM` の第 2 引数は `javascript` オプション（`timeout` / `settleMs` / `waitFor`）に `width` と `quickjsWasm` を足したものです。`timeout` は 1 回の呼び出しごとに数えます。
 
+**コマンドライン**: `npx wasm-quickjs-dom <URL | ファイル | ->` で、スクリプト実行後の HTML を標準出力に出せます（`-e` で値、`--json` でログつき、`--wait` / `--settle` / `--timeout`、制限の `--block-private` / `--allow-host` / `--skip` など）。`--help` で一覧が出ます。
+
 **速さ**: QuickJS エンジンの `settleMs` は「最大でこれだけ待つ」という上限です。保留中のタイマー（`settleMs` 以内に期限が来るもの）も進行中の通信もなければ、ページはもう変わらないので、待ち時間を使い切らずに終わります。外部の `<script src>` は一斉に取得して、実行だけを文書の順に行います。`skip: (url) => boolean` で、アナリティクスや広告など、描画に要らない URL を通信なしで失敗させられます（`<script>` なら `error` イベント、`fetch` なら拒否）。実際のサイトでは、この 3 つで時間の大半が減ります。
 
 **取得の制限（`limits`）**: 信頼できないページを扱うときは、ページのスクリプトが取得できる先を絞ります。ページ自身の `fetch` / `XMLHttpRequest`、読み込む `<script>` とモジュール、`url` で渡したページ本体のすべてが対象です。

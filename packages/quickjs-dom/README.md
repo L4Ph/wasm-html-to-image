@@ -30,6 +30,17 @@ The QuickJS wasm is chosen by the runtime (the `#quickjs-wasm` entry of `imports
 
 `dom.toOptions(options)` fills `value` (the serialized DOM) and `baseUrl` of an options object, so the page can be handed to a renderer such as `render()` of wasm-html-to-image.
 
+## Command line
+
+```sh
+npx wasm-quickjs-dom https://example.com/ --wait "#app" > rendered.html
+npx wasm-quickjs-dom https://example.com/ -e "document.title"        # print a value instead of the HTML
+npx wasm-quickjs-dom page.html --base-url https://example.com/       # a file (or - for standard input)
+npx wasm-quickjs-dom https://example.com/ --logs --block-private --skip analytics
+```
+
+It prints the HTML after the page's scripts ran (or the value of `-e`, or `--json` with the logs too). `--wait`, `--settle`, `--timeout` and `--width` shape the run; `--protocol`, `--allow-host`, `--block-host`, `--block-private`, `--max-bytes`, `--max-requests` and `--skip` are the limits: set them for pages you do not control. `--logs` writes the console output, script errors, unhandled rejections and requests to standard error. Exit code 0 is done, 1 the page could not be loaded (or `-e` threw), 2 wrong usage. `--help` lists everything.
+
 ## Building
 
 The package builds its own QuickJS: `vendor/quickjs` (QuickJS-ng, unmodified) and `csrc/qjsdom.c` are compiled to a standalone `dist/quickjs.wasm` with Emscripten (`emcc` on `PATH`), and the guest program (linkedom and the browser shims) is compiled to QuickJS bytecode with that very wasm. Reading bytecode takes about a millisecond where compiling the source takes tens, and the started guest is kept in memory and copied into each new instance, so a page starts in about 3 ms (the first one in a process pays about 120 ms). Each page runs in a wasm instance of its own, a copy of that one start: nothing is shared between pages, and each gets its own clock origin and `Math.random` seed. There is no dependency on `quickjs-emscripten`.
