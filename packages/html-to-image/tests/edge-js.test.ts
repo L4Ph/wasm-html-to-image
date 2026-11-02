@@ -251,3 +251,45 @@ describe("javascript option, QuickJS engine: client-side routing", () => {
     expect(out.html).toContain('data-h="function"');
   });
 });
+
+describe("javascript option, QuickJS engine: ES modules", () => {
+  let server: Server;
+  let base = "";
+  beforeAll(async () => {
+    const files: Record<string, string> = {
+      "/a.js": 'import { b } from "./b.js"; export const a = "a" + b;',
+      "/b.js": 'export const b = "b";',
+      "/lazy.js": 'import { b } from "./b.js"; export default "lazy-" + b;',
+      "/main.js": `import { a } from "./a.js";
+        const lazy = await import(\`./lazy.js\`);
+        document.body.setAttribute("data-r", a + "," + lazy.default);`,
+    };
+    server = createServer((req, res) => {
+      const body = files[req.url ?? ""];
+      res.statusCode = body === undefined ? 404 : 200;
+      res.setHeader("content-type", "text/javascript");
+      res.end(body ?? "");
+    }).listen(0);
+    await new Promise((r) => server.once("listening", r));
+    base = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
+  });
+  afterAll(() => {
+    server.close();
+  });
+
+  it("runs module scripts: imports, dynamic import, top-level await", async () => {
+    const out = await runPageScriptsQuickJS(
+      { baseUrl: base, html: '<!doctype html><body><script type="module" src="/main.js"></script></body>' },
+      { settleMs: 100 },
+    );
+    expect(out.html).toContain('data-r="ab,lazy-b"');
+  });
+
+  it("runs an inline module that imports relative to the page", async () => {
+    const out = await runPageScriptsQuickJS(
+      { baseUrl: base, html: '<!doctype html><body><script type="module">import { b } from "./b.js"; document.body.setAttribute("data-m", b);</script></body>' },
+      { settleMs: 100 },
+    );
+    expect(out.html).toContain('data-m="b"');
+  });
+});

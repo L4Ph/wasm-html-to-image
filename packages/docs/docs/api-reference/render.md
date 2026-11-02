@@ -121,7 +121,7 @@ const { data } = await render(options);
 
 - Node.js、Deno、Bun では `quickjsWasm` を省略できます（パッケージに入っているものを使います）。Node.js の `single` 入口では、`javascript: { engine: "quickjs" }` でも選べます。
 - 任意依存の `quickjs-emscripten-core` と `@jitl/quickjs-wasmfile-release-sync` が要ります（Workers ではバンドルに入ります）。
-- 制限: レイアウトはなく（`getBoundingClientRect` は 0）、`canvas` は使えません。`type="module"` のスクリプトは実行しません。DOM は linkedom で jsdom より小さく、QuickJS はインタプリタなので、重いページは遅くなります。
+- 制限: レイアウトはなく（`getBoundingClientRect` は 0）、`canvas` は使えません。`type="module"` のスクリプトは実行しますが、`import` は先に取得できる（リテラルの指定子の）ものだけです。DOM は linkedom で jsdom より小さく、QuickJS はインタプリタなので、重いページは遅くなります。
 - jsdom と同じく、信頼できるページだけに使ってください（スクリプトは `fetch` できます）。
 
 ### 高度な制御 & 診断

@@ -35,6 +35,7 @@ export interface EdgeJavaScriptEngine {
 const DEFAULT_TIMEOUT = 10000;
 const DEFAULT_SETTLE_MS = 1000;
 const MEMORY_LIMIT = 256 * 1024 * 1024;
+const MAX_MODULES = 300;
 // QuickJS recurses on the host's own stack, which is about 1 MB on V8: its limit must stop a runaway script first
 const STACK_LIMIT = 192 * 1024;
 
@@ -145,9 +146,9 @@ export async function runPageScriptsQuickJS(
     if (!closed) runtime.executePendingJobs();
   };
   // evaluate code; false when it threw (a page's script error never stops the render)
-  const run = (code: string, name: string): boolean => {
+  const run = (code: string, name: string, module = false): boolean => {
     if (closed) return false;
-    const result = vm.evalCode(code, name);
+    const result = vm.evalCode(code, name, module ? { type: "module" } : undefined);
     if (result.error) {
       result.error.dispose();
       pump();
@@ -211,6 +212,46 @@ export async function runPageScriptsQuickJS(
     vm.setProp(vm.global, "__host", host);
     host.dispose();
 
+    // ES modules: QuickJS loads them synchronously, so the host fetches a module's whole import graph first
+    // (static imports and `import("literal")`), then serves the sources from memory
+    const modules = new Map<string, string | Error>();
+    const resolveModule = (base: string, name: string) => {
+      try {
+        return new URL(name, base).href;
+      } catch {
+        return name;
+      }
+    };
+    runtime.setModuleLoader(
+      (name: string) => {
+        const m = modules.get(name);
+        return m === undefined ? { error: new Error(`could not load module ${name}`) } : m instanceof Error ? { error: m } : m;
+      },
+      (base: string, name: string) => resolveModule(base, name),
+    );
+    const prefetchModules = async (code: string, name: string): Promise<void> => {
+      modules.set(name, code);
+      const pending: string[] = [];
+      for (const m of code.matchAll(/(?:\bfrom\s*|\bimport\s*\(?\s*)(["'`])(\.{0,2}\/[^"'`$]+|https?:[^"'`$]+)\1/g)) {
+        const target = resolveModule(name, m[2]);
+        if (!modules.has(target) && modules.size < MAX_MODULES) {
+          modules.set(target, new Error(`could not load module ${target}`));
+          pending.push(target);
+        }
+      }
+      await Promise.all(
+        pending.map(async (target) => {
+          try {
+            const res = await fetch(target, { signal: AbortSignal.timeout(Math.max(1, remaining())) });
+            if (!res.ok) return;
+            await prefetchModules(await res.text(), target);
+          } catch {
+            // left as the load error set above
+          }
+        }),
+      );
+    };
+
     run(guestSource as string, "edge-js-guest.js");
     const boot = vm.evalCode(`__edgeBoot(${JSON.stringify(html)}, ${JSON.stringify(baseUrl)}, ${Math.round(viewportWidth)})`, "boot.js");
     if (boot.error) {
@@ -224,7 +265,7 @@ export async function runPageScriptsQuickJS(
     const runScripts = async () => {
       for (;;) {
         const raw = call("__edgeNextScripts()");
-        const list: { idx: number; src: string | null; text: string }[] = typeof raw === "string" ? JSON.parse(raw) : [];
+        const list: { idx: number; src: string | null; text: string; module?: boolean }[] = typeof raw === "string" ? JSON.parse(raw) : [];
         if (!list.length || remaining() <= 0) return;
         for (const s of list) {
           let code = s.text;
@@ -239,7 +280,11 @@ export async function runPageScriptsQuickJS(
             }
           }
           call(`__edgeSetCurrent(${s.idx})`);
-          const ok = run(code, name);
+          if (s.module) {
+            if (!s.src) name = `${baseUrl}#module-${s.idx}`;
+            await prefetchModules(code, name);
+          }
+          const ok = run(code, name, s.module);
           call("__edgeSetCurrent(-1)");
           if (s.src) call(`__edgeScriptEvent(${s.idx}, ${ok})`);
         }

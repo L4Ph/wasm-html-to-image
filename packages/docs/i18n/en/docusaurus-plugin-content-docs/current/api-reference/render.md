@@ -91,7 +91,7 @@ const { data } = await render(options);
 
 - On Node.js, Deno and Bun `quickjsWasm` can be left out (the package's own copy is used). The Node.js `single` entry also selects this engine with `javascript: { engine: "quickjs" }`.
 - It needs the optional dependencies `quickjs-emscripten-core` and `@jitl/quickjs-wasmfile-release-sync` (a Workers bundle includes them).
-- Limits: no layout (`getBoundingClientRect` returns 0), no `canvas`, `type="module"` scripts are not run. The DOM is linkedom's, smaller than jsdom's, and QuickJS is an interpreter, so heavy pages are slower.
+- Limits: no layout (`getBoundingClientRect` returns 0), no `canvas`, `type="module"` scripts run, but only `import`s with literal specifiers (fetched up front) resolve. The DOM is linkedom's, smaller than jsdom's, and QuickJS is an interpreter, so heavy pages are slower.
 - As with jsdom, use it with trusted pages only (the scripts can `fetch`).
 
 ### Rendering untrusted HTML (`limits`)

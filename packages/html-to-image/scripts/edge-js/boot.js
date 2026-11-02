@@ -108,9 +108,9 @@
       done.add(s);
       var type = (s.getAttribute("type") || "").toLowerCase();
       // legacy-browser polyfills are marked `nomodule`; linkedom keeps the attribute name's case (`noModule`)
-      if (s.hasAttribute("nomodule") || s.hasAttribute("noModule") || (type && type !== "text/javascript" && type !== "application/javascript")) continue;
+      if (s.hasAttribute("nomodule") || s.hasAttribute("noModule") || (type && type !== "module" && type !== "text/javascript" && type !== "application/javascript")) continue;
       var src = s.getAttribute("src");
-      out.push({ idx: list.push(s) - 1, src: src, text: src ? "" : s.textContent });
+      out.push({ idx: list.push(s) - 1, src: src, text: src ? "" : s.textContent, module: type === "module" });
     }
     return JSON.stringify(out);
   };
