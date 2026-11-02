@@ -120,6 +120,29 @@ const { data } = await render(options);
 - 制限: レイアウトはなく（`getBoundingClientRect` は 0）、`canvas` は使えません。`type="module"` のスクリプトは実行しますが、`import` は先に取得できる（リテラルの指定子の）ものだけです。DOM は linkedom で jsdom より小さく、QuickJS はインタプリタなので、重いページは遅くなります。
 - jsdom と同じく、信頼できるページだけに使ってください（スクリプトは `fetch` できます）。
 
+#### DOM を開いたまま使う（`createDOM`）
+
+画像にしなくても、JSDOM のようにページを開いたまま操作できます。DOM は QuickJS の中にあるので、`dom.window` のような生のオブジェクトではなく、`eval()` と JSON の値でやり取りします。
+
+```ts
+import { createDOM } from "wasm-html-to-image/javascript";
+import { render } from "wasm-html-to-image/workerd";
+
+const dom = await createDOM({ url: "https://example.com/" }, { width: 1200 });
+try {
+  const title = await dom.eval("document.title");            // 値は JSON。Promise は待ちます
+  await dom.eval("document.querySelector('h1').textContent = 'Hello'");
+  const { data } = await render(dom.toOptions({ width: 1200, format: "png" })); // いまの DOM を画像に
+} finally {
+  dom.close();                                                // QuickJS を解放
+}
+```
+
+- `eval(code)`: ページのグローバルでコードを実行し、結果を JSON で返します。Promise は解決まで待ち、投げた例外はそのまま `Error` になります。DOM ノードは返せないので、読み取った値を返してください。呼び出しは順番に実行されます。
+- `settle(ms?)`: ページのタイマーと `fetch` を進めます。ページの時計は `eval()` / `settle()` の間だけ進み、呼び出しの間は止まっています。
+- `serialize()` は現在の HTML、`toOptions(options)` は `render()` にそのまま渡せるオプションを返します。
+- `createDOM` の第 2 引数は `javascript` オプション（`timeout` / `settleMs` / `waitFor`）に `width` と `quickjsWasm` を足したものです。`timeout` は 1 回の呼び出しごとに数えます。
+
 ### 高度な制御 & 診断
 
 | オプション        | 型                                             | 説明                                                               |

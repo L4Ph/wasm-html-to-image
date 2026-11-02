@@ -90,6 +90,29 @@ const { data } = await render(options);
 - Limits: no layout (`getBoundingClientRect` returns 0), no `canvas`, `type="module"` scripts run, but only `import`s with literal specifiers (fetched up front) resolve. The DOM is linkedom's, smaller than jsdom's, and QuickJS is an interpreter, so heavy pages are slower.
 - As with jsdom, use it with trusted pages only (the scripts can `fetch`).
 
+#### Keeping the DOM open (`createDOM`)
+
+Without rendering anything, the page can be kept open and driven, like JSDOM. The DOM lives inside QuickJS, so you talk to it through `eval()` and JSON values rather than a live `dom.window`.
+
+```ts
+import { createDOM } from "wasm-html-to-image/javascript";
+import { render } from "wasm-html-to-image/workerd";
+
+const dom = await createDOM({ url: "https://example.com/" }, { width: 1200 });
+try {
+  const title = await dom.eval("document.title");            // the value comes back as JSON; promises are awaited
+  await dom.eval("document.querySelector('h1').textContent = 'Hello'");
+  const { data } = await render(dom.toOptions({ width: 1200, format: "png" })); // draw the DOM as it is now
+} finally {
+  dom.close();                                                // frees QuickJS
+}
+```
+
+- `eval(code)` runs code in the page's global scope and returns the result as JSON. A promise is awaited, and what the code throws becomes an `Error`. A DOM node cannot be returned: return what you read from it. Calls run one after another.
+- `settle(ms?)` lets the page's timers and fetches run. The page's clock runs only during `eval()` / `settle()`, not in between.
+- `serialize()` is the current HTML; `toOptions(options)` gives render options you can pass to `render()` as they are.
+- The second argument of `createDOM` is the `javascript` option (`timeout` / `settleMs` / `waitFor`) plus `width` and `quickjsWasm`. `timeout` counts per call.
+
 ### Rendering untrusted HTML (`limits`)
 
 When rendering user-supplied HTML, always restrict where it may fetch from and how much. By default any host is fetched, and on Node local files under `baseUrl` are read.

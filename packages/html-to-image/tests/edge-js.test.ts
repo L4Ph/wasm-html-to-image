@@ -1,6 +1,6 @@
 import { createServer, type Server } from "node:http";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { applyJavaScript, runPageScriptsQuickJS } from "../src/edge-js.js";
+import { applyJavaScript, createDOM, runPageScriptsQuickJS } from "../src/edge-js.js";
 
 const page = (body: string, script: string) => `<!doctype html><html><body>${body}<script>${script}</script></body></html>`;
 
@@ -336,5 +336,91 @@ describe("javascript option, QuickJS engine: the wasm chosen by the runtime", ()
     const { default: defaultQuickJSWasm } = await import("#quickjs-wasm");
     expect(await defaultQuickJSWasm()).toBeInstanceOf(WebAssembly.Module);
     expect(await defaultQuickJSWasm()).toBe(await defaultQuickJSWasm()); // compiled once
+  });
+});
+
+describe("createDOM: a page kept open", () => {
+  it("evals in the page after its scripts ran, and serializes the current DOM", async () => {
+    const dom = await createDOM({ html: "<html><head></head><body><h1>Hi</h1><script>document.title = 'set by script'</script></body></html>" }, { settleMs: 0 });
+    try {
+      expect(await dom.eval("document.title")).toBe("set by script");
+      expect(await dom.eval("document.querySelector('h1').textContent")).toBe("Hi");
+      expect(await dom.eval("({ n: [1, 2, 3].length, ok: true })")).toEqual({ n: 3, ok: true });
+      expect(await dom.eval("undefined")).toBeUndefined();
+      await dom.eval("document.querySelector('h1').textContent = 'Changed'");
+      expect(dom.serialize()).toContain("<h1>Changed</h1>");
+    } finally {
+      dom.close();
+    }
+  });
+
+  it("awaits promises, runs timers during a call, and keeps state between calls", async () => {
+    const dom = await createDOM({ html: "<p id=a></p>" }, { settleMs: 0 });
+    try {
+      await dom.eval("globalThis.count = 1; setTimeout(() => { document.getElementById('a').textContent = 'late'; }, 30)");
+      expect(await dom.eval("new Promise((resolve) => setTimeout(() => resolve(count + 1), 60))")).toBe(2);
+      expect(await dom.eval("document.getElementById('a').textContent")).toBe("late");
+      await dom.settle(20);
+    } finally {
+      dom.close();
+    }
+  });
+
+  it("throws what the code threw, and a DOM node that cannot be a value is an error, not a hang", async () => {
+    const dom = await createDOM({ html: "<p>x</p>" }, { settleMs: 0 });
+    try {
+      await expect(dom.eval("throw new Error('boom')")).rejects.toThrow("boom");
+      await expect(dom.eval("Promise.reject(new Error('later'))")).rejects.toThrow("later");
+      // the engine stays usable after an error
+      expect(await dom.eval("1 + 1")).toBe(2);
+    } finally {
+      dom.close();
+    }
+  });
+
+  it("runs concurrent evals one after another", async () => {
+    const dom = await createDOM({ html: "" }, { settleMs: 0 });
+    try {
+      const results = await Promise.all([
+        dom.eval("new Promise((r) => setTimeout(() => r('a'), 40))"),
+        dom.eval("'b'"),
+        dom.eval("new Promise((r) => setTimeout(() => r('c'), 10))"),
+      ]);
+      expect(results).toEqual(["a", "b", "c"]);
+    } finally {
+      dom.close();
+    }
+  });
+
+  it("gives each call its own timeout, so an endless script stops that call only", async () => {
+    const dom = await createDOM({ html: "<p>x</p>" }, { settleMs: 0, timeout: 300 });
+    try {
+      await expect(dom.eval("while (true) {}")).rejects.toThrow();
+      expect(await dom.eval("1 + 2")).toBe(3);
+    } finally {
+      dom.close();
+    }
+  });
+
+  it("toOptions() turns the page into render options; the javascript option is dropped", async () => {
+    const dom = await createDOM({ html: "<p id=a>1</p>", baseUrl: "https://example.com/dir/" }, { settleMs: 0 });
+    try {
+      await dom.eval("document.getElementById('a').textContent = '2'");
+      const options = dom.toOptions({ value: "ignored", javascript: true, width: 300, format: "png" as const });
+      expect(options.value).toContain("<p id=\"a\">2</p>");
+      expect(options.baseUrl).toBe("https://example.com/dir/");
+      expect(options.javascript).toBeUndefined();
+      expect(options.width).toBe(300);
+    } finally {
+      dom.close();
+    }
+  });
+
+  it("refuses to be used after close()", async () => {
+    const dom = await createDOM({ html: "" }, { settleMs: 0 });
+    dom.close();
+    dom.close(); // harmless twice
+    await expect(dom.eval("1")).rejects.toThrow("closed");
+    expect(() => dom.serialize()).toThrow("closed");
   });
 });

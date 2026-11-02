@@ -15,6 +15,9 @@
  * import { render } from "wasm-html-to-image/workerd";
  * const png = await render(await applyJavaScript({ url: "https://example.com/", javascript: true, format: "png" }));
  * ```
+ *
+ * `createDOM()` keeps the page open (a small JSDOM): `await dom.eval("document.title")`, `dom.serialize()`,
+ * `dom.toOptions({ format: "png" })`. Apart from `toOptions` and `applyJavaScript`, nothing here knows about images.
  */
 // @ts-expect-error — dist/edge-js-payload.js is generated at build time
 import { guestSource } from "../dist/edge-js-payload.js";
@@ -86,19 +89,63 @@ function loadQuickJS(wasm: WebAssembly.Module | undefined): Promise<any> {
   return loaded;
 }
 
+/** Options of {@link createDOM}: the script phase's, the viewport width and the QuickJS module. */
+export interface CreateDOMOptions extends JavaScriptOptions, EdgeJavaScriptEngine {
+  /** `window.innerWidth` of the page (default 800). */
+  width?: number;
+}
+
 /**
- * Run a page's scripts in QuickJS and return the resulting HTML.
- * Give `url` to fetch the page, or `html` (with an optional `baseUrl`) for markup you already have.
+ * A page living in QuickJS, kept open after its scripts ran (a small JSDOM for runtimes without `eval`).
+ *
+ * The DOM is inside the QuickJS sandbox, so it is reached with {@link QuickJSDOM.eval} and JSON values rather than
+ * through live objects. The page's clock runs only while one of these methods is waiting: timers and fetches of the
+ * page progress during `eval()` and `settle()`, not in between. Each call may take up to `timeout` ms.
  */
-export async function runPageScriptsQuickJS(
+export interface QuickJSDOM {
+  /** The document's URL (after redirects when it was fetched). */
+  readonly baseUrl: string;
+  /**
+   * Run code in the page (global scope, like `window.eval`) and return its value as JSON. A promise is awaited, so
+   * `fetch(...).then((r) => r.text())` works. A DOM node cannot be returned: return what you read from it
+   * (`document.querySelector("h1").textContent`). Throws what the code threw. Calls run one after another.
+   */
+  eval(code: string): Promise<unknown>;
+  /** Let the page's timers and fetches run for `ms` (default `settleMs`) and until its fetches are done. */
+  settle(ms?: number): Promise<void>;
+  /** The document as it is now, as HTML. */
+  serialize(): string;
+  /** Render options that draw this page: `value` is the serialized DOM and `baseUrl` is this page's. */
+  toOptions<T extends HtmlToImageOptions>(options: T): T;
+  /** Free the QuickJS runtime. The page cannot be used afterwards. */
+  close(): void;
+}
+
+/**
+ * Run a page's scripts in QuickJS and keep the page for further use.
+ * Give `url` to fetch the page, or `html` (with an optional `baseUrl`) for markup you already have.
+ * Call `close()` when done.
+ *
+ * ```ts
+ * const dom = await createDOM({ html: "<h1>Hi</h1><script>document.title = 'x'</script>" });
+ * await dom.eval("document.title"); // "x"
+ * dom.close();
+ * ```
+ */
+export async function createDOM(
   source: { url?: string; html?: string; baseUrl?: string },
-  option: true | JavaScriptOptions,
-  viewportWidth = 800,
-  engine: EdgeJavaScriptEngine = {},
-): Promise<ScriptedPage> {
-  const opts: JavaScriptOptions = option === true ? {} : option;
+  options: CreateDOMOptions = {},
+): Promise<QuickJSDOM> {
+  const opts = options;
+  const viewportWidth = options.width ?? 800;
   const timeout = opts.timeout ?? DEFAULT_TIMEOUT;
-  const started = Date.now();
+  let started = Date.now();
+  let deadline = started + timeout;
+  // every call into the page gets a fresh `timeout`
+  const begin = () => {
+    started = Date.now();
+    deadline = started + timeout;
+  };
   const remaining = () => Math.max(0, timeout - (Date.now() - started));
 
   let html = source.html ?? "";
@@ -114,11 +161,10 @@ export async function runPageScriptsQuickJS(
     baseUrl = res.url || source.url;
   }
 
-  const QuickJS = await loadQuickJS(engine.quickjsWasm);
+  const QuickJS = await loadQuickJS(opts.quickjsWasm);
   const runtime = QuickJS.newRuntime();
   runtime.setMemoryLimit(MEMORY_LIMIT);
   runtime.setMaxStackSize(STACK_LIMIT);
-  const deadline = started + timeout;
   runtime.setInterruptHandler(() => Date.now() > deadline);
   const vm = runtime.newContext();
 
@@ -155,6 +201,17 @@ export async function runPageScriptsQuickJS(
     result.value.dispose();
     pump();
     return value;
+  };
+
+  const close = () => {
+    if (closed) return;
+    // a fetch still in flight finds `closed` and does nothing; the promises handed to the page are disposed here, or
+    // QuickJS aborts when its runtime is freed
+    closed = true;
+    for (const d of deferreds) d.dispose();
+    deferreds.clear();
+    vm.dispose();
+    runtime.dispose();
   };
 
   try {
@@ -292,28 +349,96 @@ export async function runPageScriptsQuickJS(
       await sleep(4);
     };
 
-    await runScripts();
-    call("__edgeDocumentEvents()");
-    if (opts.waitFor) {
-      while (remaining() > 0 && !call(`__edgeHas(${JSON.stringify(opts.waitFor)})`)) await tick();
-    } else {
-      const until = Date.now() + Math.min(opts.settleMs ?? DEFAULT_SETTLE_MS, remaining());
+    // let the page run for `ms`, or until `waitFor` matches, and until its fetches are done
+    const wait = async (ms: number, waitFor?: string) => {
+      if (waitFor) {
+        while (remaining() > 0 && !call(`__edgeHas(${JSON.stringify(waitFor)})`)) await tick();
+        return;
+      }
+      const until = Date.now() + Math.min(ms, remaining());
       while (Date.now() < until || (inflight.size > 0 && remaining() > 0)) {
         if (remaining() <= 0) break;
         await tick();
       }
-    }
-    const out = call("__edgeSerialize()");
-    if (typeof out !== "string") throw new Error("The QuickJS engine could not serialize the page.");
-    return { html: out, baseUrl };
+    };
+    const serialize = () => {
+      if (closed) throw new Error("The DOM is closed.");
+      begin();
+      const out = call("__edgeSerialize()");
+      if (typeof out !== "string") throw new Error("The QuickJS engine could not serialize the page.");
+      return out;
+    };
+
+    await runScripts();
+    call("__edgeDocumentEvents()");
+    await wait(opts.settleMs ?? DEFAULT_SETTLE_MS, opts.waitFor);
+
+    // eval(): the result lands in a global once the page's promise settles; the host ticks until it is there
+    let queue: Promise<unknown> = Promise.resolve();
+    const evaluate = async (code: string): Promise<unknown> => {
+      if (closed) throw new Error("The DOM is closed.");
+      begin();
+      call("globalThis.__edgeResult = undefined");
+      run(
+        `Promise.resolve().then(() => (0, eval)(${JSON.stringify(code)}))` +
+          `.then((v) => { try { return { ok: true, v: JSON.stringify(v) }; } catch (e) { return { ok: false, v: String(e) }; } },` +
+          ` (e) => ({ ok: false, v: (e && e.message ? (e.name || 'Error') + ': ' + e.message : String(e)) }))` +
+          `.then((r) => { globalThis.__edgeResult = r; });`,
+        "eval.js",
+      );
+      for (;;) {
+        const raw = call("globalThis.__edgeResult ? JSON.stringify(globalThis.__edgeResult) : undefined");
+        if (typeof raw === "string") {
+          const r = JSON.parse(raw) as { ok: boolean; v?: string };
+          if (!r.ok) throw new Error(r.v);
+          return r.v === undefined ? undefined : JSON.parse(r.v);
+        }
+        if (closed) throw new Error("The DOM is closed.");
+        if (remaining() <= 0) throw new Error(`eval() did not finish within ${timeout} ms.`);
+        await tick();
+      }
+    };
+
+    return {
+      baseUrl,
+      eval(code: string) {
+        const next = queue.then(() => evaluate(code));
+        queue = next.catch(() => undefined);
+        return next;
+      },
+      async settle(ms?: number) {
+        if (closed) throw new Error("The DOM is closed.");
+        begin();
+        await wait(ms ?? opts.settleMs ?? DEFAULT_SETTLE_MS);
+      },
+      serialize,
+      toOptions<T extends HtmlToImageOptions>(options: T): T {
+        const { javascript: _javascript, ...rest } = options;
+        return { ...rest, url: undefined, value: serialize(), baseUrl: options.baseUrl ?? baseUrl } as unknown as T;
+      },
+      close,
+    };
+  } catch (error) {
+    close();
+    throw error;
+  }
+}
+
+/**
+ * Run a page's scripts in QuickJS and return the resulting HTML.
+ * Give `url` to fetch the page, or `html` (with an optional `baseUrl`) for markup you already have.
+ */
+export async function runPageScriptsQuickJS(
+  source: { url?: string; html?: string; baseUrl?: string },
+  option: true | JavaScriptOptions,
+  viewportWidth = 800,
+  engine: EdgeJavaScriptEngine = {},
+): Promise<ScriptedPage> {
+  const dom = await createDOM(source, { ...(option === true ? {} : option), width: viewportWidth, quickjsWasm: engine.quickjsWasm });
+  try {
+    return { html: dom.serialize(), baseUrl: dom.baseUrl };
   } finally {
-    // a fetch still in flight finds `closed` and does nothing; the promises handed to the page are disposed here, or
-    // QuickJS aborts when its runtime is freed
-    closed = true;
-    for (const d of deferreds) d.dispose();
-    deferreds.clear();
-    vm.dispose();
-    runtime.dispose();
+    dom.close();
   }
 }
 
