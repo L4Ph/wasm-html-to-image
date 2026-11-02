@@ -92,7 +92,7 @@ struct box_entry {
 };
 
 void walk(const std::shared_ptr<litehtml::render_item>& ri, path_index& paths,
-          std::vector<box_entry>& entries) {
+          std::vector<box_entry>& entries, bool include_inline) {
     if (!ri) return;
     const auto& el = ri->src_el();
     if (is_tree_element(el)) {
@@ -112,9 +112,34 @@ void walk(const std::shared_ptr<litehtml::render_item>& ri, path_index& paths,
             e.w = ri->pos().width + ri->padding_left() + ri->padding_right() + ri->border_left() + ri->border_right();
             e.h = ri->pos().height + ri->padding_top() + ri->padding_bottom() + ri->border_top() + ri->border_bottom();
             entries.push_back(std::move(e));
+        } else if (include_inline && display == litehtml::display_inline && strcmp(tag, "br") != 0) {
+            // an inline element fragments across lines: report the box that encloses all its fragments
+            litehtml::position::vector fragments;
+            ri->get_rendering_boxes(fragments);
+            if (!fragments.empty()) {
+                double x0 = fragments[0].x, y0 = fragments[0].y;
+                double x1 = x0 + fragments[0].width, y1 = y0 + fragments[0].height;
+                for (const auto& f : fragments) {
+                    x0 = std::min(x0, (double)f.x);
+                    y0 = std::min(y0, (double)f.y);
+                    x1 = std::max(x1, (double)f.x + f.width);
+                    y1 = std::max(y1, (double)f.y + f.height);
+                }
+                box_entry e;
+                e.p = paths.path_of(el);
+                e.t = escaped(tag, 32);
+                e.i = escaped(el->get_attr("id"), 60);
+                e.c = escaped(el->get_attr("class"), 80);
+                e.display = display;
+                e.x = x0;
+                e.y = y0;
+                e.w = x1 - x0;
+                e.h = y1 - y0;
+                entries.push_back(std::move(e));
+            }
         }
     }
-    for (const auto& child : ri->children()) walk(child, paths, entries);
+    for (const auto& child : ri->children()) walk(child, paths, entries, include_inline);
 }
 
 bool is_direct_child(const std::string& parent, const std::string& path) {
@@ -248,7 +273,7 @@ void fix_up_table_boxes(std::vector<box_entry>& entries) {
 }  // namespace
 
 std::string satoru_api_layout_json(SatoruInstance* inst, const std::string& html, int width,
-                                   int height, int mediaType) {
+                                   int height, int mediaType, bool include_inline) {
     if (!inst) return "[]";
     width = normalize_viewport_width(width);
     if (!inst->document_ready_for(html, width, height, mediaType)) {
@@ -257,7 +282,7 @@ std::string satoru_api_layout_json(SatoruInstance* inst, const std::string& html
     if (!inst->doc || !inst->doc->root_render()) return "[]";
     path_index paths;
     std::vector<box_entry> entries;
-    walk(inst->doc->root_render(), paths, entries);
+    walk(inst->doc->root_render(), paths, entries, include_inline);
     fix_up_table_boxes(entries);
     std::string out = "[";
     bool first = true;

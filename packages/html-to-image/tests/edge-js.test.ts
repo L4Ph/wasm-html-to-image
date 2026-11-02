@@ -96,3 +96,27 @@ describe("the render `limits` also bound what the page's scripts fetch (QuickJS 
     }
   });
 });
+
+describe("measureLayout: inline elements", () => {
+  it("gives a span or link the box that encloses its line fragments", async () => {
+    const { createDOM, measureLayout } = await import("../src/edge-js.js");
+    const { render } = await import("../src/single.js");
+    const html =
+      '<!doctype html><html><head><style>body{margin:0;font:16px/20px sans-serif}p{margin:0;width:400px}</style></head>' +
+      '<body><p>before <a id="l" href="#">a link</a> after</p><p id="q" style="margin-top:10px">x <span id="s" style="display:inline-block;width:50px;height:30px"></span></p></body></html>';
+    const dom = await createDOM({ html }, { settleMs: 0, width: 400 });
+    try {
+      await measureLayout(dom, render, { width: 400 });
+      const link = await dom.eval(() => document.getElementById("l")!.getBoundingClientRect().toJSON());
+      expect(link.width).toBeGreaterThan(20);
+      expect(link.height).toBeGreaterThan(5);
+      expect(link.left).toBeGreaterThan(20); // after "before "
+      expect(link.top).toBeLessThan(20); // on the first line
+      expect(await dom.eval(() => [document.getElementById("s")!.offsetWidth, document.getElementById("s")!.offsetHeight])).toEqual([50, 30]);
+      // a block that wraps its text keeps its own box, unchanged by the inline option
+      expect(await dom.eval(() => document.getElementById("q")!.offsetWidth)).toBe(400);
+    } finally {
+      dom.close();
+    }
+  }, 60_000);
+});

@@ -98,6 +98,7 @@ export interface HtmlToImageModule {
     width: number,
     height: number,
     mediaType: number,
+    includeInline: boolean,
   ): string;
   satoru_get_pending_resources?(inst: WasmInstancePtr): unknown;
   satoru_add_resource?(

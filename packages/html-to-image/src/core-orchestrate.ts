@@ -95,6 +95,7 @@ export interface Orchestration {
   diagnostics: boolean;
   onDiagnostics: HtmlToImageOptions["onDiagnostics"];
   onLayout: HtmlToImageOptions["onLayout"];
+  layoutInline: boolean;
   fitContent: HtmlToImageOptions["fitContent"];
   resolveResource: ResolveResourceHook | undefined;
   mediaType: "screen" | "print";
@@ -173,6 +174,7 @@ export function createOrchestration(
     diagnostics = false,
     onDiagnostics,
     onLayout,
+    layoutInline = false,
     fitContent,
     resolveResource,
     mediaType = "screen",
@@ -353,6 +355,7 @@ export function createOrchestration(
     diagnostics,
     onDiagnostics,
     onLayout,
+    layoutInline,
     fitContent,
     resolveResource,
     mediaType,
@@ -698,7 +701,7 @@ export async function tryRunHtmlInstance(
     if (orch.fitContent !== undefined && typeof module.satoru_layout_json === "function") {
       const page = Array.isArray(htmls) ? htmls[0] : htmls;
       const boxes = JSON.parse(
-        module.satoru_layout_json(sInst, page, pageWidth, height ?? 0, orch.mediaTypeInt),
+        module.satoru_layout_json(sInst, page, pageWidth, height ?? 0, orch.mediaTypeInt, false),
       ) as LayoutBox[];
       const box = boxes.find((b) => /(^|\s)mermaid(\s|$)/.test(b.c));
       if (box) width = Math.ceil(box.w + 2 * orch.fitContent);
@@ -714,6 +717,7 @@ export async function tryRunHtmlInstance(
             width,
             height ?? 0,
             orch.mediaTypeInt,
+            orch.layoutInline,
           ),
         ) as LayoutBox[],
       );

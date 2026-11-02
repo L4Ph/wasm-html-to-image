@@ -148,10 +148,10 @@ val satoru_render_val(SatoruInstance* inst, val htmls, int width, int height, in
 // JSオブジェクト {family: url} 受けのvalラッパ経由で登録する。
 // Debug: every element's border box as JSON (see api/layout_json.h). `htmls` is one page.
 std::string satoru_layout_json_val(SatoruInstance* inst, val htmls, int width, int height,
-                                   int mediaType) {
+                                   int mediaType, bool includeInline) {
     std::vector<std::string> pages = val_to_html_vector(htmls);
     if (!inst || pages.empty()) return "[]";
-    return satoru_api_layout_json(inst, pages[0], width, height, mediaType);
+    return satoru_api_layout_json(inst, pages[0], width, height, mediaType, includeInline);
 }
 
 void satoru_set_font_map_val(SatoruInstance* inst, val fontMap) {

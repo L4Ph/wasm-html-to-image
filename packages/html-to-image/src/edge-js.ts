@@ -40,8 +40,7 @@ export function applyJavaScript<T extends HtmlToImageOptions>(options: T, engine
  * runs, nothing is drawn or encoded. `options` are the render options that shape the layout (`width`, `height`,
  * `css`, `fontMap`, `mediaType`, ...). The layout is a snapshot: measure again after the page changed.
  *
- * Inline boxes (`<span>`, `<a>`, ... in a line of text) have no box of their own in the engine's layout and stay
- * 0 x 0; images and other replaced elements, blocks, table cells and the like are measured.
+ * An inline element (`<span>`, `<a>`, ...) gets the box that encloses all the line fragments it is broken into.
  *
  * ```ts
  * const dom = await createDOM({ url }, { width: 1200 });
@@ -52,13 +51,14 @@ export function applyJavaScript<T extends HtmlToImageOptions>(options: T, engine
 export async function measureLayout(
   dom: QuickJSDOM,
   render: (options: HtmlToImageOptions) => Promise<unknown>,
-  options: Omit<HtmlToImageOptions, "value" | "url" | "javascript" | "onLayout"> = {},
+  options: Omit<HtmlToImageOptions, "value" | "url" | "javascript" | "onLayout" | "layoutInline"> = {},
 ): Promise<number> {
   const boxes: Record<number, [number, number, number, number]> = {};
   let measured = false;
   try {
     await render({
       ...(options as object),
+      layoutInline: true,
       value: dom.markForLayout(),
       baseUrl: (options as { baseUrl?: string }).baseUrl ?? dom.baseUrl,
       onLayout(list: LayoutBox[]) {

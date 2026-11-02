@@ -11,8 +11,9 @@
 // `p` is the element's path in the (shadow-flattened) element tree: the index among the parent's
 // element children, joined by ".", so the same walk in a browser yields the same keys.
 // Inline boxes (they fragment across lines) are left out except replaced ones (img, svg, ...).
+// With `include_inline`, inline elements are reported too, as the box enclosing all their line fragments.
 // Lays the document out first when it is not ready for these inputs.
 std::string satoru_api_layout_json(SatoruInstance* inst, const std::string& html, int width,
-                                   int height, int mediaType);
+                                   int height, int mediaType, bool include_inline = false);
 
 #endif  // HTML_TO_IMAGE_LAYOUT_JSON_H

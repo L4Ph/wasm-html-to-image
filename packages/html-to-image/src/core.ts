@@ -212,6 +212,11 @@ export interface HtmlToImageOptions extends RenderOptions {
    */
   onLayout?: (boxes: LayoutBox[]) => void;
   /**
+   * With `onLayout`: also report inline elements (`span`, `a`, ... in a line of text), each as the box enclosing all its
+   * line fragments. Off by default, since a reference browser's walk skips them. `measureLayout()` turns it on.
+   */
+  layoutInline?: boolean;
+  /**
    * Override hook for resource resolution, applied to every fetch path
    * (discovery fetches, fallback-font URLs, HTML `url` fetch). Return
    * bytes to inject, or `null` to skip the resource.
