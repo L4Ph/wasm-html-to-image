@@ -134,7 +134,7 @@
     ]
   },
   "class@light": {
-    "width": 320.17,
+    "width": 326.19,
     "height": 328.3,
     "tags": {
       "svg": 2,
@@ -156,7 +156,7 @@
     ]
   },
   "class@dark": {
-    "width": 320.17,
+    "width": 326.19,
     "height": 328.3,
     "tags": {
       "svg": 2,
@@ -1048,7 +1048,7 @@
     "tags": {
       "svg": 2,
       "defs": 1,
-      "text": 16,
+      "text": 14,
       "rect": 1,
       "path": 5,
       "line": 5,
@@ -1069,7 +1069,7 @@
     "tags": {
       "svg": 2,
       "defs": 1,
-      "text": 16,
+      "text": 14,
       "rect": 1,
       "path": 5,
       "line": 5,
@@ -1091,7 +1091,7 @@
     "tags": {
       "svg": 2,
       "defs": 1,
-      "text": 24,
+      "text": 25,
       "rect": 15,
       "path": 7,
       "ellipse": 1,
@@ -1115,7 +1115,7 @@
     "tags": {
       "svg": 2,
       "defs": 1,
-      "text": 24,
+      "text": 25,
       "rect": 15,
       "path": 7,
       "ellipse": 1,
@@ -1136,11 +1136,11 @@
   },
   "railroad@light": {
     "width": 504.04,
-    "height": 838,
+    "height": 808,
     "tags": {
       "svg": 2,
       "defs": 1,
-      "text": 27,
+      "text": 26,
       "circle": 10,
       "path": 89,
       "rect": 21
@@ -1155,11 +1155,11 @@
   },
   "railroad@dark": {
     "width": 504.04,
-    "height": 838,
+    "height": 808,
     "tags": {
       "svg": 2,
       "defs": 1,
-      "text": 27,
+      "text": 26,
       "circle": 10,
       "path": 89,
       "rect": 21
