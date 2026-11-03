@@ -268,33 +268,61 @@
       }
     }
   };
+  // an on<type> handler is a listener of its own (jsdom's model, and the one pages observe):
+  // it takes a slot in the list the first time it is set — by the IDL property or by being
+  // read from a content attribute — and keeps that slot when set to null and back, the null
+  // simply leaving the slot inert. ensureHandlerEntry claims the slot.
+  var ensureHandlerEntry = function (node, type) {
+    var all = LISTENERS.get(node);
+    if (!all) LISTENERS.set(node, (all = {}));
+    var list = all[type] || (all[type] = []);
+    for (var i = 0; i < list.length; i++) if (list[i].handler) return;
+    list.push({ handler: true, capture: false, once: false, passive: false, removed: false });
+  };
   var invoke = function (node, ev, phase) {
+    // an attribute handler claims its slot the first time a dispatch reaches its node
+    if (phase !== 1 && node.nodeType === 1 && node.hasAttribute && node.hasAttribute("on" + ev.type)) ensureHandlerEntry(node, ev.type);
     var all = LISTENERS.get(node), list = all && all[ev.type];
     ev.currentTarget = node;
     ev.eventPhase = phase;
+    var sawHandler = false;
     if (list) {
       list = list.slice();
+      // (at the target the list runs in registration order: jsdom runs capture listeners first
+      // there, which departs from the spec and from this package's own event test — adjudicated
+      // in the parity ledger, Phase 2 — so it is deliberately not copied)
       for (var i = 0; i < list.length; i++) {
         var entry = list[i];
         if (entry.removed) continue;
         if (phase === 1 && !entry.capture) continue;
         if (phase === 3 && entry.capture) continue;
-        if (entry.once) removeListener.call(node, ev.type, entry.fn, { capture: entry.capture });
-        try {
-          if (typeof entry.fn === "function") entry.fn.call(node, ev);
-          else if (entry.fn && typeof entry.fn.handleEvent === "function") entry.fn.handleEvent(ev);
-        } catch (e) {
-          // an exception in a listener is reported and does not stop the others
-          if (typeof globalThis.reportError === "function") globalThis.reportError(e);
-          else if (globalThis.console) globalThis.console.error(e);
+        if (entry.handler) {
+          sawHandler = true;
+          var h = node["on" + ev.type];
+          if (typeof h === "function") {
+            try { h.call(node, ev); } catch (e) { if (globalThis.console) globalThis.console.error(e); }
+          }
+        } else {
+          if (entry.once) removeListener.call(node, ev.type, entry.fn, { capture: entry.capture });
+          try {
+            if (typeof entry.fn === "function") entry.fn.call(node, ev);
+            else if (entry.fn && typeof entry.fn.handleEvent === "function") entry.fn.handleEvent(ev);
+          } catch (e) {
+            // an exception in a listener is reported and does not stop the others
+            if (typeof globalThis.reportError === "function") globalThis.reportError(e);
+            else if (globalThis.console) globalThis.console.error(e);
+          }
         }
         if (ev._stopImmediatePropagationFlag) return;
       }
     }
-    // on<type> handler properties
-    var handler = node["on" + ev.type];
-    if (phase !== 1 && typeof handler === "function") {
-      try { handler.call(node, ev); } catch (e) { if (globalThis.console) globalThis.console.error(e); }
+    // a handler assigned as a plain property on an object that has no on* accessor (the
+    // EventTarget subclasses of the shims — WebSocket, ports) still fires, after the list
+    if (!sawHandler && phase !== 1) {
+      var own = Object.getOwnPropertyDescriptor(node, "on" + ev.type);
+      if (own && typeof own.value === "function") {
+        try { own.value.call(node, ev); } catch (e) { if (globalThis.console) globalThis.console.error(e); }
+      }
     }
   };
   var parentOf = function (n) {
@@ -965,6 +993,7 @@
         return fn;
       }, function (v) {
         (this[HANDLER] || Object.defineProperty(this, HANDLER, { value: {}, configurable: true })[HANDLER])[type] = typeof v === "function" ? v : null;
+        if (typeof v === "function") ensureHandlerEntry(this, type);
       });
     });
   };

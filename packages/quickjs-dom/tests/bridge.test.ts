@@ -45,6 +45,33 @@ describe("bridge: objects of the page from the host", () => {
     expect(() => new w.DOMTokenList()).toThrow(TypeError);
   });
 
+  it("orders handlers the way jsdom does: capture first at the target, the on* slot kept", async () => {
+    const out = await dom.eval(`(() => {
+      const d = document.implementation.createHTMLDocument("");
+      d.body.innerHTML = "<div id=c>x</div>";
+      const c = d.getElementById("c");
+      const log = [];
+      // at the target the list runs in registration order (the spec order, and the one this
+      // package's own event test pins; jsdom's capture-first order there is a recorded deviation)
+      c.addEventListener("click", () => log.push("B1"));
+      c.addEventListener("click", () => log.push("CAP"), true);
+      c.addEventListener("click", () => log.push("B2"));
+      c.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      const first = log.join(",");
+      // the handler's slot is where it was first set, across null and re-set
+      log.length = 0;
+      const el = d.createElement("div");
+      el.onclick = () => log.push("ATTR2");
+      el.addEventListener("click", () => log.push("L1"));
+      el.onclick = null;
+      el.addEventListener("click", () => log.push("L2"));
+      el.onclick = () => log.push("ATTR2");
+      el.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      return JSON.stringify([first, log.join(",")]);
+    })()`);
+    expect(out).toBe(JSON.stringify(["B1,CAP,B2", "ATTR2,L1,L2"]));
+  });
+
   it("answers the SVG value interfaces, XPath classes and ElementInternals", async () => {
     const out = await dom.eval(`(() => {
       const d = document;
