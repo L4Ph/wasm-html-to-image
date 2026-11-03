@@ -373,7 +373,8 @@ export function openPage(
       if (hit) return hit;
     }
     try {
-      return new URL(name, base).href;
+      // code that is not a module of a URL (an inline script, the engine's own) resolves against the page
+      return new URL(name, /^https?:/.test(base) ? base : baseUrl).href;
     } catch {
       return name;
     }
@@ -484,11 +485,14 @@ export function openPage(
   try {
 
     // QuickJS gives `import.meta` no `url`, so the module's own URL is written into its source
-    const prefetchModules = async (source: string, name: string): Promise<string> => {
-      const code = source.replace(/\bimport\.meta\.url\b/g, JSON.stringify(name));
-      modules.set(name, code);
+    // `dynamicOnly`: a classic script, whose import("./x.js") calls are prefetched but which is not a module itself
+    const prefetchModules = async (source: string, name: string, dynamicOnly = false): Promise<string> => {
+      const code = dynamicOnly ? source : source.replace(/\bimport\.meta\.url\b/g, JSON.stringify(name));
+      if (!dynamicOnly) modules.set(name, code);
       const pending: string[] = [];
-      for (const m of code.matchAll(/(?:\bfrom\s*|\bimport\s*\(?\s*)(["'`])([^"'`$\s]+)\1/g)) {
+      const imports = dynamicOnly ? /\bimport\s*\(\s*(["'`])((?:\.{0,2}\/|https?:)[^"'`$\s]*)\1/g : /(?:\bfrom\s*|\bimport\s*\(?\s*)(["'`])([^"'`$\s]+)\1/g;
+      for (const m of code.matchAll(imports)) {
+        if (/[,;(){}<>=]/.test(m[2])) continue; // a string of the code that only looks like a specifier
         const target = resolveModule(name, m[2]);
         if (/^https?:/.test(target) && !modules.has(target) && modules.size < MAX_MODULES) {
           modules.set(target, new Error(`could not load module ${target}`));
@@ -551,6 +555,7 @@ export function openPage(
             if (!s.src) name = `${baseUrl}#module-${s.idx}`;
             code = await prefetchModules(code, name);
           }
+          if (!s.module && code.includes("import(")) await prefetchModules(code, s.src ? name : baseUrl, true);
           const ok = run(code, name, s.module);
           call("__edgeSetCurrent(-1)");
           if (s.src) call(`__edgeScriptEvent(${s.idx}, ${ok})`);

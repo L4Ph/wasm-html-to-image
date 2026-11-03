@@ -275,6 +275,14 @@ describe("javascript option, QuickJS engine: ES modules", () => {
     expect(out.html).toContain('data-m="b"');
   });
 
+  it("a classic inline script can import() a module relative to the page", async () => {
+    const out = await runPageScriptsQuickJS(
+      { baseUrl: base, html: '<!doctype html><body><script>import("./b.js").then(function (m) { document.body.setAttribute("data-d", m.b); });</script></body>' },
+      { settleMs: 100 },
+    );
+    expect(out.html).toContain('data-d="b"');
+  });
+
   it("resolves bare specifiers and prefixes through an import map", async () => {
     const map = JSON.stringify({ imports: { bee: "./b.js", "lib/": "/" } });
     const out = await runPageScriptsQuickJS(

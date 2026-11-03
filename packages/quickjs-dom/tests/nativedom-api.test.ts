@@ -678,3 +678,15 @@ describe("character references in RCDATA", () => {
     }
   });
 });
+
+describe("URL against an opaque base", () => {
+  it("resolves a path against x:/ the way webpack's check does", async () => {
+    const dom = await createDOM({ html: "<body></body>" }, { settleMs: 0 });
+    try {
+      const w = dom.bridge().window as any;
+      expect([w.eval('new URL("/a/b.svg", "x:/").href'), w.eval('new URL("b", "x:/a/").href')]).toEqual(["x:/a/b.svg", "x:/a/b"]);
+    } finally {
+      dom.close();
+    }
+  });
+});

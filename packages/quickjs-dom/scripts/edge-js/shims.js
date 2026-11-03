@@ -178,11 +178,11 @@
         u = String(u);
         if (!/^[a-z][a-z0-9+.-]*:/i.test(u)) {
           if (!b) throw new TypeError("Invalid URL: " + u);
-          var bb = new g.URL(b);
+          var bb = new g.URL(b), root = bb.origin !== "null" ? bb.origin : bb.protocol + (bb.host ? "//" + bb.host : ""); // an opaque origin (x:/) still has a root
           if (u.startsWith("//")) u = bb.protocol + u;
-          else if (u.startsWith("/")) u = bb.origin + u;
-          else if (u.startsWith("?") || u.startsWith("#")) u = bb.origin + bb.pathname + (u.startsWith("#") ? bb.search : "") + u;
-          else u = bb.origin + bb.pathname.replace(/[^/]*$/, "") + u;
+          else if (u.startsWith("/")) u = root + u;
+          else if (u.startsWith("?") || u.startsWith("#")) u = root + bb.pathname + (u.startsWith("#") ? bb.search : "") + u;
+          else u = root + bb.pathname.replace(/[^/]*$/, "") + u;
         }
         var m = /^([a-z][a-z0-9+.-]*:)(?:\/\/([^/?#]*))?([^?#]*)(\?[^#]*)?(#.*)?$/i.exec(u);
         if (!m) throw new TypeError("Invalid URL: " + u);
