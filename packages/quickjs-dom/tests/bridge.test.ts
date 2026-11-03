@@ -45,6 +45,21 @@ describe("bridge: objects of the page from the host", () => {
     expect(() => new w.DOMTokenList()).toThrow(TypeError);
   });
 
+  it("reflects the aria* properties onto their attributes", async () => {
+    const out = await dom.eval(`(() => {
+      const el = document.getElementById("a");
+      const before = [el.ariaLabel, el.ariaBusy, el.ariaValueNow];
+      el.ariaBusy = "true"; el.ariaValueNow = "5"; el.ariaColIndexText = "x";
+      const mid = [el.getAttribute("aria-busy"), el.getAttribute("aria-valuenow"), el.getAttribute("aria-colindextext")];
+      el.ariaBusy = null;
+      const names = [];
+      let o = el;
+      while (o) { for (const k of Object.getOwnPropertyNames(o)) if (/^aria[A-Z]/.test(k) && !names.includes(k)) names.push(k); o = Object.getPrototypeOf(o); }
+      return JSON.stringify([before, mid, el.ariaBusy, el.hasAttribute("aria-busy"), names.length]);
+    })()`);
+    expect(out).toBe(JSON.stringify([[null, null, null], ["true", "5", "x"], null, false, 41]));
+  });
+
   it("answers the legacy constants, splitText and the namespace lookups", async () => {
     const out = await dom.eval(`(() => {
       const host = document.createElement("div");

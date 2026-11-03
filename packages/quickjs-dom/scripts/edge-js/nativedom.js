@@ -2993,7 +2993,14 @@
     getter(P.Element, "clientLeft", function () { return 0; });
     nullable(P.HTMLElement, "nonce", "nonce");
     nullable(P.Element, "role", "role");
-    nullable(P.Element, "ariaLabel", "aria-label");
+    // the ARIAMixin string reflections: every aria* IDL property mirrors its aria-* attribute.
+    // The attribute names are NOT a mechanical kebab-casing of the IDL names (ariaValueNow mirrors
+    // aria-valuenow, ariaReadOnly mirrors aria-readonly, ...), so the pairs are spelled out.
+    // (The element-reference ones — ariaControls, ariaLabelledBy, ... — are not string reflections
+    // and jsdom does not define them either.)
+    [["ariaAtomic", "aria-atomic"], ["ariaAutoComplete", "aria-autocomplete"], ["ariaBusy", "aria-busy"], ["ariaChecked", "aria-checked"], ["ariaColCount", "aria-colcount"], ["ariaColIndex", "aria-colindex"], ["ariaColIndexText", "aria-colindextext"], ["ariaColSpan", "aria-colspan"], ["ariaCurrent", "aria-current"], ["ariaDescription", "aria-description"], ["ariaDisabled", "aria-disabled"], ["ariaExpanded", "aria-expanded"], ["ariaHasPopup", "aria-haspopup"], ["ariaHidden", "aria-hidden"], ["ariaInvalid", "aria-invalid"], ["ariaKeyShortcuts", "aria-keyshortcuts"], ["ariaLabel", "aria-label"], ["ariaLevel", "aria-level"], ["ariaLive", "aria-live"], ["ariaModal", "aria-modal"], ["ariaMultiLine", "aria-multiline"], ["ariaMultiSelectable", "aria-multiselectable"], ["ariaOrientation", "aria-orientation"], ["ariaPlaceholder", "aria-placeholder"], ["ariaPosInSet", "aria-posinset"], ["ariaPressed", "aria-pressed"], ["ariaReadOnly", "aria-readonly"], ["ariaRelevant", "aria-relevant"], ["ariaRequired", "aria-required"], ["ariaRoleDescription", "aria-roledescription"], ["ariaRowCount", "aria-rowcount"], ["ariaRowIndex", "aria-rowindex"], ["ariaRowIndexText", "aria-rowindextext"], ["ariaRowSpan", "aria-rowspan"], ["ariaSelected", "aria-selected"], ["ariaSetSize", "aria-setsize"], ["ariaSort", "aria-sort"], ["ariaValueMax", "aria-valuemax"], ["ariaValueMin", "aria-valuemin"], ["ariaValueNow", "aria-valuenow"], ["ariaValueText", "aria-valuetext"]].forEach(function (pair) {
+      nullable(P.Element, pair[0], pair[1]);
+    });
     getter(P.HTMLElement, "draggable", function () { return this.getAttribute("draggable") === "true"; }, function (v) { this.setAttribute("draggable", v ? "true" : "false"); });
   })();
 
