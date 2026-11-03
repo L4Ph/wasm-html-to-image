@@ -102,6 +102,25 @@
     // the window's scalar properties a page reads: no scrolling, no frames, not framed itself
     g.pageXOffset = g.scrollX = g.pageYOffset = g.scrollY = 0;
     g.screenX = g.screenLeft = g.screenY = g.screenTop = 0;
+    // the window's own functions: dialogs and window management have nothing to act on here
+    // (a script must not hang waiting for a user), and jsdom's answers are the same shape
+    g.alert = function () {};
+    g.confirm = function () { return false; };
+    g.prompt = function () { return null; };
+    g.focus = g.blur = function () {};
+    g.captureEvents = g.releaseEvents = function () {};
+    g.moveBy = g.moveTo = g.resizeBy = g.resizeTo = g.print = g.stop = function () {};
+    g.open = function () { return null; };
+    // postMessage to itself does deliver: a message event on the window, asynchronously
+    g.postMessage = function (message) {
+      var ev = new g.MessageEvent("message", { data: message, origin: loc.origin === "null" ? "" : loc.origin });
+      setTimeout(function () { g.dispatchEvent(ev); }, 0);
+    };
+    if (!g.webkitURL) g.webkitURL = g.URL;
+    if (g.crypto && !g.Crypto) {
+      g.Crypto = function Crypto() { throw new TypeError("Illegal constructor"); };
+      Object.setPrototypeOf(g.crypto, g.Crypto.prototype);
+    }
     g.name = "";
     g.status = "";
     g.origin = loc.origin;

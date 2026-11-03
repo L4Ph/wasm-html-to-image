@@ -116,7 +116,10 @@ const missingGlobals = diffSet(real.globals, ours.globals).filter((g) => !isInte
 const internalGlobals = diffSet(real.globals, ours.globals).filter(isInternal);
 const extraGlobals = diffSet(ours.globals, real.globals);
 const sharedIfaces = Object.keys(real.ifaces).filter((k) => k in ours.ifaces);
-const missingIfaces = Object.keys(real.ifaces).filter((k) => !(k in ours.ifaces));
+// an interface counts as missing only when the name is not reachable in ours at all: a native
+// function (queueMicrotask in the QuickJS runtime) has no JS prototype to walk, but it is there
+// and callable, so it is not a gap
+const missingIfaces = Object.keys(real.ifaces).filter((k) => !(k in ours.ifaces) && !ours.globals.includes(k));
 const extraIfaces = Object.keys(ours.ifaces).filter((k) => !(k in real.ifaces));
 
 const memberGaps = {};

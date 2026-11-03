@@ -45,6 +45,26 @@ describe("bridge: objects of the page from the host", () => {
     expect(() => new w.DOMTokenList()).toThrow(TypeError);
   });
 
+  it("answers the window's own functions", async () => {
+    const out = await dom.eval(`(async () => {
+      const got = [];
+      window.addEventListener("message", (e) => got.push([e.data, e.origin, e instanceof MessageEvent]));
+      const sync = [
+        typeof alert, typeof confirm, typeof prompt, typeof focus, typeof blur, typeof print, typeof stop, typeof open,
+        confirm(), prompt(), open(), webkitURL === URL, crypto instanceof Crypto, typeof Crypto,
+      ];
+      window.postMessage({ a: 1 });
+      await new Promise((r) => setTimeout(r, 20));
+      return JSON.stringify([sync, got]);
+    })()`);
+    expect(out).toBe(
+      JSON.stringify([
+        ["function", "function", "function", "function", "function", "function", "function", "function", false, null, null, true, true, "function"],
+        [[{ a: 1 }, "", true]],
+      ]),
+    );
+  });
+
   it("answers the Document members jsdom answers", async () => {
     const out = await dom.eval(`(() => {
       const d = document;
