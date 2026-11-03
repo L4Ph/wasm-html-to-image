@@ -73,6 +73,21 @@
     g.Navigator = function Navigator() { illegal(); };
     g.navigator = Object.create(g.Navigator.prototype);
     Object.assign(g.navigator, { userAgent: "Mozilla/5.0 (compatible; wasm-html-to-image) AppleWebKit/537.36 Chrome/120.0", language: "en-US", languages: ["en-US"], platform: "Linux", hardwareConcurrency: 1, onLine: true, cookieEnabled: false });
+    // plugins and mime types: none are registered, so both arrays are empty — but they are the
+    // real interfaces, with item/namedItem answering the way empty ones do
+    var emptyList = function (ctor) {
+      var o = Object.create(ctor.prototype);
+      Object.defineProperty(o, "length", { value: 0, enumerable: true });
+      return o;
+    };
+    g.Plugin = function Plugin() { illegal(); };
+    g.MimeType = function MimeType() { illegal(); };
+    g.PluginArray = function PluginArray() { illegal(); };
+    g.MimeTypeArray = function MimeTypeArray() { illegal(); };
+    Object.assign(g.PluginArray.prototype, { item: function () { return null; }, namedItem: function () { return null; }, refresh: function () {} });
+    Object.assign(g.MimeTypeArray.prototype, { item: function () { return null; }, namedItem: function () { return null; } });
+    g.navigator.plugins = emptyList(g.PluginArray);
+    g.navigator.mimeTypes = emptyList(g.MimeTypeArray);
     // pushState/replaceState move the location, as routers expect (no navigation happens)
     function moveTo(u) {
       if (u == null || u === "") return;

@@ -45,6 +45,15 @@ describe("bridge: objects of the page from the host", () => {
     expect(() => new w.DOMTokenList()).toThrow(TypeError);
   });
 
+  it("gives the navigator empty plugin and mime type arrays of the right classes", async () => {
+    const out = await dom.eval(`JSON.stringify([
+      navigator.plugins instanceof PluginArray, navigator.plugins.length, navigator.plugins.item(0), navigator.plugins.namedItem("x"), typeof navigator.plugins.refresh,
+      navigator.mimeTypes instanceof MimeTypeArray, navigator.mimeTypes.length, navigator.mimeTypes.item(0),
+      typeof Plugin, typeof MimeType,
+    ])`);
+    expect(out).toBe(JSON.stringify([true, 0, null, null, "function", true, 0, null, "function", "function"]));
+  });
+
   it("gives the table, legacy and SVG elements their interfaces, and iterators theirs", async () => {
     const out = await dom.eval(`(() => {
       const d = document.implementation.createHTMLDocument("");
