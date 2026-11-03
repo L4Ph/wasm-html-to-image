@@ -1394,7 +1394,7 @@
         }
         return any ? box(ax0, ay0, ax1 - ax0, ay1 - ay0) : box(0, 0, 0, 0);
       }
-      if (t === "image" || t === "foreignobject" || t === "use") return box(attrNum(this, "x"), attrNum(this, "y"), attrNum(this, "width"), attrNum(this, "height"));
+      if (t === "image" || t === "foreignObject" || t === "use") return box(attrNum(this, "x"), attrNum(this, "y"), attrNum(this, "width"), attrNum(this, "height"));
       return box(attrNum(this, "x"), attrNum(this, "y"), 0, 0); // text: no layout
     });
   })();
@@ -1405,14 +1405,32 @@
   var NSKEY = Symbol("ns");
   getter(P.Element, "namespaceURI", function () {
     if (this[NSKEY]) return this[NSKEY];
-    for (var n = this; n && n.nodeType === 1; n = n.parentNode) {
-      var t = n.localName;
-      if (t === "svg") return NS.svg;
-      if (t === "math") return NS.math;
-      if (n.localName === "foreignobject") return NS.html;
+    // the element itself is foreign when it is (or sits in) an svg/math root; an integration
+    // point (foreignObject, an annotation-xml serving HTML, an svg desc/title) makes its
+    // CHILDREN HTML, not itself — so those are only met walking up from the parent
+    var t = this.localName;
+    if (t === "svg") return NS.svg;
+    if (t === "math") return NS.math;
+    for (var n = this.parentNode; n && n.nodeType === 1; n = n.parentNode) {
+      var lt = n.localName;
+      if (lt === "svg") return NS.svg;
+      if (lt === "math") return NS.math;
+      if (lt === "foreignObject" || lt === "desc" || lt === "title") return NS.html;
+      if (lt === "annotation-xml" && n.getAttribute("encoding") === "text/html") return NS.html;
     }
     return NS.html;
   });
+  // tagName (and with it nodeName) is upper-cased for an HTML element in an HTML document only;
+  // a foreign element keeps its adjusted name (foreignObject), an XML document's its own case.
+  // The native getter upper-cases everything, so the two are answered here.
+  var elementName = function (el) {
+    var ln = el.localName;
+    var d = el.ownerDocument;
+    if (el.namespaceURI === NS.html && d && !(typeof XMLDocument !== "undefined" && d instanceof XMLDocument)) return ln.replace(/[a-z]/g, function (ch) { return ch.toUpperCase(); });
+    return ln;
+  };
+  getter(P.Element, "tagName", function () { return elementName(this); });
+  getter(P.Element, "nodeName", function () { return elementName(this); });
   getter(P.Element, "prefix", function () { return null; });
   def(P.Document, "createElementNS", function (ns, name) {
     var el = this.createElement(String(name));
@@ -1849,7 +1867,116 @@
     return doc;
   };
   var DOMParser = function DOMParser() {};
+  // A small strict XML parser for DOMParser's XML types. The HTML parser cannot serve them (it
+  // would wrap the content in html/head/body): well-formed input becomes a real tree of the XML
+  // document, anything else the parsererror document browsers and jsdom answer. CDATA sections
+  // become text (there is no CDATA node kind here, so they serialise escaped — a recorded
+  // remainder), processing instructions are skipped, and namespaces are not resolved: names
+  // keep their qualified spelling.
+  var parseXMLDocument = function (markup, type) {
+    var doc = D.createXMLDocument();
+    Object.setPrototypeOf(doc, XMLDocument.prototype);
+    Object.defineProperty(doc, "contentType", { value: type, configurable: true });
+    var fail = function (msg) {
+      // the error document replaces the parse entirely (a partial tree may already hang off doc)
+      var fresh = D.createXMLDocument();
+      Object.setPrototypeOf(fresh, XMLDocument.prototype);
+      Object.defineProperty(fresh, "contentType", { value: type, configurable: true });
+      var err = fresh.createElement("parsererror");
+      err.setAttribute("xmlns", "http://www.mozilla.org/newlayout/xml/parsererror.xml");
+      err.textContent = "XML Parsing Error: " + msg;
+      fresh.appendChild(err);
+      return fresh;
+    };
+    var s = String(markup), i = 0, n = s.length;
+    var stack = [doc], names = [null], rootSeen = false;
+    var ENT = { lt: "<", gt: ">", amp: "&", apos: "'", quot: "\"" };
+    var expand = function (text) {
+      if (/&(?!(#x[0-9a-fA-F]+|#\d+|[A-Za-z_][\w.-]*);)/.test(text)) throw new Error("bare & in content");
+      return text.replace(/&(#x[0-9a-fA-F]+|#\d+|[A-Za-z_][\w.-]*);/g, function (m, body) {
+        if (body.charAt(0) === "#") { var cp = body.charAt(1) === "x" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10); return String.fromCodePoint(cp); }
+        if (!(body in ENT)) throw new Error("undefined entity &" + body + ";");
+        return ENT[body];
+      });
+    };
+    var top = function () { return stack[stack.length - 1]; };
+    var addText = function (text, raw) {
+      if (!text) return;
+      if (stack.length === 1) { if (/\S/.test(text)) throw new Error("text outside the root element"); return; }
+      top().appendChild(doc.createTextNode(raw ? text : expand(text)));
+    };
+    try {
+      while (i < n) {
+        var lt = s.indexOf("<", i);
+        if (lt < 0) { addText(s.slice(i)); i = n; break; }
+        if (lt > i) addText(s.slice(i, lt));
+        i = lt;
+        if (s.startsWith("<!--", i)) {
+          var e1 = s.indexOf("-->", i + 4);
+          if (e1 < 0) throw new Error("unterminated comment");
+          top().appendChild(doc.createComment(s.slice(i + 4, e1)));
+          i = e1 + 3;
+        } else if (s.startsWith("<![CDATA[", i)) {
+          var e2 = s.indexOf("]]>", i + 9);
+          if (e2 < 0) throw new Error("unterminated CDATA section");
+          addText(s.slice(i + 9, e2), true);
+          i = e2 + 3;
+        } else if (s.startsWith("<?", i)) {
+          var e3 = s.indexOf("?>", i + 2);
+          if (e3 < 0) throw new Error("unterminated processing instruction");
+          i = e3 + 2;
+        } else if (s.startsWith("<!DOCTYPE", i)) {
+          var j = i + 9, depth = 0;
+          while (j < n && (s[j] !== ">" || depth > 0)) { if (s[j] === "[") depth++; else if (s[j] === "]") depth--; j++; }
+          if (j >= n) throw new Error("unterminated doctype");
+          var decl = s.slice(i + 9, j).trim();
+          var dm = decl.match(/^([^\s[]+)(?:\s+(PUBLIC|SYSTEM)\s+"([^"]*)"(?:\s+"([^"]*)")?)?/);
+          if (dm && stack.length === 1) {
+            var dt = doc.implementation.createDocumentType(dm[1], dm[2] === "PUBLIC" ? dm[3] : "", dm[2] === "PUBLIC" ? (dm[4] || "") : (dm[2] === "SYSTEM" ? dm[3] : ""));
+            doc.appendChild(dt);
+          }
+          i = j + 1;
+        } else if (s.startsWith("</", i)) {
+          var e4 = s.indexOf(">", i + 2);
+          if (e4 < 0) throw new Error("unterminated end tag");
+          var cname = s.slice(i + 2, e4).trim();
+          if (stack.length === 1 || names[names.length - 1] !== cname) throw new Error("mismatched end tag </" + cname + ">");
+          stack.pop(); names.pop();
+          i = e4 + 1;
+        } else if (s[i + 1] === "!") {
+          throw new Error("unsupported markup declaration");
+        } else {
+          var m = /^<([A-Za-z_][\w.:-]*)/.exec(s.slice(i, i + 256));
+          if (!m) throw new Error("malformed tag");
+          var el = doc.createElement(m[1]);
+          var j2 = i + m[0].length, seen = {}, selfClose = false;
+          for (;;) {
+            while (j2 < n && /\s/.test(s[j2])) j2++;
+            if (s.startsWith("/>", j2)) { selfClose = true; j2 += 2; break; }
+            if (s[j2] === ">") { j2++; break; }
+            if (j2 >= n) throw new Error("unterminated start tag");
+            var am = /^([A-Za-z_][\w.:-]*)\s*=\s*("([^"]*)"|'([^']*)')/.exec(s.slice(j2, j2 + 512));
+            if (!am) throw new Error("malformed attribute in <" + m[1] + ">");
+            if (seen[am[1]]) throw new Error("duplicate attribute " + am[1]);
+            seen[am[1]] = 1;
+            el.setAttribute(am[1], expand(am[3] !== undefined ? am[3] : am[4]));
+            j2 += am[0].length;
+          }
+          if (stack.length === 1) { if (rootSeen) throw new Error("multiple root elements"); rootSeen = true; }
+          top().appendChild(el);
+          if (!selfClose) { stack.push(el); names.push(m[1]); }
+          i = j2;
+        }
+      }
+      if (stack.length !== 1) throw new Error("unclosed element <" + names[names.length - 1] + ">");
+      if (!rootSeen) throw new Error("no root element");
+    } catch (e) {
+      return fail(e && e.message ? e.message : String(e));
+    }
+    return doc;
+  };
   def(DOMParser.prototype, "parseFromString", function (markup, type) {
+    if (type && type !== "text/html" && (/(^|\/)xml$/.test(type) || type === "image/svg+xml" || /\+xml$/.test(type))) return parseXMLDocument(markup, type);
     var doc = D.parse(String(markup));
     // HTMLDocument and XMLDocument are defined further down; at call time they exist, and the
     // result takes the class of the type it was parsed as (the parsing itself is the one parser)
@@ -1970,7 +2097,7 @@
     return dt;
   });
   def(DOMImplementation.prototype, "createDocument", function (ns, qname, doctype) {
-    var doc = D.createDocument();
+    var doc = D.createXMLDocument();
     Object.setPrototypeOf(doc, XMLDocument.prototype);
     if (doctype) doc.appendChild(doctype);
     if (qname) doc.appendChild(ns ? doc.createElementNS(ns, String(qname)) : doc.createElement(String(qname)));

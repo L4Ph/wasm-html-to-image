@@ -597,7 +597,7 @@ static JSValue js_doc_create(JSContext *ctx, JSValueConst this_val, int argc, JS
         s = JS_ToCStringLen(ctx, &len, argv[0]);
         if (!s) return JS_EXCEPTION;
     }
-    JSValue r = magic == 0 ? nd_new(ctx, this_val, 1, s, len, 1)
+    JSValue r = magic == 0 ? nd_new(ctx, this_val, 1, s, len, n && n->type == 9 && n->xml ? 0 : 1)
               : magic == 1 ? nd_new(ctx, this_val, 3, s, len, 0)
               : magic == 2 ? nd_new(ctx, this_val, 8, s, len, 0)
                            : nd_new(ctx, this_val, 11, NULL, 0, 0);
@@ -624,6 +624,13 @@ static JSValue js_dom_create_document(JSContext *ctx, JSValueConst this_val, int
     (void)argc;
     (void)argv;
     return nd_new(ctx, JS_NULL, 9, NULL, 0, 0);
+}
+/* an XML document: its createElement keeps the name's case (the plain factory stays neutral —
+   the native tests use it as a generic document with HTML createElement rules) */
+static JSValue js_dom_create_xml_document(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    JSValue doc = js_dom_create_document(ctx, this_val, argc, argv);
+    if (!JS_IsException(doc)) nd_of(doc)->xml = 1;
+    return doc;
 }
 static JSValue js_dom_parse(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;
@@ -883,6 +890,7 @@ static void nd_register(JSContext *c, JSValueConst native) {
     JS_SetPropertyStr(c, dom, "liveNodes", JS_NewCFunction(c, js_dom_live, "liveNodes", 0));
     JS_SetPropertyStr(c, dom, "gc", JS_NewCFunction(c, js_dom_gc, "gc", 0));
     JS_SetPropertyStr(c, dom, "createDocument", JS_NewCFunction(c, js_dom_create_document, "createDocument", 0));
+    JS_SetPropertyStr(c, dom, "createXMLDocument", JS_NewCFunction(c, js_dom_create_xml_document, "createXMLDocument", 0));
     JS_SetPropertyStr(c, dom, "parse", JS_NewCFunction(c, js_dom_parse, "parse", 1));
     JS_SetPropertyStr(c, dom, "parseFragment", JS_NewCFunction(c, js_dom_parse_fragment, "parseFragment", 2));
     JS_SetPropertyStr(c, native, "dom", dom);

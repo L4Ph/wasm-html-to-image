@@ -45,6 +45,39 @@ describe("bridge: objects of the page from the host", () => {
     expect(() => new w.DOMTokenList()).toThrow(TypeError);
   });
 
+  it("builds the tree the standard builds: adoption, foster parenting, tables, foreign case, XML", async () => {
+    const out = await dom.eval(`(() => {
+      const d = document.implementation.createHTMLDocument("");
+      const cases = [
+        "<b><i>x</b>y</i>",
+        "<table><div>f</div><tr><td>c</td></tr></table>",
+        "<a href='/x'>one<a href='/y'>two</a>",
+        "<isindex prompt='what'>",
+        "<table><td>cell</td></table>",
+        "<svg><foreignObject><div>x</div></foreignObject><circle r='1'/></svg>",
+      ];
+      const got = cases.map((m) => { d.body.innerHTML = m; return d.body.innerHTML; });
+      const fo = d.querySelector("foreignObject");
+      got.push(fo.localName + "/" + fo.namespaceURI.split("/").pop() + "/" + fo.firstElementChild.namespaceURI.split("/").pop());
+      const xml = new DOMParser().parseFromString("<root><a x='1'>t</a></root>", "text/xml");
+      got.push(new XMLSerializer().serializeToString(xml));
+      const bad = new DOMParser().parseFromString("<root><oops>", "text/xml");
+      got.push(bad.documentElement.localName);
+      return JSON.stringify(got);
+    })()`);
+    expect(out).toBe(JSON.stringify([
+      "<b><i>x</i></b><i>y</i>",
+      "<div>f</div><table><tbody><tr><td>c</td></tr></tbody></table>",
+      '<a href="/x">one</a><a href="/y">two</a>',
+      '<isindex prompt="what"></isindex>',
+      "<table><tbody><tr><td>cell</td></tr></tbody></table>",
+      '<svg><foreignObject><div>x</div></foreignObject><circle r="1"></circle></svg>',
+      "foreignObject/svg/xhtml",
+      '<root><a x="1">t</a></root>',
+      "parsererror",
+    ]));
+  });
+
   it("keeps form state apart from its defaults: dirty values, radio groups, deselection, reset", async () => {
     const out = await dom.eval(`(() => {
       const d = document.implementation.createHTMLDocument("");
@@ -447,7 +480,7 @@ describe("bridge: objects of the page from the host", () => {
         impl.hasFeature("HTML", "1.0"),
         dt.nodeType, dt instanceof DocumentType, dt.name, dt.publicId, dt.systemId,
         hd instanceof HTMLDocument, hd instanceof Document, hd.constructor.name, hd.title, hd.body.tagName,
-        xd.documentElement.tagName, xd instanceof HTMLDocument,
+        xd.documentElement.tagName, xd instanceof HTMLDocument, // "root" as created: an XML document's tagName keeps its case (jsdom agrees; the native getter used to upper-case every element)
         document instanceof HTMLDocument, document.constructor.name,
         parsed instanceof HTMLDocument,
         (() => { try { new DOMImplementation(); return "no error"; } catch (e) { return e.name; } })(),
@@ -459,7 +492,7 @@ describe("bridge: objects of the page from the host", () => {
         true,
         10, true, "html", "-//X//EN", "sys",
         true, true, "HTMLDocument", "T", "BODY",
-        "ROOT", false, // the root's tag is uppercased like an HTML element's; jsdom says "root" (recorded in the ledger)
+        "root", false, // as created: an XML document's tagName keeps its case, as jsdom's does
         true, "HTMLDocument",
         true,
         "TypeError",

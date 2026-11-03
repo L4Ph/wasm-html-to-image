@@ -60,10 +60,15 @@ static int hvec_push(HVec *a, int32_t x) {
 
 /* ---- events: what the handlers get, recorded first so declining never leaves a half-built tree ---- */
 
-enum { EV_TEXT = 1, EV_OPEN, EV_CLOSE, EV_COMMENT, EV_PI };
+enum { EV_TEXT = 1, EV_OPEN, EV_CLOSE, EV_COMMENT, EV_PI, EV_STRAY };
 /* EV_TEXT/EV_COMMENT: src, off, len (src 0: the input, 1: `extra`)
    EV_OPEN:            nameOff, nameLen (in extra), nattrs, then per attribute: nameOff, nameLen (input), src, off, len
-   EV_CLOSE:           -
+   EV_CLOSE:           srcOff, srcLen (in extra): the tag whose processing closed the element — the
+                       end tag being processed, the start tag for an implied close, the element's
+                       own name when it closed itself. The tree builder needs it to tell an
+                       element's own end tag from an ancestor's (the adoption agency's bookkeeping).
+   EV_STRAY:           nameOff, nameLen (in extra): an end tag for a formatting element that is not
+                       open — the builder may hold a reconstructed clone of it to close.
    EV_PI:              nameOff, nameLen, dataOff, dataLen (all in extra) */
 
 /* ---- tokenizer states (the numbering of htmlparser2's) ---- */
@@ -401,8 +406,8 @@ static const HImplies IMPLIES[] = {
 };
 
 static const HStr VOIDS[] = {
-    HS("area"), HS("base"), HS("basefont"), HS("br"), HS("col"), HS("command"), HS("embed"), HS("frame"), HS("hr"), HS("img"),
-    HS("input"), HS("isindex"), HS("keygen"), HS("link"), HS("meta"), HS("param"), HS("source"), HS("track"), HS("wbr"),
+    HS("area"), HS("base"), HS("basefont"), HS("br"), HS("col"), HS("embed"), HS("frame"), HS("hr"), HS("img"),
+    HS("input"), HS("keygen"), HS("link"), HS("meta"), HS("param"), HS("source"), HS("track"), HS("wbr"),
 };
 static const HStr INTEGRATION[] = {
     HS("mi"), HS("mo"), HS("mn"), HS("ms"), HS("mtext"), HS("annotation-xml"), HS("foreignobject"), HS("desc"), HS("title"),
@@ -442,7 +447,22 @@ static void h_stack_push(HP *p, HName n) {
 
 static inline int h_same(HP *p, HName a, HName b) { return a.len == b.len && memcmp(h_nm(p, a), h_nm(p, b), (size_t)a.len) == 0; }
 
-static void h_close(HP *p) { h_ev(p, EV_CLOSE); }
+/* the spec's formatting elements (the adoption agency's cast) */
+static const HStr FORMATTING[] = {
+    HS("a"), HS("b"), HS("big"), HS("code"), HS("em"), HS("font"), HS("i"), HS("nobr"), HS("s"), HS("small"), HS("strike"), HS("strong"), HS("tt"), HS("u"),
+};
+static int h_is_formatting(const uint8_t *a, int alen) { return h_in(a, alen, FORMATTING, SETN(FORMATTING)); }
+
+static void h_close(HP *p, HName src) {
+    h_ev(p, EV_CLOSE);
+    h_ev(p, src.off);
+    h_ev(p, src.len);
+}
+static void h_stray(HP *p, HName name) {
+    h_ev(p, EV_STRAY);
+    h_ev(p, name.off);
+    h_ev(p, name.len);
+}
 
 static void h_emit_open_tag(HP *p, HName name) {
     p->tagname = name;
@@ -453,7 +473,7 @@ static void h_emit_open_tag(HP *p, HName name) {
             HName top = p->stack[p->nstack - 1];
             if (!h_in(h_nm(p, top), top.len, IMPLIES[i].set, IMPLIES[i].n)) break;
             p->nstack--;
-            h_close(p);
+            h_close(p, name);
         }
         break;
     }
@@ -479,7 +499,7 @@ static void h_end_open_tag(HP *p) {
         h_ev(p, p->attrs[i].len);
     }
     p->nattrs = 0;
-    if (h_is_void(p, p->tagname)) h_close(p);
+    if (h_is_void(p, p->tagname)) h_close(p, p->tagname);
     p->tagname.len = 0;
 }
 
@@ -487,7 +507,7 @@ static void h_close_current_tag(HP *p) {
     HName name = p->tagname;
     h_end_open_tag(p);
     if (p->nstack > 0 && h_same(p, p->stack[p->nstack - 1], name)) {
-        h_close(p);
+        h_close(p, name);
         p->nstack--;
     }
 }
@@ -526,8 +546,10 @@ static void h_on_close_tag(HP *p, ptrdiff_t start, ptrdiff_t end) {
         if (pos != -1) {
             for (int index = 0; index <= pos; index++) {
                 p->nstack--;
-                h_close(p);
+                h_close(p, name);
             }
+        } else if (h_is_formatting(nm, name.len)) {
+            h_stray(p, name);
         } else if (h_is(nm, name.len, &pt)) {
             h_emit_open_tag(p, name);
             h_close_current_tag(p);
@@ -537,7 +559,7 @@ static void h_on_close_tag(HP *p, ptrdiff_t start, ptrdiff_t end) {
         h_ev(p, name.off);
         h_ev(p, name.len);
         h_ev(p, 0);
-        h_close(p);
+        h_close(p, name);
     }
 }
 
@@ -1034,7 +1056,7 @@ static void h_finish(HP *p) {
         p->state = p->baseState;
     }
     h_handle_trailing_data(p);
-    for (int i = p->nstack - 1; i >= 0; i--) h_close(p); /* onend: every tag still open */
+    for (int i = p->nstack - 1; i >= 0; i--) h_close(p, p->stack[i]); /* onend: every tag still open */
 }
 
 static void h_run(HP *p) {
@@ -1197,11 +1219,17 @@ static JSValue native_parse_html(JSContext *c, JSValueConst self, int argc, JSVa
         }
         case EV_CLOSE:
             if (JS_IsFunction(c, onclose)) {
-                r = JS_Call(c, onclose, JS_UNDEFINED, 0, NULL);
+                args[0] = h_str(c, &p, 1, ev[i + 1], ev[i + 2]);
+                r = JS_Call(c, onclose, JS_UNDEFINED, 1, args);
+                JS_FreeValue(c, args[0]);
                 if (JS_IsException(r)) { result = r; goto done; }
                 JS_FreeValue(c, r);
             }
-            i += 1;
+            i += 3;
+            break;
+        case EV_STRAY:
+            /* a formatting end tag with nothing open: only the tree builder cares */
+            i += 3;
             break;
         case EV_PI:
             if (JS_IsFunction(c, onpi)) {
