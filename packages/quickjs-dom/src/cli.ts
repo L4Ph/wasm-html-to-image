@@ -47,6 +47,7 @@ Limits (set these for pages you do not control)
       --max-bytes <n>      refuse a response over n bytes
       --max-requests <n>   at most n requests
       --skip <text>        do not fetch URLs containing text (repeatable; analytics, ads, ...)
+      --before <file>      run this script file before the page's own scripts (repeatable)
 
   -h, --help               show this help
   -v, --version            show the version
@@ -107,6 +108,7 @@ export async function run(argv: string[], io: CliIO, version = "0.0.0"): Promise
         "max-bytes": { type: "string" },
         "max-requests": { type: "string" },
         skip: { type: "string", multiple: true },
+        before: { type: "string", multiple: true },
         help: { type: "boolean", short: "h" },
         version: { type: "boolean", short: "v" },
       },
@@ -151,6 +153,7 @@ export async function run(argv: string[], io: CliIO, version = "0.0.0"): Promise
     waitFor: values.wait,
     width: n.width,
     limits,
+    beforeScripts: (values.before ?? []).map((f) => readFileSync(f, "utf8")),
     skip: skips.length ? (url) => skips.some((s) => url.includes(s)) : undefined,
   };
 

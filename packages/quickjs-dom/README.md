@@ -161,6 +161,7 @@ const dom = await createDOM({ url }, {
 | `waitFor` | | A CSS selector to wait for after load instead of `settleMs`. |
 | `width` | `800` | `window.innerWidth`; also what `matchMedia` answers for. |
 | `limits` | none | What the page may fetch (see above). |
+| `beforeScripts` | | A string or an array of strings of script to run before the page's own scripts (the document is parsed, no `<script>` has run): patch a global, put a probe on `setTimeout`, set a flag. An error it throws is logged (source `before-scripts-N.js`) and the page goes on. |
 | `skip` | | `(url) => boolean`: return `true` for a URL the page should not get. The request fails without going to the network (a `<script>` gets its `error` event, a `fetch` rejects). Analytics and ads are most of a real site's script time, and a render rarely needs them. The page itself is never skipped. |
 | `onLog` | | Called with each log entry as it happens (see `logs`). |
 | `quickjsWasm` | | A compiled `WebAssembly.Module` of your own, instead of the packaged one. |
@@ -231,6 +232,7 @@ Prints the HTML after the page's scripts ran.
 | `--base-url <url>` | The page's URL, for a file or standard input. |
 | `--protocol <p>`, `--allow-host <h>`, `--block-host <h>`, `--block-private`, `--max-bytes <n>`, `--max-requests <n>` | The limits (repeat `--protocol`, `--allow-host` and `--block-host`). Set them for pages you do not control. |
 | `--skip <text>` | Do not fetch URLs containing this text (repeatable). |
+| `--before <file>` | Run this script file before the page's own scripts (repeatable). |
 
 Exit code `0` is done, `1` the page could not be loaded (or `-e` threw), `2` wrong usage. `--help` lists everything.
 

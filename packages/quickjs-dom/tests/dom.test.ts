@@ -892,3 +892,18 @@ describe("a page that replaces Promise", () => {
     }
   });
 });
+
+describe("beforeScripts", () => {
+  it("runs before the page's scripts, sees the parsed document, and an error in it does not stop the page", async () => {
+    const dom = await createDOM(
+      { html: `<body><p id=p>x</p><script>window.seen = [window.flag, document.getElementById("p") ? "doc" : "nodoc", window.n];</script></body>` },
+      { settleMs: 0, beforeScripts: ["window.flag = 'set'; window.n = (window.n || 0) + 1;", "throw new Error('boom')", "window.n += 1;"] },
+    );
+    try {
+      expect(await dom.eval(`JSON.stringify(seen)`)).toBe(JSON.stringify(["set", "doc", 2]));
+      expect(dom.logs.some((l) => l.type === "error" && l.source === "before-scripts-2.js" && /boom/.test(l.message))).toBe(true);
+    } finally {
+      dom.close();
+    }
+  });
+});

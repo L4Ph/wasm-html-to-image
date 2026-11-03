@@ -53,6 +53,12 @@ export interface JavaScriptOptions {
    * elements and style attributes count).
    */
   stylesheets?: boolean;
+  /**
+   * Script(s) to run in the page before any of its own: the document exists (parsed) but no `<script>` has run, so a
+   * patch of a global, a probe on `setTimeout` or a flag the page checks is in place when the page starts. Runs as a
+   * classic script; an error it throws is logged like a page's and the page goes on.
+   */
+  beforeScripts?: string | string[];
 }
 
 /** What the script phase produced. */
@@ -546,6 +552,7 @@ export function openPage(
 
     const boot = vm.eval(`__edgeBoot(${JSON.stringify(html)}, ${JSON.stringify(baseUrl)}, ${Math.round(viewportWidth)}, ${JSON.stringify(randomSeed())})`, "boot.js");
     if (boot.type === "error") throw new Error(`The QuickJS engine could not build the page: ${boot.value}`);
+    [opts.beforeScripts ?? []].flat().forEach((code, i) => run(code, `before-scripts-${i + 1}.js`));
 
     // scripts in document order, the ones that scripts add included; each external one is fetched by the host
     const mode = { scripts: true, external: true };
