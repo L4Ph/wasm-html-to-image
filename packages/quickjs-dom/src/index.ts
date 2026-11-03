@@ -234,6 +234,8 @@ export async function createDOM(
       first.push({ ...entry, status: res.status });
       html = new TextDecoder().decode(await guard.bytes(res));
       baseUrl = res.url || source.url;
+      const hash = source.url.indexOf("#");
+      if (hash !== -1 && baseUrl.indexOf("#") === -1) baseUrl += source.url.slice(hash);
     } catch (error) {
       try {
         options.onLog?.({ ...entry, error: String(error) });

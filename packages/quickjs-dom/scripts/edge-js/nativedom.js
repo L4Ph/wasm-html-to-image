@@ -1232,6 +1232,13 @@
   };
   [P.Element, P.Document, P.DocumentFragment].forEach(function (p) { liveGetter(p, "children"); });
   liveGetter(P.Node, "childNodes");
+  getter(P.Node, "baseURI", function () {
+    var doc = this.nodeType === 9 ? this : this.ownerDocument;
+    var page = globalThis.location ? globalThis.location.href : "";
+    var b = doc && doc.querySelector ? doc.querySelector("base[href]") : null;
+    if (!b) return page;
+    try { return new URL(b.getAttribute("href"), page).href; } catch (e) { return page; }
+  });
   var liveMethod = function (proto, name) {
     var d = Object.getOwnPropertyDescriptor(proto, name);
     if (!d || typeof d.value !== "function") return;

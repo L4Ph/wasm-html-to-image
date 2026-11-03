@@ -743,3 +743,18 @@ describe("geometry interfaces, Intl.NumberFormat, XMLHttpRequest events", () => 
     }
   });
 });
+
+describe("platform odds and ends", () => {
+  it("baseURI follows <base href>; URL.canParse/parse; the query is kept as written", async () => {
+    const page = await createDOM({ html: '<head><base href="/x/"></head><body><i></i></body>', baseUrl: "https://e.com/a/b?q#frag" }, { settleMs: 0 });
+    try {
+      expect(
+        await page.eval(`JSON.stringify([document.baseURI, document.body.baseURI, document.createElement("a").baseURI,
+          URL.canParse("/p", "https://e.com"), URL.canParse("nope"), URL.parse("nope"), URL.parse("/p", "https://e.com").href,
+          new URL("https://e.com/a?x#y").href, location.hash, location.search])`),
+      ).toBe(JSON.stringify(["https://e.com/x/", "https://e.com/x/", "https://e.com/x/", true, false, null, "https://e.com/p", "https://e.com/a?x#y", "#frag", "?q"]));
+    } finally {
+      page.close();
+    }
+  });
+});

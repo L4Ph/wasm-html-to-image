@@ -313,10 +313,11 @@
         this.hash = m[5] && m[5] !== "#" ? m[5] : "";
         this.origin = m[2] != null ? this.protocol + "//" + this.host : "null";
         this.searchParams = new g.URLSearchParams(this.search);
+        this._sp0 = this.searchParams.toString(); // the query as written is kept until searchParams changes
         this.username = "";
         this.password = "";
       }
-      get href() { var s = this.searchParams.toString(); return this.protocol + (this.host || this.protocol === "file:" ? "//" + this.host : "") + this.pathname + (s ? "?" + s : this.search) + this.hash; }
+      get href() { var s = this.searchParams.toString(); return this.protocol + (this.host || this.protocol === "file:" ? "//" + this.host : "") + this.pathname + (s && s !== this._sp0 ? "?" + s : this.search) + this.hash; }
       toString() { return this.href; }
       toJSON() { return this.href; }
     };
@@ -360,6 +361,8 @@
     entries() { return this.l[Symbol.iterator](); }
     [Symbol.iterator]() { return this.entries(); }
   };
+  if (g.URL && !g.URL.canParse) { g.URL.canParse = function (u, b) { try { new g.URL(u, b); return true; } catch (e) { return false; } }; }
+  if (g.URL && !g.URL.parse) { g.URL.parse = function (u, b) { try { return new g.URL(u, b); } catch (e) { return null; } }; }
   if (g.URL && !g.URL.createObjectURL) { g.URL.createObjectURL = function () { return "blob:null/" + Math.random().toString(16).slice(2); }; g.URL.revokeObjectURL = function () {}; }
 
   // crypto: random values only (no digest/subtle)
