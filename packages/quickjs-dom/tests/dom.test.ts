@@ -412,10 +412,10 @@ describe("createDOM: a page kept open", () => {
     try {
       const html = dom.markForLayout();
       expect(html).toMatch(/<body class="qjsl-\d+ x">/);
-      expect(html).toMatch(/<div class="qjsl-\d+" id="a">/);
+      expect(html).toMatch(/<div (class="qjsl-\d+" id="a"|id="a" class="qjsl-\d+")>/);
       expect(dom.serialize()).not.toContain("qjsl-"); // only the copy is marked
       expect(await dom.eval("document.body.className")).toBe("x");
-      const index = (id: string) => Number(new RegExp('class="qjsl-(\\d+)" id="' + id + '"').exec(html)![1]);
+      const index = (id: string) => Number(new RegExp('(?:class="qjsl-(\\d+)" id="' + id + '"|id="' + id + '" class="qjsl-(\\d+)")').exec(html)!.slice(1).find(Boolean));
       dom.setLayout({ [index("a")]: [5, 6, 70, 80] });
       expect(await dom.eval("document.getElementById('a').getBoundingClientRect().toJSON()")).toEqual({ x: 5, y: 6, width: 70, height: 80, top: 6, left: 5, right: 75, bottom: 86 });
       expect(await dom.eval("[document.getElementById('a').offsetWidth, document.getElementById('a').offsetHeight, document.getElementById('a').offsetTop]")).toEqual([70, 80, 6]);

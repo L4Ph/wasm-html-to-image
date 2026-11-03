@@ -448,6 +448,177 @@
   def(MutationObserver.prototype, "takeRecords", function () { return this._records.splice(0); });
   D.MutationObserver = MutationObserver;
 
+  // layout: none until the host gives one (boot.js's __edgeSetLayout replaces these), so every box is empty
+  var zeroRect = function () {
+    return { x: 0, y: 0, width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0, toJSON: function () { return this; } };
+  };
+  def(P.Element, "getBoundingClientRect", zeroRect);
+  def(P.Element, "getClientRects", function () { return []; });
+  ["offsetWidth", "offsetHeight", "offsetLeft", "offsetTop", "clientWidth", "clientHeight", "scrollWidth", "scrollHeight", "scrollTop", "scrollLeft"].forEach(function (k) {
+    getter(P.Element, k, function () { return 0; });
+  });
+
+  // Custom elements. An upgraded element gets its class's prototype and runs its constructor (the page's
+  // `class X extends HTMLElement` reaches the element through the HTMLElement below, which hands out the node being
+  // upgraded); connected / disconnected / attributeChanged callbacks follow insertion, removal and attribute writes.
+  // Hooks are installed on the first define(), so a page without custom elements pays nothing.
+  var defs = new Map(), byClass = new Map(), waiting = new Map(), UPGRADED = Symbol("upgraded"), pending = null, ceOn = false;
+  var report = function (e) {
+    if (typeof globalThis.reportError === "function") globalThis.reportError(e);
+    else if (globalThis.console) globalThis.console.error(e);
+  };
+  var defOf = function (el) {
+    var is = el.getAttribute && el.getAttribute("is");
+    return defs.get(el.localName) || (is && defs.get(is) && defs.get(is).extend === el.localName ? defs.get(is) : null);
+  };
+  var callback = function (el, name, args) {
+    var f = el[name];
+    if (typeof f === "function") { try { f.apply(el, args || []); } catch (e) { report(e); } }
+  };
+  var upgrade = function (el) {
+    if (el[UPGRADED]) return;
+    var def_ = defOf(el);
+    if (!def_) return;
+    Object.defineProperty(el, UPGRADED, { value: true });
+    Object.setPrototypeOf(el, def_.Class.prototype);
+    pending = el;
+    try { new def_.Class(); } catch (e) { report(e); }
+    pending = null;
+    var observed = def_.Class.observedAttributes || [];
+    el.getAttributeNames().forEach(function (n) { if (observed.indexOf(n) >= 0) callback(el, "attributeChangedCallback", [n, null, el.getAttribute(n)]); });
+    if (el.isConnected) callback(el, "connectedCallback");
+  };
+  var customIn = function (root) {
+    var out = [];
+    if (root.nodeType === 1 && (root.localName.indexOf("-") >= 0 || root.hasAttribute("is"))) out.push(root);
+    if (root.querySelectorAll) {
+      var all = root.querySelectorAll("*");
+      for (var i = 0; i < all.length; i++) if (all[i].localName.indexOf("-") >= 0 || all[i].hasAttribute("is")) out.push(all[i]);
+    }
+    return out;
+  };
+  var connected = function (root) {
+    customIn(root).forEach(function (el) {
+      if (el[UPGRADED]) callback(el, "connectedCallback");
+      else upgrade(el);
+    });
+  };
+  var disconnected = function (list) { list.forEach(function (el) { if (el[UPGRADED]) callback(el, "disconnectedCallback"); }); };
+  var ceInstall = function () {
+    if (ceOn) return;
+    ceOn = true;
+    var live = function (parent) { return parent.isConnected; };
+    wrap(P.Node, "appendChild", function (orig) {
+      return function (node) {
+        var kidsOf = node.nodeType === 11 ? Array.prototype.slice.call(node.childNodes) : [node];
+        var leaving = node.nodeType !== 11 && node.isConnected ? customIn(node) : [];
+        var r = orig.call(this, node);
+        if (leaving.length && !node.isConnected) disconnected(leaving);
+        if (live(this)) kidsOf.forEach(connected);
+        return r;
+      };
+    });
+    wrap(P.Node, "insertBefore", function (orig) {
+      return function (node, ref) {
+        var kidsOf = node.nodeType === 11 ? Array.prototype.slice.call(node.childNodes) : [node];
+        var leaving = node.nodeType !== 11 && node.isConnected ? customIn(node) : [];
+        var r = orig.call(this, node, ref);
+        if (leaving.length && !node.isConnected) disconnected(leaving);
+        if (live(this)) kidsOf.forEach(connected);
+        return r;
+      };
+    });
+    wrap(P.Node, "removeChild", function (orig) {
+      return function (node) {
+        var leaving = node.isConnected ? customIn(node) : [];
+        var r = orig.call(this, node);
+        disconnected(leaving);
+        return r;
+      };
+    });
+    wrap(P.Node, "replaceChild", function (orig) {
+      return function (node, old) {
+        var leaving = old.isConnected ? customIn(old) : [];
+        var kidsOf = node.nodeType === 11 ? Array.prototype.slice.call(node.childNodes) : [node];
+        var r = orig.call(this, node, old);
+        disconnected(leaving);
+        if (live(this)) kidsOf.forEach(connected);
+        return r;
+      };
+    });
+    var replaceAll = function (set) {
+      return function (v) {
+        var leaving = this.isConnected ? customIn(this).filter(function (e) { return e !== this; }, this) : [];
+        set.call(this, v);
+        disconnected(leaving);
+        if (this.isConnected) Array.prototype.slice.call(this.childNodes).forEach(connected);
+      };
+    };
+    wrap(P.Node, "textContent", replaceAll);
+    wrap(P.Element, "innerHTML", replaceAll);
+    wrap(P.Document, "createElement", function (orig) {
+      return function (name) {
+        var el = orig.apply(this, arguments);
+        if (defs.size && defOf(el)) upgrade(el);
+        return el;
+      };
+    });
+    var attrChange = function (el, name, old) {
+      if (!el[UPGRADED]) return;
+      var observed = (defOf(el) || { Class: {} }).Class.observedAttributes || [];
+      name = String(name).toLowerCase();
+      if (observed.indexOf(name) >= 0) callback(el, "attributeChangedCallback", [name, old, el.getAttribute(name)]);
+    };
+    wrap(P.Element, "setAttribute", function (orig) {
+      return function (name, value) { var old = this.getAttribute(name); orig.call(this, name, value); attrChange(this, name, old); };
+    });
+    wrap(P.Element, "removeAttribute", function (orig) {
+      return function (name) { var old = this.getAttribute(name); orig.call(this, name); if (old !== null) attrChange(this, name, old); };
+    });
+  };
+  var HTMLElementShim = function HTMLElement() {
+    var el = pending;
+    if (!el) {
+      // `new X()` by hand: make the element the class was defined for
+      var d_ = byClass.get(new.target);
+      if (!d_) throw new TypeError("Illegal constructor");
+      el = globalThis.document.createElement(d_.extend || d_.name);
+      Object.setPrototypeOf(el, new.target.prototype);
+    }
+    pending = null;
+    return el;
+  };
+  HTMLElementShim.prototype = P.HTMLElement;
+  var registry = {
+    define: function (name, Class, options) {
+      name = String(name);
+      if (typeof Class !== "function") throw new TypeError("The constructor provided is not a constructor.");
+      if (!/^[a-z][^\sA-Z]*-[^\sA-Z]*$/.test(name)) { var e1 = new Error("'" + name + "' is not a valid custom element name."); e1.name = "SyntaxError"; throw e1; }
+      if (defs.has(name) || byClass.has(Class)) { var e2 = new Error("The name '" + name + "' has already been used with this registry."); e2.name = "NotSupportedError"; throw e2; }
+      var info = { name: name, Class: Class, extend: options && options.extends };
+      defs.set(name, info);
+      byClass.set(Class, info);
+      ceInstall();
+      var doc = globalThis.document;
+      if (doc) {
+        var all = doc.querySelectorAll(info.extend ? info.extend + '[is="' + name + '"]' : name);
+        for (var i = 0; i < all.length; i++) upgrade(all[i]);
+      }
+      (waiting.get(name) || []).forEach(function (resolve) { resolve(Class); });
+      waiting.delete(name);
+    },
+    get: function (name) { var d_ = defs.get(String(name)); return d_ ? d_.Class : undefined; },
+    getName: function (Class) { var d_ = byClass.get(Class); return d_ ? d_.name : null; },
+    whenDefined: function (name) {
+      name = String(name);
+      if (defs.has(name)) return Promise.resolve(defs.get(name).Class);
+      return new Promise(function (resolve) { (waiting.get(name) || (waiting.set(name, []), waiting.get(name))).push(resolve); });
+    },
+    upgrade: function (root) { customIn(root).forEach(upgrade); },
+  };
+  D.customElements = registry;
+  D.HTMLElement = HTMLElementShim;
+
   // style: a CSSStyleDeclaration over the style attribute (camelCase and kebab-case names, cssText)
   var kebab = function (k) { return k.replace(/[A-Z]/g, function (c) { return "-" + c.toLowerCase(); }); };
   var parseStyle = function (text) {

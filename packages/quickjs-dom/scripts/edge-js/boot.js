@@ -3,11 +3,44 @@
 (function (g) {
   var done = new WeakSet(), list = [], current = null;
 
-  g.__edgeBoot = function (html, url, width, seed) {
+  g.__edgeBoot = function (html, url, width, seed, native) {
     g.__edgeStart(seed);
     var L = g.__linkedom;
-    var parsed = L.parseHTML(html);
+    var parsed = L.parseHTML(native ? "" : html);
     var d = parsed.document, w = parsed.window;
+    if (native) {
+      // the document and the node classes are the C ones; linkedom still supplies the rest of the window (Event, URL, ...)
+      var N = g.__native.dom;
+      d = N.parse(html);
+      var win = {};
+      ["addEventListener", "removeEventListener", "dispatchEvent"].forEach(function (k) {
+        Object.defineProperty(win, k, { configurable: true, writable: true, value: N.protos.Node[k] });
+      });
+      Object.defineProperty(d, "defaultView", { configurable: true, value: win });
+      // Markup is not given the html / head / body a browser adds, so these look for them and make what is missing
+      // (as linkedom does) instead of answering null.
+      var root = function () { return d.firstElementChild; };
+      var section = function (tag) {
+        var r = root(), el = r && (r.localName === tag ? r : null);
+        if (el) return el;
+        if (r) for (var c = r.firstElementChild; c; c = c.nextElementSibling) if (c.localName === tag) return c;
+        el = r && r.querySelector(tag);
+        if (el) return el;
+        el = d.createElement(tag);
+        if (!r) d.appendChild(el);
+        else if (r.localName === "html") { if (tag === "head") r.insertBefore(el, r.firstChild); else r.appendChild(el); }
+        else d.insertBefore(el, tag === "head" ? r : null);
+        return el;
+      };
+      Object.defineProperty(d, "documentElement", { configurable: true, get: root });
+      Object.defineProperty(d, "head", { configurable: true, get: function () { return section("head"); } });
+      Object.defineProperty(d, "body", { configurable: true, get: function () { return section("body"); } });
+      Object.keys(N.ctors).forEach(function (k) { Object.defineProperty(w, k, { configurable: true, writable: true, value: N.ctors[k] }); });
+      Object.defineProperty(w, "MutationObserver", { configurable: true, writable: true, value: N.MutationObserver });
+      Object.defineProperty(w, "customElements", { configurable: true, writable: true, value: N.customElements });
+      Object.defineProperty(w, "HTMLElement", { configurable: true, writable: true, value: N.HTMLElement });
+      g.__nativeDocument = true;
+    }
     // the window's own properties (constructors, event target, ...) become globals
     Object.getOwnPropertyNames(w).forEach(function (k) {
       if (!(k in g) || k === "document") {
@@ -276,7 +309,8 @@
   g.__edgeSerialize = function () {
     var d = g.document, n = d.querySelectorAll("noscript");
     for (var i = 0; i < n.length; i++) n[i].remove();
-    return d.toString().replace(/^<!DOCTYPE\s*>/i, "<!DOCTYPE html>");
+    var html = g.__nativeDocument ? g.__native.dom.serialize(d) : d.toString();
+    return html.replace(/^<!DOCTYPE\s*(?:html)?\s*>/i, "<!DOCTYPE html>");
   };
 
   // Layout: there is none in here, so the host lays the page out elsewhere and hands the boxes back.
@@ -296,8 +330,8 @@
     }
     var n = clone.querySelectorAll("noscript");
     for (var j = 0; j < n.length; j++) n[j].remove();
-    var html = clone.toString();
-    return /^<!DOCTYPE/i.test(html) ? html.replace(/^<!DOCTYPE\s*>/i, "<!DOCTYPE html>") : "<!DOCTYPE html>" + html;
+    var html = g.__nativeDocument ? g.__native.dom.serialize(clone) : clone.toString();
+    return /^<!DOCTYPE/i.test(html) ? html.replace(/^<!DOCTYPE\s*(?:html)?\s*>/i, "<!DOCTYPE html>") : "<!DOCTYPE html>" + html;
   };
   // boxes: { "<number>": [x, y, width, height] } in page coordinates; an element without a box is 0 x 0
   g.__edgeSetLayout = function (json) {
