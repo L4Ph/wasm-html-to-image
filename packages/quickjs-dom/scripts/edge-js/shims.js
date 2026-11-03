@@ -91,6 +91,7 @@
   g.clearImmediate = g.clearTimeout;
   g.requestAnimationFrame = function (fn) { return g.setTimeout(function () { fn(g.performance.now()); }, 16); };
   g.cancelAnimationFrame = g.clearTimeout;
+  g.cancelIdleCallback = g.clearTimeout;
   g.requestIdleCallback = function (fn) { return g.setTimeout(function () { fn({ didTimeout: false, timeRemaining: function () { return 10; } }); }, 1); };
   g.__fire = function (id) {
     var t = timers.get(id);

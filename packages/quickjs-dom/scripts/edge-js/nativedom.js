@@ -458,6 +458,30 @@
     getter(P.Element, k, function () { return 0; });
   });
 
+  // scrolling, animation and the like: there is no viewport, so these do nothing (and do not throw)
+  ["scrollTop", "scrollLeft"].forEach(function (k) {
+    getter(P.Element, k, function () { return 0; }, function () {});
+  });
+  ["scroll", "scrollTo", "scrollBy", "scrollIntoView", "scrollIntoViewIfNeeded", "setPointerCapture", "releasePointerCapture", "requestFullscreen", "requestPointerLock"].forEach(function (k) {
+    def(P.Element, k, function () {});
+  });
+  def(P.Element, "hasPointerCapture", function () { return false; });
+  def(P.Element, "checkVisibility", function () { return true; });
+  def(P.Element, "getAnimations", function () { return []; });
+  def(P.Element, "animate", function () {
+    var done = Promise.resolve();
+    return { finished: done, ready: done, playState: "finished", currentTime: 0, effect: null, timeline: null,
+      play: function () {}, pause: function () {}, cancel: function () {}, finish: function () {}, reverse: function () {}, commitStyles: function () {},
+      addEventListener: function () {}, removeEventListener: function () {}, onfinish: null, oncancel: null };
+  });
+  def(P.HTMLElement, "showModal", function () { this.setAttribute("open", ""); });
+  def(P.HTMLElement, "show", function () { this.setAttribute("open", ""); });
+  def(P.HTMLElement, "close", function () { this.removeAttribute("open"); });
+  def(P.HTMLElement, "showPopover", function () {});
+  def(P.HTMLElement, "hidePopover", function () {});
+  def(P.HTMLElement, "togglePopover", function () { return false; });
+  def(P.HTMLElement, "attachInternals", function () { return { setFormValue: function () {}, setValidity: function () {}, states: new Set(), shadowRoot: null }; });
+
   // Custom elements. An upgraded element gets its class's prototype and runs its constructor (the page's
   // `class X extends HTMLElement` reaches the element through the HTMLElement below, which hands out the node being
   // upgraded); connected / disconnected / attributeChanged callbacks follow insertion, removal and attribute writes.
@@ -959,14 +983,164 @@
     W[name] = C;
   });
 
+  // NodeIterator and TreeWalker (document order, live: they read the tree as it is when asked)
+  var verdict = function (node, what, filter) {
+    if (!(what & (1 << (node.nodeType - 1)))) return 3;
+    if (!filter) return 1;
+    return typeof filter === "function" ? filter(node) : filter.acceptNode(node);
+  };
+  var following = function (node, root, skipChildren) {
+    if (!skipChildren && node.firstChild) return node.firstChild;
+    for (; node && node !== root; node = node.parentNode) if (node.nextSibling) return node.nextSibling;
+    return null;
+  };
+  var preceding = function (node, root) {
+    if (node === root) return null;
+    var sib = node.previousSibling;
+    if (!sib) return node.parentNode;
+    while (sib.lastChild) sib = sib.lastChild;
+    return sib;
+  };
+  def(P.Document, "createNodeIterator", function (root, what, filter) {
+    what = what === undefined ? 0xFFFFFFFF : what >>> 0;
+    var cur = null;
+    return {
+      root: root, whatToShow: what, filter: filter || null,
+      get referenceNode() { return cur || root; },
+      pointerBeforeReference: false,
+      nextNode: function () {
+        for (var n = cur === null ? root : following(cur, root); n; n = following(n, root)) if (verdict(n, what, filter) === 1) { cur = n; return n; }
+        return null;
+      },
+      previousNode: function () {
+        for (var n = cur === null ? null : preceding(cur, root); n; n = preceding(n, root)) if (verdict(n, what, filter) === 1) { cur = n; return n; }
+        return null;
+      },
+      detach: function () {},
+    };
+  });
+  def(P.Document, "createTreeWalker", function (root, what, filter) {
+    what = what === undefined ? 0xFFFFFFFF : what >>> 0;
+    var w = { root: root, whatToShow: what, filter: filter || null, currentNode: root };
+    var ok = function (n) { return verdict(n, what, filter); };
+    var walkNext = function () {
+      var n = w.currentNode, skip = false;
+      for (;;) {
+        n = following(n, root, skip);
+        if (!n) return null;
+        var v = ok(n);
+        if (v === 1) { w.currentNode = n; return n; }
+        skip = v === 2;
+      }
+    };
+    var walkPrev = function () {
+      for (var n = preceding(w.currentNode, root); n; n = preceding(n, root)) if (ok(n) === 1) { w.currentNode = n; return n; }
+      return null;
+    };
+    var child = function (first) {
+      for (var n = first ? w.currentNode.firstChild : w.currentNode.lastChild; n; n = first ? n.nextSibling : n.previousSibling) {
+        if (ok(n) === 1) { w.currentNode = n; return n; }
+      }
+      return null;
+    };
+    var sibling = function (next) {
+      for (var n = next ? w.currentNode.nextSibling : w.currentNode.previousSibling; n; n = next ? n.nextSibling : n.previousSibling) {
+        if (ok(n) === 1) { w.currentNode = n; return n; }
+      }
+      return null;
+    };
+    w.nextNode = walkNext;
+    w.previousNode = walkPrev;
+    w.firstChild = function () { return child(true); };
+    w.lastChild = function () { return child(false); };
+    w.nextSibling = function () { return sibling(true); };
+    w.previousSibling = function () { return sibling(false); };
+    w.parentNode = function () {
+      for (var n = w.currentNode.parentNode; n && n !== root.parentNode; n = n.parentNode) if (ok(n) === 1) { w.currentNode = n; return n; }
+      return null;
+    };
+    return w;
+  });
+
   var DOMParser = function DOMParser() {};
   def(DOMParser.prototype, "parseFromString", function (markup) { return D.parse(String(markup)); });
   W.DOMParser = DOMParser;
   W.XMLSerializer = function XMLSerializer() {};
   def(W.XMLSerializer.prototype, "serializeToString", function (node) { return D.serialize(node); });
 
+  // Attr nodes: views of one attribute of an element (detached ones keep their own value)
   var Attr = function Attr() { illegal(); };
+  var ATTR = Symbol("attr");
+  var makeAttr = function (name, owner, value) {
+    var at = Object.create(Attr.prototype);
+    Object.defineProperty(at, ATTR, { value: { owner: owner, value: value === undefined ? "" : String(value) }, writable: true });
+    Object.defineProperties(at, { name: { value: name, enumerable: true }, localName: { value: name, enumerable: true } });
+    return at;
+  };
+  def(Attr.prototype, "nodeType", 2);
+  getter(Attr.prototype, "nodeName", function () { return this.name; });
+  getter(Attr.prototype, "specified", function () { return true; });
+  getter(Attr.prototype, "namespaceURI", function () { return null; });
+  getter(Attr.prototype, "prefix", function () { return null; });
+  getter(Attr.prototype, "ownerElement", function () { return this[ATTR].owner; });
+  getter(Attr.prototype, "value", function () {
+    var st = this[ATTR];
+    if (!st.owner) return st.value;
+    var v = st.owner.getAttribute(this.name);
+    return v === null ? st.value : v;
+  }, function (v) {
+    var st = this[ATTR];
+    st.value = String(v);
+    if (st.owner) st.owner.setAttribute(this.name, st.value);
+  });
+  getter(Attr.prototype, "nodeValue", function () { return this.value; }, function (v) { this.value = v; });
+  getter(Attr.prototype, "textContent", function () { return this.value; }, function (v) { this.value = v; });
   W.Attr = Attr;
+  def(P.Element, "getAttributeNode", function (name) {
+    var v = this.getAttribute(name);
+    return v === null ? null : makeAttr(String(name).toLowerCase(), this, v);
+  });
+  def(P.Element, "setAttributeNode", function (attr) {
+    var old = this.getAttributeNode(attr.name);
+    this.setAttribute(attr.name, attr.value);
+    attr[ATTR].owner = this;
+    return old;
+  });
+  def(P.Element, "removeAttributeNode", function (attr) {
+    if (this.getAttribute(attr.name) === null) { var e = new Error("The node to be removed is not an attribute of this element."); e.name = "NotFoundError"; throw e; }
+    attr[ATTR].value = this.getAttribute(attr.name);
+    this.removeAttribute(attr.name);
+    attr[ATTR].owner = null;
+    return attr;
+  });
+  def(P.Document, "createAttribute", function (name) { return makeAttr(String(name).toLowerCase(), null, ""); });
+  // attributes: a live NamedNodeMap (index, name, length, item, getNamedItem, ...) over the element's attributes
+  var ATTRS = Symbol("attributes");
+  getter(P.Element, "attributes", function () {
+    var el = this;
+    if (el[ATTRS]) return el[ATTRS];
+    return Object.defineProperty(el, ATTRS, { value: liveCollection(function () {
+      var list = el.getAttributeNames().map(function (name) { return makeAttr(name, el, el.getAttribute(name)); });
+      list.forEach(function (at) { if (!(at.name in list)) list[at.name] = at; });
+      Object.defineProperty(list, "getNamedItem", { value: function (n) { return el.getAttributeNode(n); } });
+      Object.defineProperty(list, "removeNamedItem", { value: function (n) { var at = el.getAttributeNode(n); if (at) el.removeAttribute(n); return at; } });
+      Object.defineProperty(list, "setNamedItem", { value: function (at) { return el.setAttributeNode(at); } });
+      return list;
+    }) })[ATTRS];
+  });
+  // document.title is the text of the first <title>
+  getter(P.Document, "title", function () {
+    var t = this.querySelector("title");
+    return t ? t.textContent.replace(/[ \t\n\f\r]+/g, " ").trim() : "";
+  }, function (v) {
+    var t = this.querySelector("title");
+    if (!t) {
+      t = this.createElement("title");
+      var head = this.head;
+      if (head) head.appendChild(t);
+    }
+    t.textContent = String(v);
+  });
   var NodeList = function NodeList() { illegal(); };
   W.NodeList = NodeList;
   W.HTMLCollection = function HTMLCollection() { illegal(); };

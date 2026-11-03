@@ -7,12 +7,26 @@
     g.__edgeStart(seed);
     var N = g.__native.dom;
     var d = N.parse(html), w = N.window;
-    // the window of the document: the event target of the page's own listeners
-    var win = {};
+    // the window of the document is the global object itself: its event listeners are the nodes' own mechanism
     ["addEventListener", "removeEventListener", "dispatchEvent"].forEach(function (k) {
-      Object.defineProperty(win, k, { configurable: true, writable: true, value: N.protos.Node[k] });
+      Object.defineProperty(g, k, { configurable: true, writable: true, value: N.protos.Node[k] });
     });
-    Object.defineProperty(d, "defaultView", { configurable: true, value: win });
+    Object.defineProperty(d, "defaultView", { configurable: true, value: g });
+    // cookies: a jar for the page's own use (nothing is sent anywhere)
+    var jar = new Map();
+    Object.defineProperty(d, "cookie", {
+      configurable: true,
+      get: function () { return Array.from(jar.entries()).map(function (e) { return e[0] + "=" + e[1]; }).join("; "); },
+      set: function (v) {
+        var parts = String(v).split(";"), kv = parts[0], i = kv.indexOf("=");
+        var name = (i < 0 ? "" : kv.slice(0, i)).trim(), value = i < 0 ? kv.trim() : kv.slice(i + 1).trim();
+        var expired = parts.slice(1).some(function (p) {
+          var m = /^\s*(max-age|expires)\s*=\s*(.*)$/i.exec(p);
+          return m && (m[1].toLowerCase() === "max-age" ? parseInt(m[2], 10) <= 0 : Date.parse(m[2]) < Date.now());
+        });
+        if (expired) jar.delete(name); else jar.set(name, value);
+      },
+    });
     // Markup is not given the html / head / body a browser adds, so these look for them and make what is missing
     // instead of answering null.
     var root = function () { return d.firstElementChild; };
@@ -62,9 +76,6 @@
     g.devicePixelRatio = 1;
     g.scrollTo = g.scroll = g.scrollBy = function () {};
 
-    g.addEventListener = function (t, f, o) { return d.defaultView.addEventListener(t, f, o); };
-    g.removeEventListener = function (t, f, o) { return d.defaultView.removeEventListener(t, f, o); };
-    g.dispatchEvent = function (e) { return d.defaultView.dispatchEvent(e); };
     // Media queries against this window: width / height features (px, em, rem), orientation, screen, and a light,
     // no-motion, hovering, fine-pointer user. Anything it does not know does not match.
     function mediaMatches(query) {
@@ -253,6 +264,58 @@
     });
 
     Object.defineProperty(d, "currentScript", { configurable: true, get: function () { return current; } });
+
+    // the small document members that scripts read without a second thought
+    var docProps = {
+      referrer: "", hidden: false, visibilityState: "visible", characterSet: "UTF-8", charset: "UTF-8", inputEncoding: "UTF-8",
+      compatMode: "CSS1Compat", contentType: "text/html", designMode: "off", dir: "", lastModified: "01/01/2024 00:00:00",
+    };
+    Object.keys(docProps).forEach(function (k) {
+      if (!(k in d)) Object.defineProperty(d, k, { configurable: true, writable: true, value: docProps[k] });
+    });
+    [["URL", function () { return g.location.href; }], ["documentURI", function () { return g.location.href; }], ["baseURI", function () { return g.location.href; }],
+     ["domain", function () { return g.location.hostname; }], ["activeElement", function () { return d.body; }],
+     ["scrollingElement", function () { return d.documentElement; }], ["forms", function () { return d.getElementsByTagName("form"); }],
+     ["images", function () { return d.getElementsByTagName("img"); }], ["links", function () { return d.querySelectorAll("a[href], area[href]"); }],
+     ["scripts", function () { return d.getElementsByTagName("script"); }], ["all", function () { return d.getElementsByTagName("*"); }]].forEach(function (p) {
+      if (!(p[0] in d)) Object.defineProperty(d, p[0], { configurable: true, get: p[1] });
+    });
+    var more = {
+      hasFocus: function () { return true; },
+      createEvent: function (type) { var C = /mouse/i.test(type) ? g.MouseEvent : /key/i.test(type) ? g.KeyboardEvent : /custom/i.test(type) ? g.CustomEvent : g.Event; var e = new C("x"); e.initEvent = function (t, b, c) { e.type = String(t); e.bubbles = !!b; e.cancelable = !!c; }; e.initCustomEvent = function (t, b, c, det) { e.initEvent(t, b, c); e.detail = det; }; return e; },
+      elementFromPoint: function () { return null; },
+      elementsFromPoint: function () { return []; },
+      getSelection: function () { return g.getSelection(); },
+      createRange: function () {
+        var range = { startContainer: d, endContainer: d, startOffset: 0, endOffset: 0, collapsed: true, commonAncestorContainer: d };
+        ["setStart", "setEnd", "setStartBefore", "setStartAfter", "setEndBefore", "setEndAfter", "selectNode", "selectNodeContents", "collapse", "detach", "deleteContents"].forEach(function (m) { range[m] = function () {}; });
+        range.getBoundingClientRect = function () { return { x: 0, y: 0, width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0 }; };
+        range.getClientRects = function () { return []; };
+        range.createContextualFragment = function (html) { return g.__native.dom.parseFragment(String(html), d); };
+        range.cloneContents = function () { return d.createDocumentFragment(); };
+        range.toString = function () { return ""; };
+        return range;
+      },
+    };
+    Object.keys(more).forEach(function (k) { if (!(k in d)) Object.defineProperty(d, k, { configurable: true, writable: true, value: more[k] }); });
+    g.getSelection = g.getSelection || function () {
+      return { rangeCount: 0, isCollapsed: true, anchorNode: null, focusNode: null, type: "None", toString: function () { return ""; },
+        removeAllRanges: function () {}, addRange: function () {}, getRangeAt: function () { return d.createRange(); }, collapse: function () {}, empty: function () {} };
+    };
+    // canvas has no drawing here: a context is not available, which is what code feature-checks for
+    var canvasProto = g.__native.dom.protos.HTMLCanvasElement;
+    if (canvasProto) {
+      Object.defineProperty(canvasProto, "getContext", { configurable: true, writable: true, value: function () { return null; } });
+      Object.defineProperty(canvasProto, "toDataURL", { configurable: true, writable: true, value: function () { return "data:,"; } });
+      Object.defineProperty(canvasProto, "toBlob", { configurable: true, writable: true, value: function (cb) { if (typeof cb === "function") g.setTimeout(function () { cb(null); }, 0); } });
+      ["width", "height"].forEach(function (k, i) {
+        Object.defineProperty(canvasProto, k, {
+          configurable: true,
+          get: function () { var v = parseInt(this.getAttribute(k), 10); return v >= 0 ? v : (i ? 150 : 300); },
+          set: function (v) { this.setAttribute(k, String(v)); },
+        });
+      });
+    }
   };
 
   // the scripts not run yet, in document order; dynamically added ones show up on the next call

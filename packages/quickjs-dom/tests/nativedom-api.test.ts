@@ -497,3 +497,22 @@ describe("native DOM: element interfaces", () => {
     ).toEqual([true, true, true, false, true, true, true, true, true, true, true, false, false, "function", "HTMLInputElement"]);
   });
 });
+
+describe("native DOM: members real pages call", () => {
+  it("iterators, walkers, attributes as a live map, title, scrolling no-ops", async () => {
+    expect(
+      await run(`
+        var doc = N.parse('<html><head><title> My  page </title></head><body><div id=a x=1 y=2><!--c1--><p>t</p><!--c2--></div></body></html>');
+        var a = doc.getElementById("a"), comments = [];
+        var it = doc.createNodeIterator(a, 128), n;
+        while ((n = it.nextNode())) comments.push(n.data);
+        var tw = doc.createTreeWalker(a, 1), tags = [];
+        while ((n = tw.nextNode())) tags.push(n.localName);
+        var attrs = a.attributes, before = attrs.length;
+        while (attrs.length) a.removeAttributeNode(attrs[0]);
+        doc.title = "New"; a.scrollTo({ left: 1 }); a.scrollTop = 5;
+        var at = doc.createAttribute("z"); at.value = "9"; a.setAttributeNode(at);
+        return [comments.join(), tags.join(), before, attrs.length, a.getAttribute("id"), doc.title, a.getAttribute("z"), a.scrollTop, a.getAttributeNode("z").value];`),
+    ).toEqual(["c1,c2", "p", 3, 1, null, "New", "9", 0, "9"]);
+  });
+});
