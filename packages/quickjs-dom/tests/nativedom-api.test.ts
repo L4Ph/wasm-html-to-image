@@ -467,3 +467,16 @@ describe("native DOM: live collections", () => {
     ).toEqual([[0, 0, 0, 0], [1, 2, 1, 1, true, true, null, false, 1, true], 0, 0, 0, 1, "0"]);
   });
 });
+
+describe("native DOM: namespaces", () => {
+  it("svg content reports the SVG namespace; createElementNS and the NS attribute methods work", async () => {
+    expect(
+      await run(`
+        var doc = N.parse('<div id=a><svg id=s><path id=p d="M0 0"/><foreignObject id=fo><span id=sp></span></foreignObject></svg></div>');
+        var $ = function (id) { return doc.getElementById(id); };
+        var el = doc.createElementNS("http://www.w3.org/2000/svg", "circle");
+        el.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", "#x");
+        return [$("a").namespaceURI, $("s").namespaceURI, $("p").namespaceURI, $("sp").namespaceURI, el.namespaceURI, el.getAttribute("xlink:href"), el.getAttributeNS("http://www.w3.org/1999/xlink", "href"), el.hasAttributeNS(null, "xlink:href")];`),
+    ).toEqual(["http://www.w3.org/1999/xhtml", "http://www.w3.org/2000/svg", "http://www.w3.org/2000/svg", "http://www.w3.org/1999/xhtml", "http://www.w3.org/2000/svg", "#x", "#x", true]);
+  });
+});

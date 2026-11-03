@@ -2,7 +2,7 @@
 
 Run a web page's JavaScript **without a browser and without `eval`** — and read the resulting DOM.
 
-It is a small JSDOM for places where JSDOM cannot go: Cloudflare Workers, Vercel / Next.js Edge, Deno, Bun, browsers, and plain Node.js. The page's scripts run in [QuickJS-ng](https://github.com/quickjs-ng/quickjs) compiled to WebAssembly, on a [linkedom](https://github.com/WebReflection/linkedom) DOM, so nothing needs `eval`, native modules or a headless browser.
+It is a small JSDOM for places where JSDOM cannot go: Cloudflare Workers, Vercel / Next.js Edge, Deno, Bun, browsers, and plain Node.js. The page's scripts run in [QuickJS-ng](https://github.com/quickjs-ng/quickjs) compiled to WebAssembly, on a DOM written in C inside the same WebAssembly module (the previous [linkedom](https://github.com/WebReflection/linkedom) one is still available), so nothing needs `eval`, native modules or a headless browser.
 
 ```ts
 import { createDOM } from "wasm-quickjs-dom";
@@ -131,6 +131,7 @@ const dom = await createDOM({ url }, {
 | `settleMs` | `1000` | After load, run timers and requests for at most this long. It is an upper bound: the page finishes as soon as nothing is pending. |
 | `waitFor` | | A CSS selector to wait for after load instead of `settleMs`. |
 | `width` | `800` | `window.innerWidth`; also what `matchMedia` answers for. |
+| `dom` | `"native"` | The DOM implementation: `"native"` is the C one in the QuickJS wasm (about 15 times faster to build and 25 times to serialize a 5000-element page); `"linkedom"` is the JavaScript one it replaced. |
 | `limits` | none | What the page may fetch (see above). |
 | `skip` | | `(url) => boolean`: return `true` for a URL the page should not get. The request fails without going to the network (a `<script>` gets its `error` event, a `fetch` rejects). Analytics and ads are most of a real site's script time, and a render rarely needs them. The page itself is never skipped. |
 | `onLog` | | Called with each log entry as it happens (see `logs`). |
@@ -207,9 +208,9 @@ Exit code `0` is done, `1` the page could not be loaded (or `-e` threw), `2` wro
 
 ## How it works
 
-Each page gets its own WebAssembly instance of QuickJS-ng. The browser APIs a bare QuickJS lacks, and linkedom, are compiled to QuickJS bytecode when the package is built; the first page of a process starts that program, and every later page is a copy of that started instance, which is why a page starts in about 3 ms. Nothing is shared between pages. Each gets its own clock origin and `Math.random` seed.
+Each page gets its own WebAssembly instance of QuickJS-ng. The browser APIs a bare QuickJS lacks, and linkedom (for `dom: "linkedom"`, and for `Event`, `URL` and the other window classes), are compiled to QuickJS bytecode when the package is built; the first page of a process starts that program, and every later page is a copy of that started instance, which is why a page starts in about 3 ms. Nothing is shared between pages. Each gets its own clock origin and `Math.random` seed.
 
-HTML (the page itself, and every `innerHTML` the page sets) is tokenized by a C port of htmlparser2 inside the WebAssembly module, which hands linkedom the same calls htmlparser2 would; that is about 2.5 times faster than parsing in the interpreter. Input the port does not reproduce exactly (for example non-ASCII tag names) falls back to htmlparser2 by itself.
+The native DOM (`csrc/nativedom*.h`) keeps nodes as C structures: tree operations, a CSS selector engine (combinators, `:not` / `:is` / `:has`, `:nth-*`, attribute operators), serialization and a C port of htmlparser2 for parsing, with events, `MutationObserver`, custom elements, shadow roots, `style`, form controls and live collections layered on top in JavaScript. It is tested against linkedom operation by operation. SVG is recognised by its root (`namespaceURI`, `createElementNS`), not modelled as a separate set of classes. With `dom: "linkedom"`, HTML is parsed by the same C port, which hands linkedom the calls htmlparser2 would; that is about 2.5 times faster than parsing in the interpreter. Input the port does not reproduce exactly (for example non-ASCII tag names) falls back to htmlparser2 by itself.
 
 ## For contributors
 

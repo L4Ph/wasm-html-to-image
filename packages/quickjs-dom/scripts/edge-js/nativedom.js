@@ -769,7 +769,33 @@
       },
     });
   };
-  var LIVE = Symbol("live");
+  // Namespaces, as far as pages need them: an element is SVG or MathML by the root it sits in (or was made with
+  // createElementNS), and the *NS attribute methods work on qualified names.
+  var NS = { html: "http://www.w3.org/1999/xhtml", svg: "http://www.w3.org/2000/svg", math: "http://www.w3.org/1998/Math/MathML" };
+  var NSKEY = Symbol("ns");
+  getter(P.Element, "namespaceURI", function () {
+    if (this[NSKEY]) return this[NSKEY];
+    for (var n = this; n && n.nodeType === 1; n = n.parentNode) {
+      var t = n.localName;
+      if (t === "svg") return NS.svg;
+      if (t === "math") return NS.math;
+      if (n.localName === "foreignobject") return NS.html;
+    }
+    return NS.html;
+  });
+  getter(P.Element, "prefix", function () { return null; });
+  def(P.Document, "createElementNS", function (ns, name) {
+    var el = this.createElement(String(name));
+    if (ns && ns !== NS.html) Object.defineProperty(el, NSKEY, { value: String(ns) });
+    return el;
+  });
+  def(P.Element, "setAttributeNS", function (ns, name, value) { this.setAttribute(name, value); });
+  def(P.Element, "getAttributeNS", function (ns, name) {
+    var v = this.getAttribute(name);
+    return v === null && ns === "http://www.w3.org/1999/xlink" ? this.getAttribute("xlink:" + name) : v;
+  });
+  def(P.Element, "hasAttributeNS", function (ns, name) { return this.hasAttribute(name); });
+  def(P.Element, "removeAttributeNS", function (ns, name) { this.removeAttribute(name); });
   var liveGetter = function (proto, name) {
     var d = Object.getOwnPropertyDescriptor(proto, name);
     if (!d || !d.get) return;
