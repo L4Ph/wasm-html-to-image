@@ -143,7 +143,11 @@
   var specificity = function (sel) {
     var a = 0, b = 0, c = 0, i = 0, n = sel.length;
     var ident = function () { var j = i; while (j < n && /[\w\- -￿]|\\./.test(sel.charAt(j))) j += sel.charAt(j) === "\\" ? 2 : 1; var t = sel.slice(i, j); i = j; return t; };
+    var last = -1;
     while (i < n) {
+      if (i === last) i++; // a token that consumed nothing (a lone backslash) must not hold the loop
+      last = i;
+      if (i >= n) break;
       var ch = sel.charAt(i);
       if (ch === "#") { i++; ident(); a++; }
       else if (ch === ".") { i++; ident(); b++; }
@@ -210,10 +214,16 @@
     run(stripComments(text), []);
     return rules;
   };
-  var parsed = new Map();
+  // parsed once per text; a page with thousands of <style> elements (CSS-in-JS) must not lose them to a small cap
+  var parsed = new Map(), parsedChars = 0;
   var rulesOf = function (text) {
     var r = parsed.get(text);
-    if (!r) { r = parseSheet(text); if (parsed.size > 200) parsed.clear(); parsed.set(text, r); }
+    if (!r) {
+      r = parseSheet(text);
+      if (parsedChars > 4000000) { parsed.clear(); parsedChars = 0; }
+      parsed.set(text, r);
+      parsedChars += text.length;
+    }
     return r;
   };
   var mediaOk = function (media) {
@@ -673,8 +683,17 @@
     for (var i = 0; i < styles.length; i++) {
       (function (owner) {
         var sheet = owner.__sheet || (owner.__sheet = null);
+        // the rules of the sheet as text, and as objects, are kept for as long as the text is what was last seen: a page
+        // that inserts thousands of rules (CSS-in-JS) must not parse the whole sheet each time
+        var listOf = function () {
+          var t = owner.textContent;
+          if (owner.__rt !== t) { owner.__rl = splitRules(stripComments(t)); owner.__rt = t; owner.__fr = null; }
+          return owner.__rl;
+        };
+        var store = function (list, fr) { var t = list.join("\n"); owner.textContent = t; owner.__rt = t; owner.__rl = list; owner.__fr = fr || null; };
         var cssRules = function () {
-          return parseSheetFlat(owner.textContent);
+          listOf();
+          return owner.__fr || (owner.__fr = parseSheetFlat(owner.__rt));
         };
         var obj = {
           type: "text/css", href: null, ownerNode: owner, parentStyleSheet: null, title: owner.getAttribute("title"), media: owner.getAttribute("media") || "",
@@ -683,18 +702,22 @@
           get cssRules() { return cssRules(); },
           get rules() { return cssRules(); },
           insertRule: function (rule, index) {
-            var list = splitRules(stripComments(owner.textContent));
+            var list = listOf().slice();
             index = index === undefined ? 0 : index;
             if (index < 0 || index > list.length) throw domErr("IndexSizeError", "Failed to execute 'insertRule' on 'CSSStyleSheet': the index " + index + " is greater than the length of the rule list.");
+            var fr = (cssRules(), owner.__fr);
             list.splice(index, 0, String(rule));
-            owner.textContent = list.join("\n");
+            fr.splice(index, 0, parseSheetFlat(String(rule))[0]); // the rule list is live
+            store(list, fr);
             return index;
           },
           deleteRule: function (index) {
-            var list = splitRules(stripComments(owner.textContent));
+            var list = listOf().slice();
             if (index < 0 || index >= list.length) throw domErr("IndexSizeError", "Failed to execute 'deleteRule' on 'CSSStyleSheet': the index " + index + " is greater than the length of the rule list.");
+            var fr = (cssRules(), owner.__fr);
             list.splice(index, 1);
-            owner.textContent = list.join("\n");
+            fr.splice(index, 1);
+            store(list, fr);
           },
         };
         void sheet;

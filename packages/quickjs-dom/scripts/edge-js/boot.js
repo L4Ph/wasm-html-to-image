@@ -199,6 +199,19 @@
         return { target: el, isIntersecting: true, intersectionRatio: 1, boundingClientRect: r, intersectionRect: r, rootBounds: null, time: g.performance.now() };
       });
     }
+    // the entry classes, which code feature-checks (`'intersectionRatio' in IntersectionObserverEntry.prototype`)
+    if (!g.IntersectionObserverEntry) {
+      g.IntersectionObserverEntry = function IntersectionObserverEntry() { throw new TypeError("Illegal constructor"); };
+      ["time", "rootBounds", "boundingClientRect", "intersectionRect", "isIntersecting", "intersectionRatio", "target"].forEach(function (k) {
+        Object.defineProperty(g.IntersectionObserverEntry.prototype, k, { configurable: true, enumerable: true, get: function () { return undefined; } });
+      });
+    }
+    if (!g.ResizeObserverEntry) {
+      g.ResizeObserverEntry = function ResizeObserverEntry() { throw new TypeError("Illegal constructor"); };
+      ["target", "contentRect", "borderBoxSize", "contentBoxSize", "devicePixelContentBoxSize"].forEach(function (k) {
+        Object.defineProperty(g.ResizeObserverEntry.prototype, k, { configurable: true, enumerable: true, get: function () { return undefined; } });
+      });
+    }
     if (!g.ResizeObserver) {
       g.ResizeObserver = observer("ResizeObserver", function (el) {
         var r = el.getBoundingClientRect();

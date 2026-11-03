@@ -163,6 +163,14 @@
       resolvedOptions() { return { locale: this._l, calendar: "gregory", numberingSystem: "latn", timeZone: this._o.timeZone || "UTC" }; }
       static supportedLocalesOf(l) { return [].concat(l || []); }
     });
+    // Collator and DateTimeFormat may be called without new, as NumberFormat can
+    ["Collator", "DateTimeFormat"].forEach(function (n) {
+      var C = I[n], F = function (l, o) { return new C(l, o); };
+      F.prototype = C.prototype;
+      F.supportedLocalesOf = C.supportedLocalesOf;
+      Object.defineProperty(F, "name", { value: n });
+      Object.defineProperty(I, n, { value: F, writable: true, configurable: true });
+    });
     define("getCanonicalLocales", function (l) { return [].concat(l || []); });
     if (!I.supportedValuesOf) define("supportedValuesOf", function () { return []; });
   })(g.Intl);
@@ -351,6 +359,27 @@
     async text() { return new g.TextDecoder().decode(this._u); }
     async arrayBuffer() { return this._u.slice().buffer; }
     slice(a, b, t) { var s = new g.Blob([this._u.slice(a, b)], { type: t || this.type }); return s; }
+  };
+  g.File = g.File || class File extends g.Blob {
+    constructor(parts, name, opts) { super(parts, opts); this.name = String(name); this.lastModified = (opts && opts.lastModified) || Date.now(); }
+  };
+  g.FileReader = g.FileReader || class FileReader {
+    constructor() { this.readyState = 0; this.result = null; this.error = null; this.onload = this.onerror = this.onloadend = this.onabort = null; this._l = {}; }
+    addEventListener(t, f) { (this._l[t] = this._l[t] || []).push(f); }
+    removeEventListener(t, f) { this._l[t] = (this._l[t] || []).filter(function (x) { return x !== f; }); }
+    _read(blob, how) {
+      var self = this;
+      self.readyState = 1;
+      Promise.resolve().then(function () { return how(blob); }).then(function (r) { self.result = r; self.readyState = 2; self._fire("load"); self._fire("loadend"); },
+        function (e) { self.error = e; self.readyState = 2; self._fire("error"); self._fire("loadend"); });
+    }
+    _fire(t) { var ev = { type: t, target: this }; if (typeof this["on" + t] === "function") this["on" + t](ev); (this._l[t] || []).slice().forEach(function (f) { f.call(this, ev); }, this); }
+    readAsText(b) { this._read(b, function (x) { return x.text(); }); }
+    readAsArrayBuffer(b) { this._read(b, function (x) { return x.arrayBuffer(); }); }
+    readAsDataURL(b) {
+      this._read(b, function (x) { return x.arrayBuffer().then(function (buf) { var u = new Uint8Array(buf), bin = ""; for (var i = 0; i < u.length; i++) bin += String.fromCharCode(u[i]); return "data:" + (x.type || "application/octet-stream") + ";base64," + g.btoa(bin); }); });
+    }
+    abort() { this.readyState = 2; }
   };
   g.FormData = g.FormData || class {
     constructor() { this.l = []; }

@@ -907,3 +907,24 @@ describe("beforeScripts", () => {
     }
   });
 });
+
+describe("many listeners", () => {
+  it("adding and removing thousands of listeners is not quadratic, and duplicates are still ignored", async () => {
+    const page = await createDOM({ html: "<p>x</p>" }, { settleMs: 0, timeout: 10000 });
+    try {
+      expect(
+        await page.eval(`(function () {
+          var t = Date.now(), n = 0, fns = [];
+          for (var i = 0; i < 20000; i++) { var f = function () { n++; }; fns.push(f); window.addEventListener("ping", f, true); }
+          window.addEventListener("ping", fns[0], true); // a duplicate
+          window.addEventListener("ping", fns[0], false); // same function, other phase: a second listener
+          for (var j = 0; j < 10000; j++) window.removeEventListener("ping", fns[j], true);
+          window.dispatchEvent(new Event("ping"));
+          return JSON.stringify([n, Date.now() - t < 5000]);
+        })()`),
+      ).toBe(JSON.stringify([10001, true]));
+    } finally {
+      page.close();
+    }
+  });
+});

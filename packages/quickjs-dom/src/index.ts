@@ -507,7 +507,11 @@ export function openPage(
     if (closed) return undefined;
     bridge?.invalidate();
     const result = vm.eval(expression, "call.js");
-    if (result.type === "error") return undefined;
+    if (result.type === "error") {
+      // a task cut off by the time limit is worth showing: its stack says where the page (or this engine) spent the time
+      if (/interrupted/.test(result.value)) log({ type: "error", message: result.value, source: "task" });
+      return undefined;
+    }
     pump();
     return result.type === "undefined" ? undefined : result.type === "json" ? JSON.parse(result.value) : result.value;
   };

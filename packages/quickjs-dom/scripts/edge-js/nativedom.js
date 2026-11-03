@@ -234,19 +234,34 @@
     var all = LISTENERS.get(this);
     if (!all) LISTENERS.set(this, (all = {}));
     var list = all[type] || (all[type] = []), capture = !!opts.capture;
-    for (var i = 0; i < list.length; i++) if (list[i].fn === fn && list[i].capture === capture) return;
+    // an index by function keeps the duplicate check (and removal) from walking a list of thousands
+    var idx = list.idx || Object.defineProperty(list, "idx", { value: new Map() }).idx, same = idx.get(fn);
+    if (same) for (var i = 0; i < same.length; i++) if (same[i].capture === capture) return;
     var entry = { fn: fn, capture: capture, once: !!opts.once, passive: !!opts.passive, removed: false };
     list.push(entry);
+    if (same) same.push(entry); else idx.set(fn, [entry]);
     var node = this;
     if (opts.signal) opts.signal.addEventListener("abort", function () { removeListener.call(node, type, fn, { capture: capture }); });
   };
   var removeListener = function (type, fn, opts) {
     var all = LISTENERS.get(this), list = all && all[type], capture = !!listenerOptions(opts).capture;
-    if (!list) return;
-    for (var i = 0; i < list.length; i++) {
-      if (list[i].fn === fn && list[i].capture === capture) {
-        list[i].removed = true;
-        list.splice(i, 1);
+    if (!list || !list.idx) return;
+    var same = list.idx.get(fn);
+    if (!same) return;
+    for (var i = 0; i < same.length; i++) {
+      if (same[i].capture === capture) {
+        var entry = same[i];
+        entry.removed = true;
+        same.splice(i, 1);
+        if (!same.length) list.idx.delete(fn);
+        // left in place (invoke skips it) and swept out once they are half the list: a splice per removal is quadratic
+        list.idx.dead = (list.idx.dead || 0) + 1;
+        if (list.idx.dead > 32 && list.idx.dead * 2 > list.length) {
+          var live = list.filter(function (x) { return !x.removed; });
+          list.length = 0;
+          for (var k = 0; k < live.length; k++) list.push(live[k]);
+          list.idx.dead = 0;
+        }
         return;
       }
     }

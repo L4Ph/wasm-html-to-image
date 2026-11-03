@@ -797,3 +797,36 @@ describe("custom elements with private fields; canvas value classes", () => {
     }
   });
 });
+
+describe("what pages with a lot of CSS-in-JS and feature checks hit", () => {
+  it("a selector that ends in a lone backslash does not hang; thousands of insertRule calls stay fast", async () => {
+    const page = await createDOM({ html: "<style id=s></style><div class=a></div>" }, { settleMs: 0, timeout: 8000 });
+    try {
+      const out = JSON.parse(
+        await page.eval(`(function () {
+          var t0 = Date.now(), sheet = document.getElementById("s").sheet || document.styleSheets[0];
+          document.getElementById("s").textContent = ".a { color: red } .b\\\\";
+          var c = getComputedStyle(document.querySelector(".a")).color;
+          for (var i = 0; i < 3000; i++) sheet.insertRule(".r" + i + " { margin: " + i + "px }", sheet.cssRules.length);
+          return JSON.stringify([c, sheet.cssRules.length > 3000, Date.now() - t0 < 5000]);
+        })()`),
+      );
+      expect(out).toEqual(["rgb(255, 0, 0)", true, true]);
+    } finally {
+      page.close();
+    }
+  });
+
+  it("File, FileReader, Intl without new, the observer entry classes", async () => {
+    expect(
+      await dom.eval(`new Promise(function (res) {
+        var f = new File(["hi"], "a.txt", { type: "text/plain" }), r = new FileReader();
+        r.onload = function () {
+          res(JSON.stringify([f.name, f instanceof Blob, r.result, typeof Intl.DateTimeFormat("en").format(new Date(0)), typeof Intl.Collator().compare,
+            "intersectionRatio" in IntersectionObserverEntry.prototype]));
+        };
+        r.readAsDataURL(f);
+      })`),
+    ).toBe(JSON.stringify(["a.txt", true, "data:text/plain;base64,aGk=", "string", "function", true]));
+  });
+});
