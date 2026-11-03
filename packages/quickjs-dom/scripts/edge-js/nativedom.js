@@ -204,14 +204,16 @@
   getter(P.Element, "classList", function () { return this[CL] || (this[CL] = new TokenList(this)); });
 
   // dataset: data-* attributes as camelCase properties
+  var DOMStringMap = function DOMStringMap() { throw new TypeError("Illegal constructor"); };
   var toAttr = function (key) { return "data-" + String(key).replace(/[A-Z]/g, function (c) { return "-" + c.toLowerCase(); }); };
   var toKey = function (attr) { return attr.slice(5).replace(/-([a-z])/g, function (_, c) { return c.toUpperCase(); }); };
   var DS = Symbol("dataset");
   getter(P.Element, "dataset", function () {
     if (this[DS]) return this[DS];
     var el = this;
-    return (this[DS] = new Proxy({}, {
-      get: function (_, key) { if (typeof key !== "string") return undefined; var v = el.getAttribute(toAttr(key)); return v === null ? undefined : v; },
+    return (this[DS] = new Proxy(Object.create(DOMStringMap.prototype), {
+      // a data-* attribute wins; anything else (constructor, toString, ...) falls through to the prototype
+      get: function (target, key) { if (typeof key !== "string") return Reflect.get(target, key); var v = el.getAttribute(toAttr(key)); return v === null ? Reflect.get(target, key) : v; },
       set: function (_, key, value) { if (typeof key === "string") el.setAttribute(toAttr(key), String(value)); return true; },
       has: function (_, key) { return typeof key === "string" && el.hasAttribute(toAttr(key)); },
       deleteProperty: function (_, key) { if (typeof key === "string") el.removeAttribute(toAttr(key)); return true; },
@@ -1734,6 +1736,11 @@
   W.HTMLFormControlsCollection = function HTMLFormControlsCollection() { illegal(); };
   Object.setPrototypeOf(W.HTMLFormControlsCollection.prototype, W.HTMLCollection.prototype);
   W.NamedNodeMap = function NamedNodeMap() { illegal(); };
+  // NOT on the window table: the bridge would classify dataset objects as a known interface, and its class
+  // wrappers keep host-side sets local (for expando properties) instead of forwarding them to the page —
+  // but a DOMStringMap is nothing but named properties. boot.js picks the constructor up from here and
+  // puts it on the global directly, like the other named-property objects (style) that stay unregistered.
+  D.DOMStringMapCtor = DOMStringMap;
   // classList (and relList) objects are TokenList instances; the DOMTokenList name is the public one
   W.DOMTokenList = function DOMTokenList() { illegal(); };
   W.DOMTokenList.prototype = TokenList.prototype;

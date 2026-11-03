@@ -45,6 +45,21 @@ describe("bridge: objects of the page from the host", () => {
     expect(() => new w.DOMTokenList()).toThrow(TypeError);
   });
 
+  it("exposes DOMStringMap for dataset", async () => {
+    expect(typeof w.DOMStringMap).toBe("function");
+    expect(
+      await dom.eval(`(() => {
+        const el = document.getElementById("a");
+        const out = [el.dataset instanceof DOMStringMap, el.dataset.constructor.name, el.dataset.x];
+        el.setAttribute("data-constructor", "zzz");
+        out.push(el.dataset.constructor);
+        el.removeAttribute("data-constructor");
+        out.push(typeof el.dataset.constructor);
+        return JSON.stringify(out);
+      })()`),
+    ).toBe(JSON.stringify([true, "DOMStringMap", undefined, "zzz", "function"]));
+  });
+
   it("exposes History, Navigator, Screen and Performance for the window singletons", async () => {
     expect(typeof w.History).toBe("function");
     expect(typeof w.Navigator).toBe("function");

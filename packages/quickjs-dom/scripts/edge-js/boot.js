@@ -49,6 +49,8 @@
     Object.keys(w).forEach(function (k) {
       if (!(k in g)) Object.defineProperty(g, k, { configurable: true, writable: true, value: w[k] });
     });
+    // DOMStringMap is a global too, but stays off the window table (nativedom.js explains why)
+    if (N.DOMStringMapCtor && !("DOMStringMap" in g)) Object.defineProperty(g, "DOMStringMap", { configurable: true, writable: true, value: N.DOMStringMapCtor });
     g.document = d;
     ["window", "self", "top", "parent", "frames"].forEach(function (k) {
       Object.defineProperty(g, k, { configurable: true, writable: true, value: g });
