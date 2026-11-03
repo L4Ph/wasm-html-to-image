@@ -632,10 +632,10 @@ describe("createDOM: observers, media queries and computed style", () => {
     }
   });
 
-  it("getComputedStyle gives the element's own style and the initial values scripts ask about", async () => {
+  it("getComputedStyle cascades the element's style (colours as rgb) and gives the initial values scripts ask about", async () => {
     const dom = await createDOM({ html: '<div id="a" style="color: red; display: flex"></div><div id="b"></div>' }, { settleMs: 0 });
     try {
-      expect(await dom.eval("getComputedStyle(document.getElementById('a')).color")).toBe("red");
+      expect(await dom.eval("getComputedStyle(document.getElementById('a')).color")).toBe("rgb(255, 0, 0)");
       expect(await dom.eval("getComputedStyle(document.getElementById('a')).display")).toBe("flex");
       expect(await dom.eval("getComputedStyle(document.getElementById('b')).display")).toBe("block");
       expect(await dom.eval("getComputedStyle(document.getElementById('b')).getPropertyValue('visibility')")).toBe("visible");

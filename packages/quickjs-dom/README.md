@@ -124,7 +124,7 @@ The package is a Vitest environment: the test file's `document`, `window`, `HTML
 export default { test: { environment: "./node_modules/wasm-quickjs-dom/dist/vitest.js" } };
 ```
 
-For Jest: `module.exports = { testEnvironment: "wasm-quickjs-dom/jest" }` (options in `testEnvironmentOptions`; the errors the page throws are those of the realm the environment runs in, not the test's). Options of `JSDOMOptions` (`url`, `html`, ...) go in `test.environmentOptions.wasmQuickjsDom`. Every DOM call a test makes is a call into the page (about 3 µs), so tests that do little DOM work run as fast as with jsdom or faster, and tests that walk a large DOM many times from the host (`getByRole` over thousands of nodes) can be slower. Not done: ranges are not adjusted when the tree changes under them; layout and `getComputedStyle` are not computed.
+For Jest: `module.exports = { testEnvironment: "wasm-quickjs-dom/jest" }` (options in `testEnvironmentOptions`; the errors the page throws are those of the realm the environment runs in, not the test's). Options of `JSDOMOptions` (`url`, `html`, ...) go in `test.environmentOptions.wasmQuickjsDom`. Every DOM call a test makes is a call into the page (about 3 µs), so tests that do little DOM work run as fast as with jsdom or faster, and tests that walk a large DOM many times from the host (`getByRole` over thousands of nodes) can be slower. Not done: ranges are not adjusted when the tree changes under them; layout is not computed, and `getComputedStyle` cascades the page's `<style>` elements and style attributes (specificity, `!important`, inheritance, `@media`, the browser's default `display`, colours as `rgb()`) but not external sheets, `var()` or `calc()`, and lengths stay as written.
 
 ## Pages you do not control
 

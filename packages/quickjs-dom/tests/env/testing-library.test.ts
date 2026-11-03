@@ -102,7 +102,7 @@ describe("jest-dom matchers", () => {
     expect(document.querySelector("input")).toHaveValue("x");
     expect(document.querySelector("[type=checkbox]")).toBeChecked();
     expect(document.querySelector("p")).toHaveClass("a", "b");
-    expect(document.querySelector("p")).toHaveStyle({ color: "red" });
+    expect(document.querySelector("p")).toHaveStyle({ color: "rgb(255, 0, 0)" });
     expect(document.querySelector("p")).toHaveTextContent("t");
     expect(document.querySelector("div")).not.toBeVisible();
   });
