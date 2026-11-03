@@ -45,6 +45,19 @@ describe("bridge: objects of the page from the host", () => {
     expect(() => new w.DOMTokenList()).toThrow(TypeError);
   });
 
+  it("exposes FileList for input.files", async () => {
+    const out = await dom.eval(`(() => {
+      const f = document.createElement("input"); f.type = "file";
+      const t = document.createElement("input");
+      return JSON.stringify([
+        typeof FileList, f.files instanceof FileList, f.files.constructor.name, f.files.length,
+        f.files.item(0), [...f.files].length, f.files === f.files, t.files,
+        (() => { try { new FileList(); return "no error"; } catch (e) { return e.name; } })(),
+      ]);
+    })()`);
+    expect(out).toBe(JSON.stringify(["function", true, "FileList", 0, null, 0, true, null, "TypeError"]));
+  });
+
   it("exposes StyleSheet, MediaList and StyleSheetList for the sheets", async () => {
     const out = await dom.eval(`(() => {
       const st = document.createElement("style");

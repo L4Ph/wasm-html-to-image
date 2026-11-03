@@ -2690,7 +2690,18 @@
     getter(P.HTMLInputElement, "indeterminate", function () { return !!INDET.get(this); }, function (v) { INDET.set(this, !!v); });
     getter(P.HTMLInputElement, "valueAsNumber", function () { var n = parseFloat(this.value); return isFinite(n) ? n : NaN; }, function (v) { this.value = String(v); });
     getter(P.HTMLInputElement, "valueAsDate", function () { var t = Date.parse(this.value); return isNaN(t) ? null : new Date(t); });
-    getter(P.HTMLInputElement, "files", function () { return this.type === "file" ? Object.assign([], { item: function () { return null; } }) : null; });
+    // files: a FileList per input, empty until something can put files in (there is no DataTransfer yet)
+    var FileList = function FileList() { illegal(); };
+    FileList.prototype.item = function (i) { return i >= 0 && i < this.length ? this[i] : null; };
+    FileList.prototype[Symbol.iterator] = Array.prototype[Symbol.iterator];
+    W.FileList = FileList;
+    var FILES = new WeakMap();
+    getter(P.HTMLInputElement, "files", function () {
+      if (this.type !== "file") return null;
+      var l = FILES.get(this);
+      if (!l) { l = Object.create(FileList.prototype); l.length = 0; FILES.set(this, l); }
+      return l;
+    });
     getter(P.HTMLInputElement, "list", function () { var id = this.getAttribute("list"); return id ? this.ownerDocument.getElementById(id) : null; });
     var step = function (el, dir, n) {
       var cur = parseFloat(el.value), s = parseFloat(el.getAttribute("step")) || 1;
