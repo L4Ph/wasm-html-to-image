@@ -1070,6 +1070,95 @@
     return w;
   });
 
+  // The parser (a port of htmlparser2) builds what the markup says; a browser's tree builder also supplies the html, head
+  // and body that the markup leaves out, and drops the blank text before <head>. This does that to a parsed document.
+  var HEAD_TAGS = { base: 1, basefont: 1, bgsound: 1, link: 1, meta: 1, noscript: 1, script: 1, style: 1, template: 1, title: 1 };
+  var isBlank = function (n) { return n.nodeType === 3 && !/[^\t\n\f\r ]/.test(n.data); };
+  var fixStructure = function (doc) {
+    var c, next, html = null, trailing = "";
+    // blank text before <html> is dropped; after </html> it belongs to the body
+    for (c = doc.firstChild; c; c = next) {
+      next = c.nextSibling;
+      if (c.nodeType === 1) html = html || c;
+      if (isBlank(c) && (!html || html.localName === "html")) {
+        if (html) trailing += c.data;
+        doc.removeChild(c);
+      }
+    }
+    if (!html || html.localName !== "html") {
+      var start = doc.firstChild;
+      while (start && (start.nodeType === 8 || start.nodeType === 10)) start = start.nextSibling;
+      html = doc.createElement("html");
+      doc.insertBefore(html, start);
+      while (html.nextSibling) html.appendChild(html.nextSibling);
+    }
+    var head = null, body = null;
+    for (c = html.firstChild; c; c = c.nextSibling) {
+      if (c.nodeType !== 1) continue;
+      if (c.localName === "head" && !head && !body) head = c;
+      else if ((c.localName === "body" || c.localName === "frameset") && !body) body = c;
+    }
+    if (head) {
+      for (c = html.firstChild; c && c !== head; c = next) {
+        next = c.nextSibling;
+        if (isBlank(c)) html.removeChild(c);
+      }
+    } else {
+      for (c = html.firstChild; c && isBlank(c); c = next) {
+        next = c.nextSibling;
+        html.removeChild(c);
+      }
+      head = doc.createElement("head");
+      html.insertBefore(head, html.firstChild);
+      for (c = head.nextSibling; c && c !== body; c = next) {
+        next = c.nextSibling;
+        if (c.nodeType === 8 || isBlank(c) || (c.nodeType === 1 && HEAD_TAGS[c.localName])) head.appendChild(c);
+        else break;
+      }
+    }
+    if (!body) {
+      body = doc.createElement("body");
+      for (c = head.nextSibling; c; c = next) {
+        next = c.nextSibling;
+        body.appendChild(c);
+      }
+      html.appendChild(body);
+    } else if (body.localName === "body") {
+      // blank text after </body> is part of the body
+      for (c = body.nextSibling; c && isBlank(c); c = next) {
+        next = c.nextSibling;
+        trailing = c.data + trailing;
+        html.removeChild(c);
+      }
+    }
+    if (trailing && body.localName === "body") {
+      var last = body.lastChild;
+      if (last && last.nodeType === 3) last.data += trailing;
+      else body.appendChild(doc.createTextNode(trailing));
+    }
+    // a <tr> straight under a <table> sits in a <tbody> the parser makes
+    var rows = doc.querySelectorAll("table > tr");
+    for (var i = 0; i < rows.length; i++) {
+      var tr = rows[i];
+      if (tr.parentNode.localName !== "table") continue;
+      var prev = tr.previousElementSibling, tbody;
+      if (prev && prev.localName === "tbody" && prev.__implied && prev.nextElementSibling === tr) tbody = prev;
+      else {
+        tbody = doc.createElement("tbody");
+        Object.defineProperty(tbody, "__implied", { value: true, configurable: true });
+        tr.parentNode.insertBefore(tbody, tr);
+      }
+      tbody.appendChild(tr);
+      while (tbody.nextSibling && isBlank(tbody.nextSibling)) tbody.appendChild(tbody.nextSibling);
+    }
+  };
+  var rawParse = D.parse;
+  D.parseLoose = rawParse; // the parser's tree as it is, without the structure a browser adds
+  D.parse = function (markup) {
+    var doc = rawParse(markup);
+    fixStructure(doc);
+    return doc;
+  };
   var DOMParser = function DOMParser() {};
   def(DOMParser.prototype, "parseFromString", function (markup) { return D.parse(String(markup)); });
   W.DOMParser = DOMParser;

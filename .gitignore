@@ -89,5 +89,3 @@ tmp/
 packages/cloudflare-screenshot/.dev.vars
 packages/cloudflare-prerender/.dev.vars
 
-# linkedom reference bundle for the quickjs-dom tests
-.test-gen/

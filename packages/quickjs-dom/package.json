@@ -65,8 +65,10 @@
   ],
   "license": "MIT",
   "devDependencies": {
+    "@types/jsdom": "^30.0.0",
     "@types/node": "26.6.5",
-    "linkedom": "0.18.13",
+    "htmlparser2": "10.1.0",
+    "jsdom": "^26.1.0",
     "typescript": "^7.0.2",
     "vitest": "^5.0.5",
     "web-streams-polyfill": "4.3.0"

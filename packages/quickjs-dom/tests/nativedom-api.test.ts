@@ -1,14 +1,13 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDOM, type QuickJSDOM } from "../src/index.js";
-import { loadLinkedomRef } from "./linkedom-ref.js";
+import { JSDOM } from "jsdom";
 
-// What the native DOM (csrc/nativedom*.h) must do as the DOM specification says, where linkedom is not a reference
+// What the native DOM (csrc/nativedom*.h) must do as the DOM specification says, where jsdom is not a reference
 // (or has nothing to compare): each test runs a snippet in the page and checks what it returns.
 
 let dom: QuickJSDOM;
 beforeAll(async () => {
   dom = await createDOM({ html: "<p>" }, { settleMs: 0 });
-  await loadLinkedomRef(dom);
 });
 afterAll(() => dom.close());
 
@@ -42,6 +41,24 @@ describe("native DOM: interfaces", () => {
         var el = d.createElement("DiV"), t = d.createTextNode("héllo"), f = d.createDocumentFragment();
         return [el.tagName, el.localName, el.nodeName, el.nodeType, t.nodeName, t.nodeType, t.data, t.nodeValue, t.length, el.nodeValue, d.nodeName, f.nodeName, d.nodeType, f.nodeType];`),
     ).toEqual(["DIV", "div", "DIV", 1, "#text", 3, "héllo", "héllo", 5, null, "#document", "#document-fragment", 9, 11]);
+  });
+});
+
+describe("native DOM: parsing like a browser", () => {
+  const show = (markup: string) =>
+    dom.eval((m: string) => new DOMParser().parseFromString(m, "text/html").documentElement.outerHTML, markup);
+  it("supplies html, head and body, and drops the blank text before <head>", async () => {
+    expect(await show("<h1>Hi</h1>")).toBe("<html><head></head><body><h1>Hi</h1></body></html>");
+    expect(await show("<title>t</title><p>x")).toBe("<html><head><title>t</title></head><body><p>x</p></body></html>");
+    expect(await show("<html>\n<head></head>\n<body>b</body>\n</html>\n")).toBe("<html><head></head>\n<body>b\n\n</body></html>");
+  });
+  it("puts a <tr> of a table in a <tbody>, and folds the case of HTML attribute names but not of svg's", async () => {
+    expect(await show("<table><tr><td>1<tr><td>2</table>")).toBe(
+      "<html><head></head><body><table><tbody><tr><td>1</td></tr><tr><td>2</td></tr></tbody></table></body></html>",
+    );
+    expect(await show('<div onClick=a ID=b><svg viewBox="0 0 1 1"><g onClick=c></g></svg></div>')).toBe(
+      '<html><head></head><body><div onclick="a" id="b"><svg viewBox="0 0 1 1"><g onClick="c"></g></svg></div></body></html>',
+    );
   });
 });
 
@@ -220,7 +237,7 @@ describe("native DOM: tree operations", () => {
   it("the element-only relations skip text", async () => {
     expect(
       await run(`
-        var doc = N.parse("<div>t<p id=a></p>u<p id=b></p>v</div>");
+        var doc = N.parseLoose("<div>t<p id=a></p>u<p id=b></p>v</div>");
         var div = doc.firstChild, a = doc.getElementById("a");
         return [div.childElementCount, div.firstElementChild.id, div.lastElementChild.id, a.nextElementSibling.id, a.previousElementSibling, div.children.length, div.childNodes.length];`),
     ).toEqual([2, "a", "b", "b", null, 2, 5]);
@@ -231,7 +248,7 @@ describe("native DOM: templates", () => {
   it("keeps the children of a template in its content", async () => {
     expect(
       await run(`
-        var doc = N.parse("<template id=t><p>one</p><p>two</p></template>");
+        var doc = N.parseLoose("<template id=t><p>one</p><p>two</p></template>");
         var t = doc.getElementById("t");
         var copy = doc.importNode(t.content, true);
         t.innerHTML = "<b>x</b>";
@@ -331,7 +348,7 @@ describe("native DOM: insertAdjacent and outerHTML", () => {
   it("insertAdjacentHTML / Text / Element in the four places", async () => {
     expect(
       await run(`
-        var doc = N.parse("<div><p id=m>mid</p></div>");
+        var doc = N.parseLoose("<div><p id=m>mid</p></div>");
         var m = doc.getElementById("m");
         m.insertAdjacentHTML("beforebegin", "<i>1</i>");
         m.insertAdjacentHTML("afterbegin", "<b>2</b>");
@@ -345,7 +362,7 @@ describe("native DOM: insertAdjacent and outerHTML", () => {
   it("outerHTML can be set, and not on the child of a document", async () => {
     expect(
       await run(`
-        var doc = N.parse("<div><p id=m>x</p></div>");
+        var doc = N.parseLoose("<div><p id=m>x</p></div>");
         var m = doc.getElementById("m");
         m.outerHTML = "<a>1</a><b>2</b>";
         var bad; try { doc.firstChild.outerHTML = "<i></i>"; } catch (e) { bad = e.name; }
@@ -483,7 +500,7 @@ describe("native DOM: style, forms and shadow roots", () => {
   });
 });
 
-describe("native DOM: selectors against linkedom", () => {
+describe("native DOM: selectors against jsdom", () => {
   const html =
     '<div id=root class="a b"><ul id=list><li id=l1 class=x>1</li><li id=l2 data-k="foo-bar" lang=en>2</li><li id=l3 class="x y">3</li><li id=l4 hidden>4</li></ul>' +
     '<p id=p1>t</p><p id=p2></p><span id=s1 title="Hello World">s</span><a id=lnk href="/x">l</a><a id=nolnk>n</a>' +
@@ -498,21 +515,26 @@ describe("native DOM: selectors against linkedom", () => {
     "input:disabled", "input:enabled", "input:required", "input:optional", "li, p", "div.a.b", "* > p", ".md\\:flex", "#sec h2:not(:first-of-type)",
     "li:hover", "ul li:only-child", "section :only-of-type", ":root", "html", "ul:not(:has(.y))",
   ];
-  it("gives linkedom's answers", async () => {
-    const out = (await dom.eval(`(function () {
-      var native = __native.dom.parse(${JSON.stringify(html)}), ref = __linkedom.parseHTML(${JSON.stringify(`<html><body>${html}</body></html>`)}).document;
-      var ids = function (list) { return Array.prototype.map.call(list, function (e) { return e.localName + "#" + e.getAttribute("id"); }).join(","); };
-      var bad = [];
-      ${JSON.stringify(selectors)}.forEach(function (sel) {
-        var a, b;
-        try { a = ids(native.querySelectorAll(sel)); } catch (e) { a = "ERR " + e.name; }
-        try { b = ids(ref.querySelectorAll(sel)); } catch (e) { b = "ERR " + e.name; }
-        if (sel === ":root" || sel === "html") return;
-        if (a !== b) bad.push(sel + " native=[" + a + "] linkedom=[" + b + "]");
+  it("gives jsdom's answers", async () => {
+    const answers = (parse: (html: string) => any) => {
+      const doc = parse(html);
+      const ids = (list: any) => Array.prototype.map.call(list, (e: any) => e.localName + "#" + e.getAttribute("id")).join(",");
+      return selectors.map((sel) => {
+        try {
+          return ids(doc.querySelectorAll(sel));
+        } catch (e: any) {
+          return "ERR " + e.name;
+        }
       });
-      return bad;
+    };
+    const ref = answers((h) => new JSDOM(`<html><body>${h}</body></html>`).window.document);
+    const native = (await dom.eval(`(function () { var selectors = ${JSON.stringify(selectors)}, html = ${JSON.stringify(html)};
+      var doc = __native.dom.parse(html);
+      var ids = function (list) { return Array.prototype.map.call(list, function (e) { return e.localName + "#" + e.getAttribute("id"); }).join(","); };
+      return selectors.map(function (sel) { try { return ids(doc.querySelectorAll(sel)); } catch (e) { return "ERR " + e.name; } });
     })()`)) as string[];
-    expect(out).toEqual([]);
+    const bad = selectors.flatMap((sel, i) => (native[i] === ref[i] || sel === ":root" || sel === "html" /* the page here is a fragment, with no html element */ ? [] : [`${sel} native=[${native[i]}] jsdom=[${ref[i]}]`]));
+    expect(bad).toEqual([]);
   });
 
   it("matches, closest and :scope; invalid selectors throw SyntaxError", async () => {

@@ -219,7 +219,7 @@ static JSValue nd_content(JSContext *c, JSValueConst tmpl) {
 }
 
 static JSValue nd_build(JSContext *c, HP *p, JSValueConst root, JSValueConst owner) {
-    size_t cap = 64, depth = 0;
+    size_t cap = 64, depth = 0, foreign = 0; /* foreign: the depth of the children of the outermost svg / math, 0 outside them */
     JSValue *stack = malloc(sizeof(JSValue) * cap);
     if (!stack) return JS_ThrowOutOfMemory(c);
     stack[depth++] = root; /* borrowed: every node on the stack is held by the tree under `root` */
@@ -259,12 +259,22 @@ static JSValue nd_build(JSContext *c, HP *p, JSValueConst root, JSValueConst own
             JSValue node = nd_new(c, owner, 1, (const char *)p->extra.p + ev[i + 1], (size_t)ev[i + 2], 0);
             if (JS_IsException(node)) { free(stack); return node; }
             ND *nn = nd_of(node);
+            /* HTML attribute names are lower case (onClick is onclick); inside <svg> and <math> they keep their case (viewBox) */
+            int foreign_tag = nd_is_tag(nn, "svg", 3) || nd_is_tag(nn, "math", 4);
+            int fold = !foreign && !foreign_tag;
             for (int k = 0; k < nattrs; k++) {
                 const int32_t *a = &ev[i + 4 + k * 5];
                 const uint8_t *vs = (a[2] ? p->extra.p : p->s) + a[3];
-                nd_set_attr(nn, (const char *)p->s + a[0], (size_t)a[1], (const char *)vs, (size_t)a[4]);
+                const char *an = (const char *)p->s + a[0];
+                char low[128];
+                if (fold && a[1] < (int32_t)sizeof(low)) {
+                    for (int q = 0; q < a[1]; q++) low[q] = (an[q] >= 'A' && an[q] <= 'Z') ? (char)(an[q] + 32) : an[q];
+                    an = low;
+                }
+                nd_set_attr(nn, an, (size_t)a[1], (const char *)vs, (size_t)a[4]);
             }
             nd_insert(c, stack[depth - 1], node, JS_NULL);
+            if (foreign_tag && !foreign) foreign = depth + 1; /* the depth the children of this element have */
             if (depth == cap) {
                 cap *= 2;
                 JSValue *s = realloc(stack, sizeof(JSValue) * cap);
@@ -279,6 +289,7 @@ static JSValue nd_build(JSContext *c, HP *p, JSValueConst root, JSValueConst own
         }
         case EV_CLOSE:
             if (depth > 1) depth--;
+            if (foreign && depth < foreign) foreign = 0;
             i += 1;
             break;
         case EV_PI: {
@@ -338,14 +349,12 @@ static JSValue nd_parse_into(JSContext *c, JSValueConst root, JSValueConst marku
 static void nd_escape(HBuf *b, const char *s, int len, int attr) {
     for (int i = 0; i < len; i++) {
         uint8_t ch = (uint8_t)s[i];
-        if (attr) {
-            if (ch == '"') hbuf_add(b, (const uint8_t *)"&quot;", 6);
-            else hbuf_add(b, &ch, 1);
-        } else if (ch == '&') hbuf_add(b, (const uint8_t *)"&amp;", 5);
-        else if (ch == '<') hbuf_add(b, (const uint8_t *)"&lt;", 4);
-        else if (ch == '>') hbuf_add(b, (const uint8_t *)"&gt;", 4);
+        if (ch == '&') hbuf_add(b, (const uint8_t *)"&amp;", 5);
+        else if (attr && ch == '"') hbuf_add(b, (const uint8_t *)"&quot;", 6);
+        else if (!attr && ch == '<') hbuf_add(b, (const uint8_t *)"&lt;", 4);
+        else if (!attr && ch == '>') hbuf_add(b, (const uint8_t *)"&gt;", 4);
         else if (ch == 0xC2 && i + 1 < len && (uint8_t)s[i + 1] == 0xA0) {
-            hbuf_add(b, (const uint8_t *)"&#160;", 6);
+            hbuf_add(b, (const uint8_t *)"&nbsp;", 6);
             i++;
         } else hbuf_add(b, &ch, 1);
     }

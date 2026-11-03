@@ -5,11 +5,8 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDOM, type QuickJSDOM } from "../src/index.js";
 
 // csrc/htmlparse.h is a port of htmlparser2's HTML mode. These tests run both on the same input and compare what
-// linkedom's handlers would be called with.
-const require = createRequire(require_resolve_linkedom());
-function require_resolve_linkedom(): string {
-  return createRequire(import.meta.url).resolve("linkedom/package.json");
-}
+// a DOM builder's handlers would be called with.
+const require = createRequire(import.meta.url);
 const { Parser } = require("htmlparser2") as { Parser: new (handlers: object, options: object) => { write(s: string): void; end(): void } };
 
 type Ev = [string, ...unknown[]];

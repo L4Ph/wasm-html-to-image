@@ -1,5 +1,5 @@
 /**
- * A small JSDOM for runtimes without Node: a page's scripts run in QuickJS (compiled to WebAssembly) on a linkedom DOM.
+ * A small JSDOM for runtimes without Node: a page's scripts run in QuickJS (compiled to WebAssembly) on a DOM written in C.
  *
  * Runs wherever WebAssembly does, `eval` or not, so it also works on Cloudflare Workers, Vercel Edge, Deno, Bun and
  * browsers. The guest program (`dist/edge-js-payload.js`, built by `scripts/build-edge-js.mjs`) holds the DOM and the

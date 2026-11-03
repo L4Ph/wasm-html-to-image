@@ -1,8 +1,7 @@
 // Generates the guest program of the QuickJS engine for the `javascript` option on edge runtimes:
 //
-//   dist/edge-js-payload.js  the guest program as QuickJS bytecode (base64): shims, the Web Streams polyfill, linkedom
-//                            (wrapped in a function: its top-level `const window` must not shadow the global one)
-//                            and the boot code. `src/index.ts` runs it in QuickJS.
+//   dist/edge-js-payload.js  the guest program as QuickJS bytecode (base64): shims, the Web Streams polyfill, the boot code
+//                            and the native DOM layer. `src/index.ts` runs it in QuickJS.
 //
 // Needs dist/quickjs.wasm (scripts/build-quickjs.mjs) and dist/runtime.js (tsc).
 // Usage (from `packages/quickjs-dom/`): node scripts/build-edge-js.mjs
@@ -16,20 +15,7 @@ const root = join(here, "..");
 const require = createRequire(join(root, "package.json"));
 const read = (path) => readFileSync(path, "utf8");
 
-// The guest has no DOM library: the DOM is csrc/nativedom*.h with scripts/edge-js/nativedom.js on top. linkedom is a
-// devDependency that only the tests use, as the reference the native DOM is compared with; its self-contained worker
-// bundle (the trailing `export { A, B as C }` becomes an object) is written to .test-gen/ for them to evaluate in a page.
-const linkedomPath = join(dirname(require.resolve("linkedom/package.json")), "worker.js");
-const linkedom = read(linkedomPath).replace(/\nexport \{([^}]*)\};?\s*$/, (_, names) => {
-  const items = names.split(",").map((n) => {
-    const m = n.trim().match(/^(\S+) as (\S+)$/);
-    return m ? `${m[2]}: ${m[1]}` : n.trim();
-  });
-  return `\nglobalThis.__linkedom = { ${items.join(", ")} };`;
-});
-if (!linkedom.includes("globalThis.__linkedom")) throw new Error("build-edge-js: linkedom's worker bundle has no export list to rewrite");
-mkdirSync(join(root, ".test-gen"), { recursive: true });
-writeFileSync(join(root, ".test-gen", "linkedom-ref.js"), `(function () {\n${linkedom}\n})();`);
+// The guest has no DOM library: the DOM is csrc/nativedom*.h with scripts/edge-js/nativedom.js on top.
 
 const streamsPath = join(dirname(require.resolve("web-streams-polyfill/package.json")), "dist", "polyfill.js");
 const parts = [

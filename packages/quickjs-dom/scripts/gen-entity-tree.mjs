@@ -10,8 +10,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const require = createRequire(import.meta.url);
-const linkedom = realpathSync(dirname(require.resolve("linkedom/package.json")));
-const htmlparser2 = realpathSync(join(linkedom, "..", "htmlparser2"));
+const htmlparser2 = realpathSync(dirname(require.resolve("htmlparser2/package.json")));
 const entities = realpathSync(join(htmlparser2, "..", "entities"));
 const version = JSON.parse((await import("node:fs")).readFileSync(join(entities, "package.json"), "utf8")).version;
 const { htmlDecodeTree } = await import(pathToFileURL(join(entities, "dist", "esm", "generated", "decode-data-html.js")).href);

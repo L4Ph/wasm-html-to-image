@@ -29,9 +29,9 @@
     OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
     THE SOFTWARE.
 
-- **web-streams-polyfill** (<https://github.com/MattiasBuelens/web-streams-polyfill>), MIT, is bundled into the guest program `dist/edge-js-payload.js`. (linkedom, ISC, is a devDependency the tests compare the DOM with; it is not shipped.)
+- **web-streams-polyfill** (<https://github.com/MattiasBuelens/web-streams-polyfill>), MIT, is bundled into the guest program `dist/edge-js-payload.js`. (jsdom, MIT, is a devDependency the tests compare the DOM with; it is not shipped.)
 
-- **htmlparser2** (<https://github.com/fb55/htmlparser2>, MIT, copyright Felix Böhm and Chris Winberry) and **entities** (<https://github.com/fb55/entities>, BSD-2-Clause, copyright Felix Böhm). `dist/quickjs.wasm` contains a C port of htmlparser2's HTML tokenizer and parser (`csrc/htmlparse.h`) and the HTML named-entity table of `entities` (`csrc/entity_tree.h`); linkedom's own copy of htmlparser2 is also inside the guest program. The entity table is under:
+- **htmlparser2** (<https://github.com/fb55/htmlparser2>, MIT, copyright Felix Böhm and Chris Winberry) and **entities** (<https://github.com/fb55/entities>, BSD-2-Clause, copyright Felix Böhm). `dist/quickjs.wasm` contains a C port of htmlparser2's HTML tokenizer and parser (`csrc/htmlparse.h`) and the HTML named-entity table of `entities` (`csrc/entity_tree.h`). The entity table is under:
 
     Copyright (c) Felix Böhm
     All rights reserved.
