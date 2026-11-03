@@ -1801,6 +1801,92 @@
     if (!im) IMPL.set(this, (im = Object.create(DOMImplementation.prototype)));
     return im;
   });
+  // ---- the Document members jsdom answers and this layer had not: identity, state, the legacy
+  // collections, and the legacy write/open family. defaultView and cookie live here too, so that
+  // documents beyond the page's own (DOMParser, createHTMLDocument) answer them as well; boot.js
+  // still defines the page document's own defaultView/cookie, which shadow these.
+  getter(P.Document, "defaultView", function () { return null; });
+  getter(P.Document, "URL", function () { var v = this.defaultView; return v ? v.location.href : "about:blank"; });
+  getter(P.Document, "documentURI", function () { return this.URL; });
+  getter(P.Document, "contentType", function () { return "application/xml"; });
+  getter(HTMLDocument.prototype, "contentType", function () { return "text/html"; });
+  getter(P.Document, "compatMode", function () { return this.doctype ? "CSS1Compat" : "BackCompat"; });
+  ["characterSet", "charset", "inputEncoding"].forEach(function (k) { getter(P.Document, k, function () { return "UTF-8"; }); });
+  var LASTMOD = new WeakMap();
+  getter(P.Document, "lastModified", function () {
+    var s = LASTMOD.get(this);
+    if (!s) {
+      var d = new Date(), p = function (n) { return String(n).padStart(2, "0"); };
+      LASTMOD.set(this, (s = p(d.getMonth() + 1) + "/" + p(d.getDate()) + "/" + d.getFullYear() + " " + p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds())));
+    }
+    return s;
+  });
+  getter(P.Document, "referrer", function () { return ""; });
+  getter(P.Document, "readyState", function () { return "complete"; });
+  getter(P.Document, "hidden", function () { return true; });
+  getter(P.Document, "visibilityState", function () { return "prerender"; });
+  getter(P.Document, "currentScript", function () { return null; });
+  def(P.Document, "hasFocus", function () { return false; });
+  getter(P.Document, "dir", function () { var r = this.documentElement; return r ? r.getAttribute("dir") || "" : ""; }, function (v) { var r = this.documentElement; if (r) r.setAttribute("dir", String(v)); });
+  var DOCJARS = new WeakMap();
+  getter(P.Document, "cookie", function () {
+    var jar = DOCJARS.get(this);
+    return jar ? Array.from(jar.entries()).map(function (e) { return e[0] + "=" + e[1]; }).join("; ") : "";
+  }, function (v) {
+    var jar = DOCJARS.get(this);
+    if (!jar) DOCJARS.set(this, (jar = new Map()));
+    var parts = String(v).split(";"), kv = parts[0], i = kv.indexOf("=");
+    var name = (i < 0 ? "" : kv.slice(0, i)).trim(), value = i < 0 ? kv.trim() : kv.slice(i + 1).trim();
+    var expired = parts.slice(1).some(function (p) {
+      var m = /^\s*(max-age|expires)\s*=\s*(.*)$/.exec(p);
+      return m && (m[1].toLowerCase() === "max-age" ? parseInt(m[2], 10) <= 0 : Date.parse(m[2]) < Date.now());
+    });
+    if (expired) jar.delete(name); else if (name) jar.set(name, value);
+  });
+  var docCollection = function (doc, selector) {
+    return liveCollection(function () { return Array.prototype.slice.call(doc.querySelectorAll(selector)); }, false, "HTMLCollection");
+  };
+  [["forms", "form"], ["images", "img"], ["scripts", "script"], ["embeds", "embed"], ["plugins", "embed"], ["applets", "applet"], ["anchors", "a[name]"], ["links", "a[href], area[href]"]].forEach(function (pair) {
+    getter(P.Document, pair[0], function () { return docCollection(this, pair[1]); });
+  });
+  def(P.Document, "getElementsByName", function (n) { return this.querySelectorAll('[name="' + String(n).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"]'); });
+  def(P.Document, "captureEvents", function () {});
+  def(P.Document, "releaseEvents", function () {});
+  def(P.Document, "open", function () { while (this.firstChild) this.removeChild(this.firstChild); return this; });
+  def(P.Document, "close", function () {});
+  var docWrite = function (doc, markup) {
+    var parsed = D.parse(markup);
+    if (!doc.documentElement) {
+      while (parsed.firstChild) doc.appendChild(parsed.firstChild);
+    } else {
+      var src = parsed.body, dst = doc.body || doc.documentElement;
+      if (src) while (src.firstChild) dst.appendChild(src.firstChild);
+    }
+  };
+  def(P.Document, "write", function () { docWrite(this, Array.prototype.map.call(arguments, String).join("")); });
+  def(P.Document, "writeln", function () { docWrite(this, Array.prototype.map.call(arguments, String).join("") + "\n"); });
+  def(P.Document, "clear", function () {});
+  def(P.Document, "createAttributeNS", function (ns, qname) {
+    qname = String(qname);
+    var at = Object.create(Attr.prototype), i = qname.indexOf(":");
+    Object.defineProperty(at, ATTR, { value: { owner: null, value: "" }, writable: true });
+    Object.defineProperties(at, {
+      name: { value: qname, enumerable: true },
+      localName: { value: i < 0 ? qname : qname.slice(i + 1), enumerable: true },
+      prefix: { value: i < 0 ? null : qname.slice(0, i), enumerable: true },
+      namespaceURI: { value: ns ? String(ns) : null, enumerable: true },
+    });
+    return at;
+  });
+  def(P.Document, "createCDATASection", function () { var e = new Error("This operation is not supported for HTML documents."); e.name = "NotSupportedError"; throw e; });
+  // createEvent: the legacy factory, over the window's own event classes
+  def(P.Document, "createEvent", function (type) {
+    var table = { Event: "Event", Events: "Event", HTMLEvents: "Event", UIEvent: "UIEvent", UIEvents: "UIEvent", MouseEvent: "MouseEvent", MouseEvents: "MouseEvent", KeyboardEvent: "KeyboardEvent", KeyboardEvents: "KeyboardEvent", FocusEvent: "FocusEvent", InputEvent: "InputEvent", CustomEvent: "CustomEvent", MessageEvent: "MessageEvent", ProgressEvent: "ProgressEvent", MutationEvents: "MutationEvent" };
+    var C = W[table[type] || "Event"] || W.Event;
+    return new C("");
+  });
+  // the Document's own extra handler properties (the window list's document half)
+  defHandlers(P.Document, ["beforematch", "beforetoggle", "contextlost", "contextrestored", "cuechange", "pointerrawupdate", "readystatechange", "visibilitychange", "webkitanimationend", "webkitanimationiteration", "webkitanimationstart", "webkittransitionend"]);
   // small legacy members the surface inventory found missing, each a line or two over what exists:
   // the six Node constants for node kinds this engine never creates (on the constructor and, as in
   // jsdom, on the prototype, so instances answer them too)

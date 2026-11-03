@@ -45,6 +45,32 @@ describe("bridge: objects of the page from the host", () => {
     expect(() => new w.DOMTokenList()).toThrow(TypeError);
   });
 
+  it("answers the Document members jsdom answers", async () => {
+    const out = await dom.eval(`(() => {
+      const d = document;
+      const before = [d.URL, d.documentURI, d.contentType, d.compatMode, d.characterSet, d.charset, d.inputEncoding,
+        d.referrer, d.readyState, d.hidden, d.visibilityState, d.currentScript, d.hasFocus(), d.dir,
+        d.forms.length, d.images.length, d.scripts.length, d.links.length, d.anchors.length, d.embeds.length, d.plugins.length, d.applets.length,
+        typeof d.open, typeof d.write, typeof d.captureEvents, d.getElementsByName("n").length, typeof d.onvisibilitychange];
+      const at = d.createAttributeNS("http://ns", "p:q");
+      let cdata = "no throw";
+      try { d.createCDATASection("x"); } catch (e) { cdata = e.name; }
+      const ev = d.createEvent("MouseEvents"); ev.initEvent("click", true, false);
+      const parsed = new DOMParser().parseFromString("<p>y</p>", "text/html");
+      parsed.cookie = "a=1"; parsed.cookie = "b=2";
+      return JSON.stringify([before, at.name, at.localName, at.prefix, at.namespaceURI, cdata, ev.type, ev instanceof MouseEvent, parsed.cookie, parsed.contentType, parsed.URL]);
+    })()`);
+    expect(out).toBe(
+      JSON.stringify([
+        ["about:blank", "about:blank", "text/html", "CSS1Compat", "UTF-8", "UTF-8", "UTF-8",
+          "", "complete", true, "prerender", null, false, "",
+          0, 0, 0, 0, 0, 0, 0, 0,
+          "function", "function", "function", 0, "object"],
+        "p:q", "q", "p", "http://ns", "NotSupportedError", "click", true, "a=1; b=2", "text/html", "about:blank",
+      ]),
+    );
+  });
+
   it("makes el.style and computed styles instances of the one CSSStyleDeclaration", async () => {
     const out = await dom.eval(`(() => {
       const el = document.getElementById("a");
