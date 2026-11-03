@@ -45,6 +45,38 @@ describe("bridge: objects of the page from the host", () => {
     expect(() => new w.DOMTokenList()).toThrow(TypeError);
   });
 
+  it("exposes DOMImplementation and HTMLDocument", async () => {
+    const out = await dom.eval(`(() => {
+      const impl = document.implementation;
+      const dt = impl.createDocumentType("html", "-//X//EN", "sys");
+      const hd = impl.createHTMLDocument("T");
+      const xd = impl.createDocument(null, "root", null);
+      const parsed = new DOMParser().parseFromString("<p>y</p>", "text/html");
+      return JSON.stringify([
+        typeof DOMImplementation, impl instanceof DOMImplementation, impl.constructor.name, document.implementation === impl,
+        impl.hasFeature("HTML", "1.0"),
+        dt.nodeType, dt instanceof DocumentType, dt.name, dt.publicId, dt.systemId,
+        hd instanceof HTMLDocument, hd instanceof Document, hd.constructor.name, hd.title, hd.body.tagName,
+        xd.documentElement.tagName, xd instanceof HTMLDocument,
+        document instanceof HTMLDocument, document.constructor.name,
+        parsed instanceof HTMLDocument,
+        (() => { try { new DOMImplementation(); return "no error"; } catch (e) { return e.name; } })(),
+      ]);
+    })()`);
+    expect(out).toBe(
+      JSON.stringify([
+        "function", true, "DOMImplementation", true,
+        true,
+        10, true, "html", "-//X//EN", "sys",
+        true, true, "HTMLDocument", "T", "BODY",
+        "ROOT", false, // the root's tag is uppercased like an HTML element's; jsdom says "root" (recorded in the ledger)
+        true, "HTMLDocument",
+        true,
+        "TypeError",
+      ]),
+    );
+  });
+
   it("exposes RadioNodeList for a radio group", async () => {
     const out = await dom.eval(`(() => {
       const f = document.createElement("form");

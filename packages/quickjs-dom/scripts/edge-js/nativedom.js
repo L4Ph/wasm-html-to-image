@@ -1676,7 +1676,12 @@
     return doc;
   };
   var DOMParser = function DOMParser() {};
-  def(DOMParser.prototype, "parseFromString", function (markup) { return D.parse(String(markup)); });
+  def(DOMParser.prototype, "parseFromString", function (markup, type) {
+    var doc = D.parse(String(markup));
+    // HTMLDocument is defined further down; at call time it exists, and text/html results are HTML documents
+    if ((type === undefined || type === "text/html") && typeof HTMLDocument !== "undefined") Object.setPrototypeOf(doc, HTMLDocument.prototype);
+    return doc;
+  });
   W.DOMParser = DOMParser;
   W.XMLSerializer = function XMLSerializer() {};
   def(W.XMLSerializer.prototype, "serializeToString", function (node) { return D.serialize(node); });
@@ -1740,6 +1745,50 @@
       Object.defineProperty(list, "setNamedItem", { value: function (at) { return el.setAttributeNode(at); } });
       return list;
     }, false, "NamedNodeMap") })[ATTRS];
+  });
+  // document.implementation: one DOMImplementation per document. The C parser keeps no doctype
+  // name/ids (a recorded gap), so createDocumentType parses a declaration for a real DocumentType
+  // node and shadows the three fields with the values it was asked for.
+  var DOMImplementation = function DOMImplementation() { illegal(); };
+  W.DOMImplementation = DOMImplementation;
+  // HTMLDocument: a Document subclass in name and prototype only — the C layer makes every document
+  // with Document.prototype, so HTML documents (the page's own, createHTMLDocument's, DOMParser's
+  // text/html results) have their prototype swapped for this one, which inherits Document's.
+  var HTMLDocument = function HTMLDocument() { illegal(); };
+  Object.setPrototypeOf(HTMLDocument.prototype, P.Document);
+  Object.setPrototypeOf(HTMLDocument, D.ctors.Document);
+  W.HTMLDocument = HTMLDocument;
+  def(DOMImplementation.prototype, "hasFeature", function () { return true; });
+  def(DOMImplementation.prototype, "createDocumentType", function (name, publicId, systemId) {
+    name = String(name); publicId = String(publicId || ""); systemId = String(systemId || "");
+    var decl = "<!DOCTYPE " + name +
+      (publicId ? " PUBLIC \"" + publicId + "\"" + (systemId ? " \"" + systemId + "\"" : "") : systemId ? " SYSTEM \"" + systemId + "\"" : "") +
+      "><html></html>";
+    var dt = D.parse(decl).doctype;
+    Object.defineProperties(dt, {
+      name: { value: name, configurable: true, enumerable: true },
+      publicId: { value: publicId, configurable: true, enumerable: true },
+      systemId: { value: systemId, configurable: true, enumerable: true },
+    });
+    return dt;
+  });
+  def(DOMImplementation.prototype, "createDocument", function (ns, qname, doctype) {
+    var doc = D.createDocument();
+    if (doctype) doc.appendChild(doctype);
+    if (qname) doc.appendChild(ns ? doc.createElementNS(ns, String(qname)) : doc.createElement(String(qname)));
+    return doc;
+  });
+  def(DOMImplementation.prototype, "createHTMLDocument", function (title) {
+    var doc = D.parse("<!doctype html><html><head></head><body></body></html>");
+    Object.setPrototypeOf(doc, HTMLDocument.prototype);
+    if (title !== undefined) doc.title = String(title);
+    return doc;
+  });
+  var IMPL = new WeakMap();
+  getter(P.Document, "implementation", function () {
+    var im = IMPL.get(this);
+    if (!im) IMPL.set(this, (im = Object.create(DOMImplementation.prototype)));
+    return im;
   });
   // document.title is the text of the first <title>
   getter(P.Document, "title", function () {

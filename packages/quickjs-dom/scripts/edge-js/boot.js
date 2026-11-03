@@ -7,6 +7,8 @@
     g.__edgeStart(seed);
     var N = g.__native.dom;
     var d = N.parse(html), w = N.window;
+    // the page's document is an HTML document (nativedom.js keeps the HTMLDocument prototype for this)
+    if (w.HTMLDocument) Object.setPrototypeOf(d, w.HTMLDocument.prototype);
     // the window of the document is the global object itself: its event listeners are the nodes' own mechanism
     ["addEventListener", "removeEventListener", "dispatchEvent"].forEach(function (k) {
       Object.defineProperty(g, k, { configurable: true, writable: true, value: N.protos.Node[k] });
