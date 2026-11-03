@@ -45,6 +45,35 @@ describe("bridge: objects of the page from the host", () => {
     expect(() => new w.DOMTokenList()).toThrow(TypeError);
   });
 
+  it("answers the legacy constants, splitText and the namespace lookups", async () => {
+    const out = await dom.eval(`(() => {
+      const host = document.createElement("div");
+      host.innerHTML = "<b>1</b>mid<i>2</i>";
+      const text = host.childNodes[1];
+      const rest = text.splitText(1);
+      const p = document.getElementById("a");
+      p.setAttribute("data-z", "9");
+      return JSON.stringify([
+        Node.ATTRIBUTE_NODE, Node.CDATA_SECTION_NODE, Node.ENTITY_REFERENCE_NODE, Node.ENTITY_NODE, Node.PROCESSING_INSTRUCTION_NODE, Node.NOTATION_NODE,
+        host.ATTRIBUTE_NODE, host.ENTITY_NODE,
+        text.data, rest.data, host.textContent, rest.wholeText, text.assignedSlot,
+        text.previousElementSibling.tagName, text.nextElementSibling.tagName,
+        document.getElementsByTagNameNS("*", "b").length, host.getElementsByTagNameNS("", "i").length,
+        p.attributes.getNamedItemNS("", "data-z").value, p.attributes.getNamedItemNS("", "nope"),
+      ]);
+    })()`);
+    expect(out).toBe(
+      JSON.stringify([
+        2, 4, 5, 6, 7, 12,
+        2, 6,
+        "m", "id", "1mid2", "mid", null,
+        "B", "I",
+        1, 1,
+        "9", null,
+      ]),
+    );
+  });
+
   it("exposes BarProp, External and the window's scalar properties", async () => {
     const out = await dom.eval(`JSON.stringify([
       typeof BarProp, typeof External,

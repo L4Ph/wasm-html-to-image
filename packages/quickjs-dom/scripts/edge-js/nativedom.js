@@ -1741,6 +1741,7 @@
       var list = el.getAttributeNames().map(function (name) { return makeAttr(name, el, el.getAttribute(name)); });
       list.forEach(function (at) { if (!(at.name in list)) list[at.name] = at; });
       Object.defineProperty(list, "getNamedItem", { value: function (n) { return el.getAttributeNode(n); } });
+      Object.defineProperty(list, "getNamedItemNS", { value: function (ns, n) { var at = el.getAttributeNode(n); if (at) return at; for (var i = 0; i < this.length; i++) if (this[i].localName === n) return this[i]; return null; } });
       Object.defineProperty(list, "removeNamedItem", { value: function (n) { var at = el.getAttributeNode(n); if (at) el.removeAttribute(n); return at; } });
       Object.defineProperty(list, "setNamedItem", { value: function (at) { return el.setAttributeNode(at); } });
       return list;
@@ -1790,6 +1791,42 @@
     if (!im) IMPL.set(this, (im = Object.create(DOMImplementation.prototype)));
     return im;
   });
+  // small legacy members the surface inventory found missing, each a line or two over what exists:
+  // the six Node constants for node kinds this engine never creates (on the constructor and, as in
+  // jsdom, on the prototype, so instances answer them too)
+  [["ATTRIBUTE_NODE", 2], ["CDATA_SECTION_NODE", 4], ["ENTITY_REFERENCE_NODE", 5], ["ENTITY_NODE", 6], ["PROCESSING_INSTRUCTION_NODE", 7], ["NOTATION_NODE", 12]].forEach(function (kv) {
+    if (!(kv[0] in W.Node)) Object.defineProperty(W.Node, kv[0], { value: kv[1], enumerable: true });
+    if (!(kv[0] in P.Node)) Object.defineProperty(P.Node, kv[0], { value: kv[1], enumerable: true });
+  });
+  // getElementsByTagNameNS: namespaces are not distinguished in HTML documents here, so the
+  // namespace is accepted and the plain search runs (jsdom answers the same nodes for HTML content)
+  def(P.Document, "getElementsByTagNameNS", function (ns, name) { return this.getElementsByTagName(name); });
+  def(P.Element, "getElementsByTagNameNS", function (ns, name) { return this.getElementsByTagName(name); });
+  // Text: splitText, wholeText, assignedSlot (never assigned outside a shadow tree, and a text node
+  // in one reads its slot through the flattened tree only in browsers with full shadow support)
+  def(P.Text, "splitText", function (offset) {
+    offset = offset >>> 0;
+    var data = this.data;
+    if (offset > data.length) { var e = new Error("Failed to execute 'splitText' on 'Text': The offset " + offset + " is greater than the length " + data.length + "."); e.name = "IndexSizeError"; throw e; }
+    var rest = this.ownerDocument.createTextNode(data.slice(offset));
+    this.data = data.slice(0, offset);
+    if (this.parentNode) this.parentNode.insertBefore(rest, this.nextSibling);
+    return rest;
+  });
+  getter(P.Text, "wholeText", function () {
+    var out = this.data, n;
+    for (n = this.previousSibling; n && n.nodeType === 3; n = n.previousSibling) out = n.data + out;
+    for (n = this.nextSibling; n && n.nodeType === 3; n = n.nextSibling) out += n.data;
+    return out;
+  });
+  getter(P.Text, "assignedSlot", function () { return null; });
+  // CharacterData is a child node too: the element siblings skip non-elements
+  var elemSibling = function (node, dir) {
+    for (var n = node[dir]; n; n = n[dir]) if (n.nodeType === 1) return n;
+    return null;
+  };
+  getter(P.CharacterData, "previousElementSibling", function () { return elemSibling(this, "previousSibling"); });
+  getter(P.CharacterData, "nextElementSibling", function () { return elemSibling(this, "nextSibling"); });
   // document.title is the text of the first <title>
   getter(P.Document, "title", function () {
     var t = this.querySelector("title");
