@@ -57,20 +57,28 @@
     var loc = new g.URL(url);
     loc.assign = loc.replace = loc.reload = function () {};
     g.location = loc;
-    g.navigator = { userAgent: "Mozilla/5.0 (compatible; wasm-html-to-image) AppleWebKit/537.36 Chrome/120.0", language: "en-US", languages: ["en-US"], platform: "Linux", hardwareConcurrency: 1, onLine: true, cookieEnabled: false };
+    // The window's singleton objects carry their interface prototypes, so instanceof and constructor lookups work
+    var illegal = function () { throw new TypeError("Illegal constructor"); };
+    g.Navigator = function Navigator() { illegal(); };
+    g.navigator = Object.create(g.Navigator.prototype);
+    Object.assign(g.navigator, { userAgent: "Mozilla/5.0 (compatible; wasm-html-to-image) AppleWebKit/537.36 Chrome/120.0", language: "en-US", languages: ["en-US"], platform: "Linux", hardwareConcurrency: 1, onLine: true, cookieEnabled: false });
     // pushState/replaceState move the location, as routers expect (no navigation happens)
     function moveTo(u) {
       if (u == null || u === "") return;
       var n = new g.URL(String(u), loc.href);
       ["protocol", "host", "hostname", "port", "pathname", "search", "hash", "origin", "searchParams"].forEach(function (k) { loc[k] = n[k]; });
     }
-    g.history = {
-      state: null, length: 1, scrollRestoration: "auto",
+    g.History = function History() { illegal(); };
+    Object.assign(g.History.prototype, {
       pushState: function (s, t, u) { this.state = s; this.length++; moveTo(u); },
       replaceState: function (s, t, u) { this.state = s; moveTo(u); },
       back: function () {}, forward: function () {}, go: function () {},
-    };
-    g.screen = { width: width, height: Math.round(width * 0.75) };
+    });
+    g.history = Object.create(g.History.prototype);
+    Object.assign(g.history, { state: null, length: 1, scrollRestoration: "auto" });
+    g.Screen = function Screen() { illegal(); };
+    g.screen = Object.create(g.Screen.prototype);
+    Object.assign(g.screen, { width: width, height: Math.round(width * 0.75) });
     g.innerWidth = g.outerWidth = width;
     g.innerHeight = g.outerHeight = Math.round(width * 0.75);
     g.devicePixelRatio = 1;
@@ -450,6 +458,8 @@
         }
       };
     }
+    if (!g.Performance) g.Performance = function Performance() { throw new TypeError("Illegal constructor"); };
+    if (g.performance) Object.setPrototypeOf(g.performance, g.Performance.prototype);
     if (g.performance && !g.performance.timing) {
       g.performance.timing = { navigationStart: g.performance.timeOrigin, fetchStart: g.performance.timeOrigin, responseStart: g.performance.timeOrigin, domLoading: g.performance.timeOrigin, domInteractive: g.performance.timeOrigin, domContentLoadedEventStart: g.performance.timeOrigin, domContentLoadedEventEnd: g.performance.timeOrigin, loadEventStart: 0, loadEventEnd: 0 };
       g.performance.navigation = { type: 0, redirectCount: 0 };

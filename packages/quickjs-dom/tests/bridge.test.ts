@@ -45,6 +45,28 @@ describe("bridge: objects of the page from the host", () => {
     expect(() => new w.DOMTokenList()).toThrow(TypeError);
   });
 
+  it("exposes History, Navigator, Screen and Performance for the window singletons", async () => {
+    expect(typeof w.History).toBe("function");
+    expect(typeof w.Navigator).toBe("function");
+    expect(typeof w.Screen).toBe("function");
+    expect(typeof w.Performance).toBe("function");
+    // in the page the singletons are instances of their interfaces (the bridge's host wrappers
+    // for non-node objects do not carry the page's prototypes, so this is checked in the page)
+    expect(
+      await dom.eval(`JSON.stringify([
+        history instanceof History, navigator instanceof Navigator, screen instanceof Screen, performance instanceof Performance,
+        history.constructor.name, navigator.constructor.name, screen.constructor.name, performance.constructor.name,
+        (() => { try { new History(); return "no error"; } catch (e) { return e.name; } })(),
+      ])`),
+    ).toBe(JSON.stringify([true, true, true, true, "History", "Navigator", "Screen", "Performance", "TypeError"]));
+    // the singletons still behave: pushState moves the location and grows the history
+    const before = w.history.length;
+    w.history.pushState({ a: 1 }, "", "/there");
+    expect(w.history.state).toEqual({ a: 1 });
+    expect(w.history.length).toBe(before + 1);
+    expect(w.location.pathname).toBe("/there");
+  });
+
   it("exposes MutationRecord for mutation records", async () => {
     const out = await dom.eval(`new Promise((res) => {
       const mo = new MutationObserver((rs) => res([typeof MutationRecord, rs[0] instanceof MutationRecord, rs[0].constructor.name, (() => { try { new MutationRecord(); return "no error"; } catch (e) { return e.name; } })()]));
