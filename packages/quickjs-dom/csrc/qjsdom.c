@@ -292,6 +292,7 @@ static JSValue host_fetch(JSContext *c, JSValueConst self, int argc, JSValueCons
 /* ---- __native: parts of the page's environment that are faster in C than in the interpreter ---- */
 
 #include "htmlparse.h"
+#include "nativedom.h"
 
 /* ---- exports ---- */
 
@@ -314,6 +315,7 @@ EXPORT("qd_init") int qd_init(size_t memory_limit, size_t stack_limit) {
     JS_SetPropertyStr(ctx, global, "__host", host);
     JSValue native = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, native, "parseHTML", JS_NewCFunction(ctx, native_parse_html, "parseHTML", 2));
+    nd_register(ctx, native);
     JS_SetPropertyStr(ctx, global, "__native", native);
     JS_FreeValue(ctx, global);
     return 0;
