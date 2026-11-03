@@ -366,7 +366,16 @@ export function openPage(
     }
     return best && best[1] + name.slice(best[0].length);
   };
-  const resolveModule = (base: string, name: string) => {
+  const resolveModule = (base: string, specifier: string) => {
+    let name = specifier;
+    // the keys of an import map that are URLs match the specifier once it is resolved
+    if ((mapImports.length || mapScopes.length) && /^(\.{0,2}\/|[a-z][a-z0-9+.-]*:)/i.test(specifier)) {
+      try {
+        name = new URL(specifier, /^https?:/.test(base) ? base : baseUrl).href;
+      } catch {
+        name = specifier;
+      }
+    }
     if (mapImports.length || mapScopes.length) {
       const scopes = mapScopes.filter(([s]) => s === base || (s.endsWith("/") && base.startsWith(s))).sort((a, b) => b[0].length - a[0].length);
       for (const [, entries] of scopes) {
@@ -407,7 +416,15 @@ export function openPage(
       timer(id, ms) {
         timers.push({ id, at: Date.now() + ms });
       },
-      fetch(id, target, method) {
+      fetch(id, target, packed) {
+        // a plain method, or {m, h, b}: method, headers, body
+        let method = packed;
+        let init: { headers?: Record<string, string>; body?: string } = {};
+        if (packed.startsWith("{")) {
+          const p = JSON.parse(packed) as { m: string; h: Record<string, string>; b: string | null };
+          method = p.m;
+          init = { headers: p.h, ...(p.b !== null ? { body: p.b } : {}) };
+        }
         const settle = (ok: boolean, text: string) => {
           if (closed) return;
           vm.settle(id, ok, text);
@@ -436,7 +453,7 @@ export function openPage(
           return;
         }
         track(
-          loggedFetch(new URL(target, baseUrl), { method })
+          loggedFetch(new URL(target, baseUrl), { method, ...init })
             .then(async (r) => ({ status: r.status, url: r.url, headers: Object.fromEntries(r.headers), body: toBase64(await guard.bytes(r)) }))
             .then(
               (o) => settle(true, JSON.stringify(o)),

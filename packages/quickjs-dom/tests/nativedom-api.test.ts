@@ -708,3 +708,38 @@ describe("Storage and Intl", () => {
     }
   });
 });
+
+describe("geometry interfaces, Intl.NumberFormat, XMLHttpRequest events", () => {
+  it("DOMMatrix, DOMRect and DOMPoint work; NumberFormat is callable and groups", async () => {
+    const dom = await createDOM({ html: "<body></body>" }, { settleMs: 0 });
+    try {
+      const w = dom.bridge().window as any;
+      expect(w.eval('String(new DOMMatrix("translate(10px, 20px) scale(2)"))'.replace("10px, 20px", "10, 20"))).toBe("matrix(2, 0, 0, 2, 10, 20)");
+      expect(w.eval('const m = new DOMMatrix("matrix(1, 0, 0, 1, 5, 6)"); [m.e, m.f, m.is2D, m.inverse().e, m.transformPoint({ x: 1, y: 1 }).x].join()')).toBe("5,6,true,-5,6");
+      expect(w.eval('new DOMMatrix("none").isIdentity')).toBe(true);
+      expect(w.eval('const r = new DOMRect(1, 2, 3, 4); [r.right, r.bottom, JSON.stringify(r.toJSON()).length > 10].join()')).toBe("4,6,true");
+      expect(w.eval('Intl.NumberFormat("en-US").format(1234567.891)')).toBe("1,234,567.891");
+      expect(w.eval('new Intl.NumberFormat("en", { style: "currency", currency: "USD" }).format(1234.5)')).toBe("$1,234.50");
+      expect(w.eval('new Intl.NumberFormat("en", { style: "percent" }).format(0.256)')).toBe("26%");
+      expect(w.eval('new Intl.NumberFormat("en", { maximumFractionDigits: 0 }).format(2.5)')).toBe("3");
+    } finally {
+      dom.close();
+    }
+  });
+
+  it("XMLHttpRequest events carry currentTarget and the readyState sequence", async () => {
+    const dom = await createDOM({ html: "<body></body>" }, { settleMs: 0 });
+    try {
+      const w = dom.bridge().window as any;
+      const out = w.eval(`(function () {
+        var x = new XMLHttpRequest(), seen = [];
+        x.addEventListener("readystatechange", function (e) { seen.push(e.currentTarget === x ? x.readyState : "bad"); });
+        x.open("GET", "data:,");
+        return seen.concat([x.getAllResponseHeaders() === "", XMLHttpRequest.DONE]).join();
+      })()`);
+      expect(out).toBe("1,true,4");
+    } finally {
+      dom.close();
+    }
+  });
+});

@@ -301,6 +301,114 @@
         px: function (n) { return { value: n, unit: "px", toString: function () { return n + "px"; } }; },
       };
     }
+    // geometry interfaces: DOMRect, DOMPoint, DOMMatrix (column-major 4x4, as the specification's m11..m44)
+    if (!g.DOMRect) {
+      var rectBase = function (C, writable) {
+        C.prototype.toJSON = function () { return { x: this.x, y: this.y, width: this.width, height: this.height, top: this.top, right: this.right, bottom: this.bottom, left: this.left }; };
+        ["top", "left", "right", "bottom"].forEach(function (k) {
+          Object.defineProperty(C.prototype, k, { get: function () {
+            var x = this.x, y = this.y, w = this.width, h = this.height;
+            return k === "top" ? Math.min(y, y + h) : k === "left" ? Math.min(x, x + w) : k === "right" ? Math.max(x, x + w) : Math.max(y, y + h);
+          }, configurable: true });
+        });
+      };
+      g.DOMRectReadOnly = class DOMRectReadOnly {
+        constructor(x, y, w, h) { this._r = [+x || 0, +y || 0, +w || 0, +h || 0]; }
+        get x() { return this._r[0]; } get y() { return this._r[1]; } get width() { return this._r[2]; } get height() { return this._r[3]; }
+        static fromRect(o) { o = o || {}; return new this(o.x, o.y, o.width, o.height); }
+      };
+      g.DOMRect = class DOMRect extends g.DOMRectReadOnly {
+        get x() { return this._r[0]; } set x(v) { this._r[0] = +v || 0; }
+        get y() { return this._r[1]; } set y(v) { this._r[1] = +v || 0; }
+        get width() { return this._r[2]; } set width(v) { this._r[2] = +v || 0; }
+        get height() { return this._r[3]; } set height(v) { this._r[3] = +v || 0; }
+      };
+      rectBase(g.DOMRectReadOnly);
+      g.DOMPointReadOnly = class DOMPointReadOnly {
+        constructor(x, y, z, w) { this.x = +x || 0; this.y = +y || 0; this.z = +z || 0; this.w = w === undefined ? 1 : +w; }
+        static fromPoint(o) { o = o || {}; return new this(o.x, o.y, o.z, o.w); }
+        matrixTransform(m) { return m.transformPoint(this); }
+        toJSON() { return { x: this.x, y: this.y, z: this.z, w: this.w }; }
+      };
+      g.DOMPoint = class DOMPoint extends g.DOMPointReadOnly {};
+      var identity = function () { return [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]; };
+      var mul = function (a, b) { // a * b, column-major
+        var o = new Array(16);
+        for (var c = 0; c < 4; c++) for (var r = 0; r < 4; r++) { var s = 0; for (var k = 0; k < 4; k++) s += a[k * 4 + r] * b[c * 4 + k]; o[c * 4 + r] = s; }
+        return o;
+      };
+      var parseTransform = function (text) {
+        var m = identity(), re = /([a-z0-9]+)\(([^)]*)\)/gi, t;
+        text = String(text).trim();
+        if (text === "" || text === "none") return m;
+        while ((t = re.exec(text))) {
+          var n = t[1].toLowerCase(), a = t[2].split(",").map(function (x) { return parseFloat(x); }), f = identity();
+          var rad = function (v, u) { return /rad/.test(u) ? v : /turn/.test(u) ? v * 2 * Math.PI : /grad/.test(u) ? v * Math.PI / 200 : v * Math.PI / 180; };
+          if (n === "matrix" && a.length === 6) f = [a[0], a[1], 0, 0, a[2], a[3], 0, 0, 0, 0, 1, 0, a[4], a[5], 0, 1];
+          else if (n === "matrix3d" && a.length === 16) f = a;
+          else if (n === "translate" || n === "translate3d") { f[12] = a[0] || 0; f[13] = a[1] || 0; f[14] = a[2] || 0; }
+          else if (n === "translatex") f[12] = a[0] || 0;
+          else if (n === "translatey") f[13] = a[0] || 0;
+          else if (n === "scale" || n === "scale3d") { f[0] = a[0]; f[5] = a.length > 1 ? a[1] : a[0]; f[10] = a.length > 2 ? a[2] : 1; }
+          else if (n === "scalex") f[0] = a[0];
+          else if (n === "scaley") f[5] = a[0];
+          else if (n === "rotate" || n === "rotatez") { var r = rad(a[0], t[2]); f[0] = Math.cos(r); f[1] = Math.sin(r); f[4] = -Math.sin(r); f[5] = Math.cos(r); }
+          else if (n === "skewx") f[4] = Math.tan(rad(a[0], t[2]));
+          else if (n === "skewy") f[1] = Math.tan(rad(a[0], t[2]));
+          else throw new SyntaxError("Failed to parse '" + text + "' as a transform list.");
+          m = mul(m, f);
+        }
+        return m;
+      };
+      var names = ["m11", "m12", "m13", "m14", "m21", "m22", "m23", "m24", "m31", "m32", "m33", "m34", "m41", "m42", "m43", "m44"];
+      var alias = { a: "m11", b: "m12", c: "m21", d: "m22", e: "m41", f: "m42" };
+      g.DOMMatrixReadOnly = class DOMMatrixReadOnly {
+        constructor(init) {
+          var v = typeof init === "string" ? parseTransform(init) : Array.isArray(init) || (init && typeof init.length === "number") ? (init.length === 6 ? [init[0], init[1], 0, 0, init[2], init[3], 0, 0, 0, 0, 1, 0, init[4], init[5], 0, 1] : Array.prototype.slice.call(init)) : identity();
+          Object.defineProperty(this, "_m", { value: v.length === 16 ? v.map(Number) : identity(), writable: true });
+        }
+        get is2D() { var m = this._m; return !(m[2] || m[3] || m[6] || m[7] || m[8] || m[9] || m[11] || m[14]) && m[10] === 1 && m[15] === 1; }
+        get isIdentity() { var m = this._m, i = identity(); return m.every(function (x, k) { return x === i[k]; }); }
+        static fromMatrix(o) { return new this(o && o._m ? o._m : [o.a, o.b, o.c, o.d, o.e, o.f]); }
+        multiply(o) { return new g.DOMMatrix(mul(this._m, new g.DOMMatrix(o && o._m ? o._m : o)._m)); }
+        translate(x, y, z) { var f = identity(); f[12] = x || 0; f[13] = y || 0; f[14] = z || 0; return new g.DOMMatrix(mul(this._m, f)); }
+        scale(sx, sy, sz) { var f = identity(); f[0] = sx === undefined ? 1 : sx; f[5] = sy === undefined ? f[0] : sy; f[10] = sz === undefined ? 1 : sz; return new g.DOMMatrix(mul(this._m, f)); }
+        rotate(deg) { var r = (deg || 0) * Math.PI / 180, f = identity(); f[0] = Math.cos(r); f[1] = Math.sin(r); f[4] = -Math.sin(r); f[5] = Math.cos(r); return new g.DOMMatrix(mul(this._m, f)); }
+        inverse() {
+          var m = this._m, det = m[0] * m[5] - m[1] * m[4];
+          if (!this.is2D || det === 0) return new g.DOMMatrix([NaN, NaN, NaN, NaN, NaN, NaN]);
+          return new g.DOMMatrix([m[5] / det, -m[1] / det, -m[4] / det, m[0] / det, (m[4] * m[13] - m[5] * m[12]) / det, (m[1] * m[12] - m[0] * m[13]) / det]);
+        }
+        transformPoint(p) {
+          p = p || {}; var m = this._m, x = p.x || 0, y = p.y || 0, z = p.z || 0, w = p.w === undefined ? 1 : p.w;
+          return new g.DOMPoint(m[0] * x + m[4] * y + m[8] * z + m[12] * w, m[1] * x + m[5] * y + m[9] * z + m[13] * w, m[2] * x + m[6] * y + m[10] * z + m[14] * w, m[3] * x + m[7] * y + m[11] * z + m[15] * w);
+        }
+        toFloat32Array() { return new Float32Array(this._m); }
+        toFloat64Array() { return new Float64Array(this._m); }
+        toJSON() { var o = { is2D: this.is2D, isIdentity: this.isIdentity }, m = this; names.forEach(function (n) { o[n] = m[n]; }); Object.keys(alias).forEach(function (k) { o[k] = m[k]; }); return o; }
+        toString() { var m = this._m; return this.is2D ? "matrix(" + [m[0], m[1], m[4], m[5], m[12], m[13]].join(", ") + ")" : "matrix3d(" + m.join(", ") + ")"; }
+      };
+      names.forEach(function (n, i) {
+        Object.defineProperty(g.DOMMatrixReadOnly.prototype, n, { get: function () { return this._m[i]; }, configurable: true });
+      });
+      Object.keys(alias).forEach(function (k) {
+        var i = names.indexOf(alias[k]);
+        Object.defineProperty(g.DOMMatrixReadOnly.prototype, k, { get: function () { return this._m[i]; }, configurable: true });
+      });
+      g.DOMMatrix = class DOMMatrix extends g.DOMMatrixReadOnly {};
+      names.forEach(function (n, i) {
+        Object.defineProperty(g.DOMMatrix.prototype, n, { get: function () { return this._m[i]; }, set: function (v) { this._m[i] = +v || 0; }, configurable: true });
+      });
+      Object.keys(alias).forEach(function (k) {
+        var i = names.indexOf(alias[k]);
+        Object.defineProperty(g.DOMMatrix.prototype, k, { get: function () { return this._m[i]; }, set: function (v) { this._m[i] = +v || 0; }, configurable: true });
+      });
+      ["multiply", "translate", "scale", "rotate"].forEach(function (op) {
+        g.DOMMatrix.prototype[op + "Self"] = function () { this._m = g.DOMMatrixReadOnly.prototype[op].apply(this, arguments)._m; return this; };
+      });
+      g.DOMMatrix.prototype.invertSelf = function () { this._m = this.inverse()._m; return this; };
+      g.WebKitCSSMatrix = g.DOMMatrix;
+    }
     if (!g.PerformanceObserver) {
       g.PerformanceObserver = class PerformanceObserver {
         constructor(cb) { this._cb = cb; }

@@ -39,14 +39,46 @@
     },
   };
 
-  // the one use in linkedom is number formatting without grouping
+  // Intl in English only (QuickJS has no locale data). NumberFormat can be called without new, as in a browser.
   if (!g.Intl) {
-    g.Intl = {
-      NumberFormat: class {
-        constructor(l, o) { this.max = o && o.maximumFractionDigits != null ? o.maximumFractionDigits : 3; }
-        format(n) { return String(+Number(n).toFixed(this.max)); }
-      },
+    var CURRENCIES = { USD: "$", EUR: "€", GBP: "£", JPY: "¥", CNY: "CN¥", INR: "₹", KRW: "₩", CAD: "CA$", AUD: "A$" };
+    var NumberFormat = function NumberFormat(l, o) {
+      if (!(this instanceof NumberFormat)) return new NumberFormat(l, o);
+      o = o || {};
+      this._o = o;
+      this._style = o.style || "decimal";
+      var currencyDigits = o.currency === "JPY" || o.currency === "KRW" ? 0 : 2;
+      var defMin = this._style === "currency" ? currencyDigits : 0;
+      var defMax = this._style === "currency" ? currencyDigits : this._style === "percent" ? 0 : 3;
+      this._min = o.minimumFractionDigits != null ? o.minimumFractionDigits : Math.min(defMin, o.maximumFractionDigits != null ? o.maximumFractionDigits : defMin);
+      this._max = o.maximumFractionDigits != null ? Math.max(o.maximumFractionDigits, this._min) : Math.max(defMax, this._min);
     };
+    NumberFormat.prototype.format = function (n) {
+      n = Number(n);
+      if (n !== n) return "NaN";
+      var o = this._o, neg = n < 0 || Object.is(n, -0) && false;
+      if (!isFinite(n)) return (neg ? "-" : "") + "∞";
+      if (this._style === "percent") n *= 100;
+      var abs = Math.abs(n), suffix = "";
+      if (o.notation === "compact") {
+        var units = [[1e12, "T"], [1e9, "B"], [1e6, "M"], [1e3, "K"]];
+        for (var i = 0; i < units.length; i++) if (abs >= units[i][0]) { abs /= units[i][0]; suffix = units[i][1]; break; }
+        if (!(o.maximumFractionDigits != null)) { var s0 = abs >= 100 || !suffix ? 0 : abs >= 10 ? 0 : 1; abs = +abs.toFixed(s0); }
+      }
+      var fixed = abs.toFixed(Math.min(100, this._max));
+      var parts = fixed.split("."), int = parts[0], frac = parts[1] || "";
+      while (frac.length > this._min && frac.charAt(frac.length - 1) === "0") frac = frac.slice(0, -1);
+      if (o.useGrouping !== false) int = int.replace(/\B(?=(\d{3})+(?!\d))/g, ",");
+      var text = int + (frac ? "." + frac : "") + suffix;
+      if (this._style === "percent") text += "%";
+      if (this._style === "currency") text = (CURRENCIES[o.currency] || (o.currency ? o.currency + " " : "")) + text;
+      if (this._style === "unit" && o.unit) text += " " + o.unit;
+      return (neg && +fixed !== 0 ? "-" : "") + text;
+    };
+    NumberFormat.prototype.formatToParts = function (n) { return [{ type: "literal", value: this.format(n) }]; };
+    NumberFormat.prototype.resolvedOptions = function () { return { locale: "en-US", numberingSystem: "latn", style: this._style, minimumFractionDigits: this._min, maximumFractionDigits: this._max, useGrouping: this._o.useGrouping !== false }; };
+    NumberFormat.supportedLocalesOf = function (l) { return [].concat(l || []); };
+    g.Intl = { NumberFormat: NumberFormat };
   }
   // The rest of Intl that pages touch, in English only (QuickJS has no locale data): enough for a page not to fail
   (function (I) {
@@ -362,7 +394,21 @@
     constructor(u, init) { init = init || {}; this.url = String((u && u.url) || u); this.method = init.method || "GET"; this.headers = new g.Headers(init.headers); }
   };
   g.fetch = function (input, init) {
-    return __host.fetch(String((input && input.url) || input), (init && init.method) || "GET")
+    // the host gets the URL and one string: a plain method, or {m, h, b} JSON when the request has headers or a body
+    var method = String((init && init.method) || (input && input.method) || "GET").toUpperCase(), headers = {}, body = init && init.body;
+    var hs = (init && init.headers) || (input && input.headers);
+    if (hs) {
+      if (typeof hs.forEach === "function" && !Array.isArray(hs)) hs.forEach(function (v, k) { headers[k] = v; });
+      else if (Array.isArray(hs)) hs.forEach(function (e) { headers[e[0]] = e[1]; });
+      else Object.keys(hs).forEach(function (k) { headers[k] = String(hs[k]); });
+    }
+    if (body !== undefined && body !== null && typeof body !== "string") {
+      if (typeof body.toString === "function" && g.URLSearchParams && body instanceof g.URLSearchParams) body = body.toString();
+      else if (body instanceof Uint8Array || body instanceof ArrayBuffer) body = new g.TextDecoder().decode(body);
+      else body = String(body);
+    }
+    var packed = Object.keys(headers).length || (body !== undefined && body !== null) ? JSON.stringify({ m: method, h: headers, b: body === undefined ? null : body }) : method;
+    return __host.fetch(String((input && input.url) || input), packed)
       .then(function (j) { return JSON.parse(j); })
       .then(function (r) {
         var bin = g.atob(r.body), u = new Uint8Array(bin.length);
@@ -374,30 +420,62 @@
   };
 
   // XMLHttpRequest on top of fetch (axios and older libraries)
-  g.XMLHttpRequest = g.XMLHttpRequest || class {
-    constructor() { this.readyState = 0; this.status = 0; this.statusText = ""; this.responseText = ""; this.response = null; this.responseType = ""; this.l = {}; this.h = {}; }
-    open(m, u) { this.m = m; this.u = u; this.set(1); }
-    setRequestHeader() {}
-    getResponseHeader(k) { return this.h[String(k).toLowerCase()] == null ? null : this.h[String(k).toLowerCase()]; }
-    getAllResponseHeaders() { var h = this.h; return Object.keys(h).map(function (k) { return k + ": " + h[k]; }).join("\r\n"); }
-    addEventListener(t, f) { (this.l[t] = this.l[t] || []).push(f); }
-    removeEventListener(t, f) { this.l[t] = (this.l[t] || []).filter(function (x) { return x !== f; }); }
-    set(n) { this.readyState = n; this.emit("readystatechange"); }
-    emit(t) {
-      var e = { type: t, target: this }, h = this["on" + t];
-      if (typeof h === "function") h.call(this, e);
-      (this.l[t] || []).forEach(function (f) { f.call(this, e); }, this);
-    }
-    send() {
-      var x = this;
-      g.fetch(new g.URL(x.u, g.location.href).href, { method: x.m }).then(function (r) {
-        x.status = r.status; x.statusText = r.statusText; r.headers.forEach(function (v, k) { x.h[k] = v; });
-        return r.text();
-      }).then(function (t) {
-        x.responseText = t; x.response = x.responseType === "json" ? JSON.parse(t) : t;
-        x.set(4); x.emit("load"); x.emit("loadend");
-      }, function () { x.set(4); x.emit("error"); x.emit("loadend"); });
-    }
-    abort() {}
-  };
+  g.XMLHttpRequest = g.XMLHttpRequest || (function () {
+    var XHR = class XMLHttpRequest {
+      constructor() {
+        this.readyState = 0; this.status = 0; this.statusText = ""; this.responseText = ""; this.response = null; this.responseType = ""; this.responseURL = "";
+        this.timeout = 0; this.withCredentials = false; this.upload = { addEventListener: function () {}, removeEventListener: function () {} };
+        this.l = {}; this.h = {}; this.rh = {};
+      }
+      open(m, u) { this.m = String(m).toUpperCase(); this.u = String(u); this.rh = {}; this.aborted = false; this.set(1); }
+      setRequestHeader(k, v) { k = String(k); this.rh[k] = this.rh[k] === undefined ? String(v) : this.rh[k] + ", " + v; }
+      overrideMimeType() {}
+      getResponseHeader(k) { return this.h[String(k).toLowerCase()] == null ? null : this.h[String(k).toLowerCase()]; }
+      getAllResponseHeaders() { var h = this.h; return this.readyState < 2 ? "" : Object.keys(h).map(function (k) { return k + ": " + h[k]; }).join("\r\n") + (Object.keys(h).length ? "\r\n" : ""); }
+      addEventListener(t, f) { (this.l[t] = this.l[t] || []).push(f); }
+      removeEventListener(t, f) { this.l[t] = (this.l[t] || []).filter(function (x) { return x !== f; }); }
+      dispatchEvent(e) { this.emit(e.type, e); return true; }
+      set(n) { this.readyState = n; this.emit("readystatechange"); }
+      emit(t, ev) {
+        var e = ev || { type: t, lengthComputable: false, loaded: 0, total: 0 };
+        e.type = t; e.target = this; e.currentTarget = this;
+        var h = this["on" + t];
+        if (typeof h === "function") h.call(this, e);
+        (this.l[t] || []).slice().forEach(function (f) { typeof f === "function" ? f.call(this, e) : f.handleEvent(e); }, this);
+      }
+      send(body) {
+        var x = this, init = { method: x.m, headers: x.rh };
+        if (body != null && x.m !== "GET" && x.m !== "HEAD") init.body = body;
+        var done = false, timer = x.timeout > 0 ? setTimeout(function () { if (!done && !x.aborted) { done = true; x.readyState = 4; x.emit("readystatechange"); x.emit("timeout"); x.emit("loadend"); } }, x.timeout) : null;
+        x.emit("loadstart");
+        g.fetch(new g.URL(x.u, g.location.href).href, init).then(function (r) {
+          if (done || x.aborted) return null;
+          x.status = r.status; x.statusText = r.statusText || ""; x.responseURL = r.url || ""; r.headers.forEach(function (v, k) { x.h[k] = v; });
+          x.set(2); x.set(3);
+          return x.responseType === "arraybuffer" ? r.arrayBuffer() : x.responseType === "blob" ? r.blob() : r.text();
+        }).then(function (t) {
+          if (t === null || done || x.aborted) return;
+          done = true; if (timer) clearTimeout(timer);
+          if (x.responseType === "arraybuffer" || x.responseType === "blob") x.response = t;
+          else {
+            x.responseText = t;
+            try { x.response = x.responseType === "json" ? JSON.parse(t) : t; } catch (e) { x.response = null; }
+          }
+          x.set(4); x.emit("load"); x.emit("loadend");
+        }, function () {
+          if (done || x.aborted) return;
+          done = true; if (timer) clearTimeout(timer);
+          x.set(4); x.emit("error"); x.emit("loadend");
+        });
+      }
+      abort() {
+        if (this.readyState === 0 || this.aborted) return;
+        this.aborted = true; this.status = 0;
+        if (this.readyState !== 4) { this.readyState = 4; this.emit("readystatechange"); this.emit("abort"); this.emit("loadend"); }
+        this.readyState = 0;
+      }
+    };
+    [["UNSENT", 0], ["OPENED", 1], ["HEADERS_RECEIVED", 2], ["LOADING", 3], ["DONE", 4]].forEach(function (e) { XHR[e[0]] = e[1]; XHR.prototype[e[0]] = e[1]; });
+    return XHR;
+  })();
 })(globalThis);
