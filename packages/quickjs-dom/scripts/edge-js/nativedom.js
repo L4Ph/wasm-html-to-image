@@ -877,7 +877,7 @@
       this.setAttribute("selected", "");
     } else this.removeAttribute("selected");
   });
-  getter(P.HTMLOptionElement, "defaultSelected", function () { return this.hasAttribute("selected"); });
+  getter(P.HTMLOptionElement, "defaultSelected", function () { return this.hasAttribute("selected"); }, function (v) { if (v) this.setAttribute("selected", ""); else this.removeAttribute("selected"); });
 
   // on<event> properties (onclick, oninput, ...): a handler you set, or the one the on<event> attribute holds. Code asks
   // "'oninput' in document" to find out which events exist (React does), so every event is listed.
@@ -918,7 +918,12 @@
     var select = this;
     return liveCollection(function () { return Array.prototype.slice.call(select.querySelectorAll("option")); }, false, "HTMLOptionsCollection");
   });
-  getter(P.HTMLSelectElement, "length", function () { return this.querySelectorAll("option").length; });
+  getter(P.HTMLSelectElement, "length", function () { return this.querySelectorAll("option").length; }, function (n) {
+    var opts = this.querySelectorAll("option");
+    n = n >>> 0;
+    for (var i = opts.length - 1; i >= n; i--) opts[i].remove();
+    for (var j = opts.length; j < n; j++) this.appendChild(this.ownerDocument.createElement("option"));
+  });
   getter(P.HTMLSelectElement, "selectedIndex", function () {
     var opts = this.querySelectorAll("option");
     for (var i = 0; i < opts.length; i++) if (opts[i].hasAttribute("selected")) return i;
@@ -1232,6 +1237,48 @@
   };
   [P.Element, P.Document, P.DocumentFragment].forEach(function (p) { liveGetter(p, "children"); });
   liveGetter(P.Node, "childNodes");
+  var equalNodes = function (a, b) {
+    if (a === b) return true;
+    if (!a || !b || a.nodeType !== b.nodeType) return false;
+    var t = a.nodeType;
+    if (t === 10) { if (a.name !== b.name || a.publicId !== b.publicId || a.systemId !== b.systemId) return false; }
+    else if (t === 1) {
+      if (a.namespaceURI !== b.namespaceURI || a.prefix !== b.prefix || a.localName !== b.localName || a.attributes.length !== b.attributes.length) return false;
+      for (var i = 0; i < a.attributes.length; i++) {
+        var x = a.attributes[i];
+        if (b.getAttributeNS(x.namespaceURI, x.localName) !== x.value || !b.hasAttributeNS(x.namespaceURI, x.localName)) return false;
+      }
+    } else if (t === 7) { if (a.target !== b.target || a.data !== b.data) return false; }
+    else if (t === 3 || t === 8 || t === 4) { if (a.data !== b.data) return false; }
+    var ca = a.childNodes, cb = b.childNodes;
+    if (ca.length !== cb.length) return false;
+    for (var j = 0; j < ca.length; j++) if (!equalNodes(ca[j], cb[j])) return false;
+    return true;
+  };
+  def(P.Node, "isEqualNode", function (other) { return other != null && equalNodes(this, other); });
+  def(P.Node, "isSameNode", function (other) { return this === other; });
+  def(P.Node, "lookupNamespaceURI", function (prefix) {
+    prefix = prefix || null;
+    for (var n = this.nodeType === 9 ? this.documentElement : this; n && n.nodeType === 1; n = n.parentNode) {
+      if (n.namespaceURI && n.prefix === prefix) return n.namespaceURI;
+      var attrs = n.attributes;
+      for (var i = 0; i < attrs.length; i++) {
+        var at = attrs[i];
+        if (at.namespaceURI === "http://www.w3.org/2000/xmlns/" && ((prefix === null && at.name === "xmlns") || (at.prefix === "xmlns" && at.localName === prefix))) return at.value || null;
+      }
+    }
+    return null;
+  });
+  def(P.Node, "lookupPrefix", function (ns) {
+    if (!ns) return null;
+    for (var n = this.nodeType === 9 ? this.documentElement : this; n && n.nodeType === 1; n = n.parentNode) {
+      if (n.namespaceURI === ns && n.prefix) return n.prefix;
+      var attrs = n.attributes;
+      for (var i = 0; i < attrs.length; i++) if (attrs[i].prefix === "xmlns" && attrs[i].value === ns) return attrs[i].localName;
+    }
+    return null;
+  });
+  def(P.Node, "isDefaultNamespace", function (ns) { return (ns || null) === this.lookupNamespaceURI(null); });
   getter(P.Node, "baseURI", function () {
     var doc = this.nodeType === 9 ? this : this.ownerDocument;
     var page = globalThis.location ? globalThis.location.href : "";
@@ -2760,6 +2807,7 @@
     reflectString(P.HTMLTableCellElement, "scope", "scope");
     reflectString(P.HTMLTableCellElement, "headers", "headers");
     reflectString(P.HTMLMetaElement, "httpEquiv", "http-equiv");
+    reflectString(P.HTMLMetaElement, "content", "content");
     reflectString(P.HTMLBodyElement, "background", "background");
     // relList: the rel attribute as a token list
     var RL = Symbol("relList");

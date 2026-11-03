@@ -739,6 +739,41 @@
       return r;
     });
   };
+  // constructable sheets (new CSSStyleSheet(), replaceSync, adoptedStyleSheets): they hold rules but do not enter the cascade
+  if (!g.CSSStyleSheet) {
+    g.CSSStyleRule = CSSStyleRule;
+    g.CSSStyleSheet = class CSSStyleSheet {
+      constructor(opts) { this._text = ""; this.media = (opts && opts.media) || ""; this.disabled = !!(opts && opts.disabled); this.ownerNode = null; this.parentStyleSheet = null; this.href = null; this.type = "text/css"; this.title = null; }
+      get cssRules() { return parseSheetFlat(this._text); }
+      get rules() { return this.cssRules; }
+      replaceSync(text) { this._text = String(text); }
+      replace(text) { this._text = String(text); return Promise.resolve(this); }
+      insertRule(rule, index) {
+        var list = splitRules(stripComments(this._text));
+        index = index === undefined ? 0 : index;
+        if (index < 0 || index > list.length) throw domErr("IndexSizeError", "Failed to execute 'insertRule' on 'CSSStyleSheet': the index " + index + " is greater than the length of the rule list.");
+        list.splice(index, 0, String(rule));
+        this._text = list.join("\n");
+        return index;
+      }
+      deleteRule(index) {
+        var list = splitRules(stripComments(this._text));
+        if (index < 0 || index >= list.length) throw domErr("IndexSizeError", "Failed to execute 'deleteRule' on 'CSSStyleSheet': the index " + index + " is greater than the length of the rule list.");
+        list.splice(index, 1);
+        this._text = list.join("\n");
+      }
+    };
+  }
+  var adoptTargets = [D.ctors && D.ctors.Document, D.ctors && D.ctors.ShadowRoot, g.ShadowRoot];
+  adoptTargets.forEach(function (c) {
+    var p = c && c.prototype;
+    if (!p || Object.getOwnPropertyDescriptor(p, "adoptedStyleSheets")) return;
+    Object.defineProperty(p, "adoptedStyleSheets", {
+      configurable: true,
+      get: function () { return this.__adopted || (this.__adopted = []); },
+      set: function (v) { this.__adopted = Array.prototype.slice.call(v); },
+    });
+  });
   var docProto = D.ctors && D.ctors.Document && D.ctors.Document.prototype;
   if (docProto && !Object.getOwnPropertyDescriptor(docProto, "styleSheets")) {
     Object.defineProperty(docProto, "styleSheets", { configurable: true, get: function () { return sheetsOf(this); } });

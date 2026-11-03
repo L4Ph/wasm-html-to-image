@@ -758,3 +758,21 @@ describe("platform odds and ends", () => {
     }
   });
 });
+
+describe("streams and constructable sheets", () => {
+  it("ReadableStream / TransformStream / TextEncoderStream and CSSStyleSheet", async () => {
+    expect(
+      await dom.eval(`(async function () {
+        var out = [];
+        var r = new ReadableStream({ start(c) { c.enqueue("a"); c.enqueue("b"); c.close(); } }).getReader();
+        out.push((await r.read()).value, (await r.read()).value, (await r.read()).done);
+        var t = new ReadableStream({ start(c) { c.enqueue("héllo"); c.close(); } }).pipeThrough(new TextEncoderStream()).pipeThrough(new TextDecoderStream());
+        var s = ""; for await (var ch of t) s += ch; out.push(s);
+        var sh = new CSSStyleSheet(); sh.replaceSync("a{color:red} .b{margin:0}");
+        document.adoptedStyleSheets = [sh];
+        out.push(sh.cssRules.length, sh.cssRules[0].selectorText, document.adoptedStyleSheets.length);
+        return JSON.stringify(out);
+      })()`),
+    ).toBe(JSON.stringify(["a", "b", true, "héllo", 2, "a", 1]));
+  });
+});

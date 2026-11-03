@@ -101,3 +101,21 @@ describe("tables and selects", () => {
     });
   });
 });
+
+describe("setters the sites assign through", () => {
+  it("meta.content, option.defaultSelected, select.length are writable; isEqualNode compares like jsdom", () => {
+    same(
+      '<body><meta id=m name=a content=b><select id=s><option>1<option selected>2</select><div id=a class=x><b>t</b></div><div id=b class=x><b>t</b></div><div id=c class=y><b>t</b></div></body>',
+      (w) => {
+        const d = w.document;
+        const m = d.getElementById("m"), s = d.getElementById("s");
+        m.content = "z";
+        s.options[0].defaultSelected = true;
+        s.length = 3;
+        const a = d.getElementById("a");
+        return [m.getAttribute("content"), s.options[0].hasAttribute("selected"), s.length,
+          a.isEqualNode(d.getElementById("b")), a.isEqualNode(d.getElementById("c")), a.isSameNode(a), a.isEqualNode(null)];
+      },
+    );
+  });
+});
