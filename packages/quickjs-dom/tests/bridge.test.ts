@@ -37,6 +37,14 @@ describe("bridge: objects of the page from the host", () => {
     expect(a.ELEMENT_NODE).toBe(1);
   });
 
+  it("exposes DOMTokenList for classList", () => {
+    const a = w.document.getElementById("a");
+    expect(typeof w.DOMTokenList).toBe("function");
+    expect(a.classList instanceof w.DOMTokenList).toBe(true);
+    expect(a.classList.constructor.name).toBe("DOMTokenList");
+    expect(() => new w.DOMTokenList()).toThrow(TypeError);
+  });
+
   it("gives the same wrapper for the same node", () => {
     const d = w.document;
     expect(d.getElementById("a")).toBe(d.getElementById("a"));

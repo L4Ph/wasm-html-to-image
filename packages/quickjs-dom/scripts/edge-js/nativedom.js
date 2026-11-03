@@ -1732,6 +1732,10 @@
   W.HTMLFormControlsCollection = function HTMLFormControlsCollection() { illegal(); };
   Object.setPrototypeOf(W.HTMLFormControlsCollection.prototype, W.HTMLCollection.prototype);
   W.NamedNodeMap = function NamedNodeMap() { illegal(); };
+  // classList (and relList) objects are TokenList instances; the DOMTokenList name is the public one
+  W.DOMTokenList = function DOMTokenList() { illegal(); };
+  W.DOMTokenList.prototype = TokenList.prototype;
+  Object.defineProperty(TokenList.prototype, "constructor", { value: W.DOMTokenList, writable: true, configurable: true });
   W.NodeFilter = { FILTER_ACCEPT: 1, FILTER_REJECT: 2, FILTER_SKIP: 3, SHOW_ALL: 0xFFFFFFFF, SHOW_ELEMENT: 1, SHOW_ATTRIBUTE: 2, SHOW_TEXT: 4, SHOW_CDATA_SECTION: 8, SHOW_COMMENT: 128, SHOW_DOCUMENT: 256 };
   // ---- what user interaction needs: focus, the activation behaviour of a click, the selection of a text control, labels,
   // Range and Selection. (Ranges are not adjusted when the tree changes under them.)
