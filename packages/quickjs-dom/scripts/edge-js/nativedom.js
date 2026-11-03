@@ -1014,6 +1014,8 @@
       get referenceNode() { return cur || root; },
       pointerBeforeReference: false,
       nextNode: function () {
+        // without a filter the mask in C decides, in one call
+        if (!filter && cur !== null) { var m = following(cur, root, false, what); if (m) cur = m; return m; }
         for (var n = cur === null ? root : following(cur, root, false, what); n; n = following(n, root, false, what)) if (verdict(n, what, filter) === 1) { cur = n; return n; }
         return null;
       },
@@ -1029,6 +1031,7 @@
     var w = { root: root, whatToShow: what, filter: filter || null, currentNode: root };
     var ok = function (n) { return verdict(n, what, filter); };
     var walkNext = function () {
+      if (!filter) { var m = following(w.currentNode, root, false, what); if (m) w.currentNode = m; return m; }
       var n = w.currentNode, skip = false;
       for (;;) {
         n = following(n, root, skip, what);
