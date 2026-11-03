@@ -737,4 +737,64 @@
   // events leave a shadow tree through its host
   var plainParent = parentOf;
   parentOf = function (n) { return n.parentNode || (n.nodeType === 11 && n.host) || plainParent(n); };
+
+  // HTMLCollection / NodeList are live: a read-through proxy that re-reads the C answer when any tree or attribute
+  // has changed since (D.version()). It is not an Array (as in a browser) but has the length, indices, item,
+  // namedItem and the array methods.
+  var liveCollection = function (compute) {
+    var cache = null, ver = -1;
+    var arr = function () {
+      var v = D.version();
+      if (v !== ver || !cache) { cache = compute(); ver = v; }
+      return cache;
+    };
+    return new Proxy({}, {
+      get: function (_, k) {
+        if (k === "item") return function (i) { return arr()[i] || null; };
+        if (k === "namedItem") return function (name) {
+          var a = arr();
+          for (var i = 0; i < a.length; i++) if (a[i].getAttribute && (a[i].getAttribute("id") === name || a[i].getAttribute("name") === name)) return a[i];
+          return null;
+        };
+        var a2 = arr(), v2 = a2[k];
+        return typeof v2 === "function" ? v2.bind(a2) : v2;
+      },
+      has: function (_, k) { return k in arr(); },
+      ownKeys: function () { return Reflect.ownKeys(arr()).filter(function (k) { return k !== "length"; }); },
+      getOwnPropertyDescriptor: function (_, k) {
+        if (k === "length") return undefined;
+        var d = Object.getOwnPropertyDescriptor(arr(), k);
+        if (d) d.configurable = true;
+        return d;
+      },
+    });
+  };
+  var LIVE = Symbol("live");
+  var liveGetter = function (proto, name) {
+    var d = Object.getOwnPropertyDescriptor(proto, name);
+    if (!d || !d.get) return;
+    var get = d.get, key = Symbol(name);
+    Object.defineProperty(proto, name, {
+      get: function () {
+        var self = this;
+        return this[key] || Object.defineProperty(this, key, { value: liveCollection(function () { return get.call(self); }) })[key];
+      },
+      configurable: true,
+    });
+  };
+  [P.Element, P.Document, P.DocumentFragment].forEach(function (p) { liveGetter(p, "children"); });
+  liveGetter(P.Node, "childNodes");
+  var liveMethod = function (proto, name) {
+    var d = Object.getOwnPropertyDescriptor(proto, name);
+    if (!d || typeof d.value !== "function") return;
+    var orig = d.value;
+    Object.defineProperty(proto, name, {
+      value: function (arg) {
+        var self = this;
+        return liveCollection(function () { return orig.call(self, arg); });
+      },
+      writable: true, configurable: true,
+    });
+  };
+  [P.Element, P.Document, P.DocumentFragment].forEach(function (p) { liveMethod(p, "getElementsByTagName"); liveMethod(p, "getElementsByClassName"); });
 })();

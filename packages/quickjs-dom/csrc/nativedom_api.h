@@ -455,6 +455,7 @@ static JSValue js_nd_remove_attribute(JSContext *ctx, JSValueConst this_val, int
     if (!name) return JS_EXCEPTION;
     NAttr *a = nd_find_attr(n, name, len);
     if (a) {
+        nd_version++;
         free(a->name);
         free(a->val);
         memmove(a, a + 1, sizeof(NAttr) * (size_t)(n->nattrs - (int)(a - n->attrs) - 1));
@@ -662,6 +663,7 @@ static JSValue js_dom_serialize(JSContext *ctx, JSValueConst this_val, int argc,
 }
 
 /* for tests: how many nodes are alive, and a garbage collection to free the unreachable ones */
+static JSValue js_dom_version(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { return JS_NewInt64(ctx, nd_version); }
 static JSValue js_dom_live(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;
     (void)argc;
@@ -836,6 +838,7 @@ static void nd_register(JSContext *c, JSValueConst native) {
     JS_SetPropertyStr(c, dom, "ctors", ctors);
     JS_SetPropertyStr(c, dom, "protos", protos);
     JS_SetPropertyStr(c, dom, "serialize", JS_NewCFunction(c, js_dom_serialize, "serialize", 1));
+    JS_SetPropertyStr(c, dom, "version", JS_NewCFunction(c, js_dom_version, "version", 0));
     JS_SetPropertyStr(c, dom, "liveNodes", JS_NewCFunction(c, js_dom_live, "liveNodes", 0));
     JS_SetPropertyStr(c, dom, "gc", JS_NewCFunction(c, js_dom_gc, "gc", 0));
     JS_SetPropertyStr(c, dom, "createDocument", JS_NewCFunction(c, js_dom_create_document, "createDocument", 0));

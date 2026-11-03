@@ -453,3 +453,17 @@ describe("native DOM: selectors against linkedom", () => {
     ).toEqual([true, true, true, 4, 1, "SyntaxError"]);
   });
 });
+
+describe("native DOM: live collections", () => {
+  it("children, childNodes and getElementsBy* follow later changes", async () => {
+    expect(
+      await run(`
+        var root = d.createElement("div"), kids = root.children, nodes = root.childNodes, ps = root.getElementsByTagName("p"), cs = root.getElementsByClassName("c");
+        var before = [kids.length, nodes.length, ps.length, cs.length];
+        var p = d.createElement("p"); p.className = "c"; root.appendChild(p); root.appendChild(d.createTextNode("t"));
+        var mid = [kids.length, nodes.length, ps.length, cs.length, kids[0] === p, kids.item(0) === p, kids.item(5), Array.isArray(kids), Array.from(kids).length, root.children === kids];
+        p.className = ""; var cls = cs.length; root.removeChild(p);
+        return [before, mid, cls, kids.length, ps.length, [].slice.call(nodes).length, Object.keys(nodes).join()];`),
+    ).toEqual([[0, 0, 0, 0], [1, 2, 1, 1, true, true, null, false, 1, true], 0, 0, 0, 1, "0"]);
+  });
+});

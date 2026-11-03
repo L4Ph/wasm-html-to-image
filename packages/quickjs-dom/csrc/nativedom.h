@@ -31,6 +31,7 @@ typedef struct {
 enum { NP_ELEMENT, NP_TEXT, NP_COMMENT, NP_DOCUMENT, NP_FRAGMENT, NP_DOCTYPE, NP_COUNT };
 
 static JSClassID nd_class_id;
+static long nd_version; /* bumped by every change to a tree or an attribute: live collections re-read when it moves */
 static long nd_live; /* nodes alive: tests check that dropped trees are really freed */
 static JSValue nd_protos[NP_COUNT];
 
@@ -100,6 +101,7 @@ static JSValue nd_new(JSContext *c, JSValueConst owner, int type, const char *ta
 }
 
 static void nd_set_attr(ND *n, const char *name, size_t nlen, const char *val, size_t vlen) {
+    nd_version++;
     for (int i = 0; i < n->nattrs; i++) {
         if ((size_t)n->attrs[i].nlen == nlen && memcmp(n->attrs[i].name, name, nlen) == 0) {
             free(n->attrs[i].val);
@@ -131,6 +133,7 @@ static NAttr *nd_find_attr(ND *n, const char *name, size_t nlen) {
 /* ---- tree edits ---- */
 
 static void nd_unlink(JSContext *c, JSValueConst obj) {
+    nd_version++;
     ND *n = nd_of(obj);
     if (JS_IsNull(n->parent)) return;
     ND *p = nd_of(n->parent);
@@ -159,6 +162,7 @@ static void nd_unlink(JSContext *c, JSValueConst obj) {
 /* insert `child` into `parent` before `ref` (null: at the end) */
 static void nd_insert(JSContext *c, JSValueConst parent, JSValueConst child, JSValueConst ref) {
     ND *p = nd_of(parent), *ch = nd_of(child);
+    nd_version++;
     nd_unlink(c, child);
     ch->parent = JS_DupValue(c, parent);
     if (JS_IsNull(ref) || JS_IsUndefined(ref)) {
