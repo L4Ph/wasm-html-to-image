@@ -41,7 +41,7 @@
       var parent = Object.getPrototypeOf(proto);
       return {
         n: name, p: protoNames.get(parent) || null, props: props, consts: consts, st: statics,
-        it: Object.prototype.hasOwnProperty.call(proto, Symbol.iterator), ix: INDEXED.indexOf(name) >= 0,
+        it: Object.prototype.hasOwnProperty.call(proto, Symbol.iterator) || INDEXED.indexOf(name) >= 0, ix: INDEXED.indexOf(name) >= 0,
       };
     });
   };
@@ -55,13 +55,44 @@
     return null;
   };
 
-  var handle = function (v, fn) {
+  var idFor = function (v) {
     var id = byObj.get(v);
     if (id === undefined) {
       id = free.length ? free.pop() : byId.length;
       byObj.set(v, id); byId[id] = v; sent[id] = 0; live++;
     }
     sent[id]++;
+    return id;
+  };
+  var infos = []; // id -> the handle in the string form of an answer (see reply)
+  var SEP = "\u0001";
+  var infoOf = function (v, id) {
+    var cls = classOf(v);
+    if (!cls) return null;
+    var s = "h" + id + SEP + cls + SEP;
+    if (typeof v.nodeType === "number") {
+      s += v.nodeType + SEP + v.nodeName;
+      if (v.nodeType === 1) s += SEP + v.localName + SEP + v.tagName;
+    }
+    return s;
+  };
+  // the handle of an object whose class is known, as a string; null for anything else
+  var handleString = function (v) {
+    var id = byObj.get(v);
+    if (id !== undefined && infos[id] !== undefined) { sent[id]++; return infos[id]; }
+    if (v === g || typeof v === "function") return null;
+    id = idFor(v);
+    var s = infoOf(v, id);
+    if (s === null) {
+      sent[id]--;
+      if (sent[id] === 0) { byObj.delete(v); byId[id] = undefined; free.push(id); live--; }
+      return null;
+    }
+    infos[id] = s;
+    return s;
+  };
+  var handle = function (v, fn) {
+    var id = idFor(v);
     var out = { $: "h", i: id };
     if (fn) out.c = "Function";
     else if (v === g) out.c = "Window";
@@ -154,11 +185,10 @@
   var decAll = function (list) { return list.map(dec); };
 
   // An answer is a string whose first character says what follows: s string, n number, T/F/N/U true, false, null,
-  // undefined, h a handle (id, class, nodeType, nodeName apart by ), j encoded JSON, k plain JSON, x an error.
-  // A request is "g<id><key>" (read), "s<id><key><value>" (write), "c<id><key><args>"
+  // undefined, h a handle (id, class, nodeType, nodeName apart by \u0001), j encoded JSON, k plain JSON, x an error.
+  // A request is "g<id>\u0001<key>" (read), "s<id>\u0001<key>\u0001<value>" (write), "c<id>\u0001<key>\u0001<args>"
   // (method call), or "J" and a JSON array [op, ...]. The first three are what the host does all day: no JSON in them
   // unless a value needs it.
-  var SEP = "";
   var Raw = function (s) { this.s = s; };
   var reply = function (v) {
     switch (typeof v) {
@@ -169,11 +199,27 @@
       default:
         if (v === null) return "N";
         if (v instanceof Raw) return v.s;
+        if (Array.isArray(v)) {
+          // a list of objects of known classes (the nodes of a query) goes as their handles, one after the other
+          var parts = [];
+          for (var i = 0; i < v.length; i++) {
+            var item = v[i], s = item !== null && typeof item === "object" && !Array.isArray(item) && !(item instanceof Date) ? handleString(item) : null;
+            if (s === null) { for (var j = 0; j < parts.length; j++) release1(parts[j]); parts = null; break; }
+            parts.push(s);
+          }
+          if (parts) return "a" + parts.join("\u0002");
+          return "j" + JSON.stringify(enc(v));
+        }
+        if (!(v instanceof Date)) {
+          var hs = handleString(v);
+          if (hs !== null) return hs;
+        }
         var e = enc(v);
         if (e !== null && typeof e === "object" && e.$ === "h") return "h" + e.i + SEP + (e.c || "") + SEP + (e.t === undefined ? "" : e.t) + SEP + (e.n || "");
         return "j" + JSON.stringify(e);
     }
   };
+  var release1 = function (s) { var id = +s.slice(1, s.indexOf(SEP)); if (sent[id] > 0) sent[id]--; };
   var json = function (v) { return new Raw("k" + JSON.stringify(v)); }; // plain data, not to be decoded
 
   var ops = {
@@ -185,13 +231,19 @@
     apply: function (r) { return target(r[1]).apply(dec(r[2]), decAll(r[3])); },
     "new": function (r) { return Reflect.construct(ctorOf(r[1]), decAll(r[2])); },
     array: function (r) { return Array.from(target(r[1])); },
+    // the children of a node (r[2]: elements only), without making the page build a live collection for them
+    kids: function (r) {
+      var out = [], n = target(r[1]);
+      for (var c = n.firstChild; c; c = c.nextSibling) if (!r[2] || c.nodeType === 1) out.push(c);
+      return out;
+    },
     release: function (r) {
       r[1].forEach(function (e) {
         var id = e[0], o = byId[id];
         if (o === undefined) return;
         var left = sent[id] - e[1];
         if (left > 0) { sent[id] = left; return; }
-        byObj.delete(o); byId[id] = undefined; sent[id] = 0; free.push(id); live--;
+        byObj.delete(o); byId[id] = undefined; infos[id] = undefined; sent[id] = 0; free.push(id); live--;
       });
       return null;
     },
@@ -204,6 +256,11 @@
     return f.apply(o, args);
   };
 
+  // for the fast path in C (qd_rpc): the handle table, how an object is answered, how an error is
+  g.__byId = byId;
+  g.__reply = reply;
+  g.__rpcError = function (e) { return "x" + JSON.stringify(errorInfo(e)); };
+
   g.__rpc = function (s) {
     try {
       var c = s.charCodeAt(0), i = s.indexOf(SEP), j;
@@ -211,7 +268,8 @@
       if (c === 99) { // c
         j = s.indexOf(SEP, i + 1);
         var a = s.slice(j + 1);
-        return reply(callMethod(+s.slice(1, i), s.slice(i + 1, j), a ? decAll(JSON.parse(a)) : []));
+        // "\u0003" and strings apart by "\u0002", or a JSON array
+        return reply(callMethod(+s.slice(1, i), s.slice(i + 1, j), a ? (a.charCodeAt(0) === 3 ? a.slice(1).split("\u0002") : decAll(JSON.parse(a))) : []));
       }
       if (c === 115) { // s
         j = s.indexOf(SEP, i + 1);

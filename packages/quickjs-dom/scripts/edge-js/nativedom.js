@@ -765,14 +765,15 @@
   // HTMLCollection / NodeList are live: a read-through proxy that re-reads the C answer when any tree or attribute
   // has changed since (D.version()). It is not an Array (as in a browser) but has the length, indices, item,
   // namedItem and the array methods.
-  var liveCollection = function (compute, named) {
+  var liveCollection = function (compute, named, kind) {
     var cache = null, ver = -1;
     var arr = function () {
       var v = D.version();
       if (v !== ver || !cache) { cache = compute(); ver = v; }
       return cache;
     };
-    return new Proxy({}, {
+    var kindProto = kind && W[kind] && W[kind].prototype;
+    return new Proxy(kindProto ? Object.create(kindProto) : {}, {
       get: function (_, k) {
         if (k === "item") return function (i) { return arr()[i] || null; };
         if (k === "namedItem") return function (name) {
@@ -877,12 +878,12 @@
   var CONTROLS = "input, select, textarea, button, fieldset, object, output";
   getter(P.HTMLFormElement, "elements", function () {
     var form = this;
-    return liveCollection(function () { return Array.prototype.slice.call(form.querySelectorAll(CONTROLS)); }, true);
+    return liveCollection(function () { return Array.prototype.slice.call(form.querySelectorAll(CONTROLS)); }, true, "HTMLFormControlsCollection");
   });
   getter(P.HTMLFormElement, "length", function () { return this.querySelectorAll(CONTROLS).length; });
   getter(P.HTMLSelectElement, "options", function () {
     var select = this;
-    return liveCollection(function () { return Array.prototype.slice.call(select.querySelectorAll("option")); });
+    return liveCollection(function () { return Array.prototype.slice.call(select.querySelectorAll("option")); }, false, "HTMLOptionsCollection");
   });
   getter(P.HTMLSelectElement, "length", function () { return this.querySelectorAll("option").length; });
   getter(P.HTMLSelectElement, "selectedIndex", function () {
@@ -980,7 +981,7 @@
     Object.defineProperty(proto, name, {
       get: function () {
         var self = this;
-        return this[key] || Object.defineProperty(this, key, { value: liveCollection(function () { return get.call(self); }) })[key];
+        return this[key] || Object.defineProperty(this, key, { value: liveCollection(function () { return get.call(self); }, false, name === "childNodes" ? "NodeList" : "HTMLCollection") })[key];
       },
       configurable: true,
     });
@@ -994,7 +995,7 @@
     Object.defineProperty(proto, name, {
       value: function (arg) {
         var self = this;
-        return liveCollection(function () { return orig.call(self, arg); });
+        return liveCollection(function () { return orig.call(self, arg); }, false, "HTMLCollection");
       },
       writable: true, configurable: true,
     });
@@ -1323,7 +1324,7 @@
       Object.defineProperty(list, "removeNamedItem", { value: function (n) { var at = el.getAttributeNode(n); if (at) el.removeAttribute(n); return at; } });
       Object.defineProperty(list, "setNamedItem", { value: function (at) { return el.setAttributeNode(at); } });
       return list;
-    }) })[ATTRS];
+    }, false, "NamedNodeMap") })[ATTRS];
   });
   // document.title is the text of the first <title>
   getter(P.Document, "title", function () {
@@ -1341,6 +1342,11 @@
   var NodeList = function NodeList() { illegal(); };
   W.NodeList = NodeList;
   W.HTMLCollection = function HTMLCollection() { illegal(); };
+  W.HTMLOptionsCollection = function HTMLOptionsCollection() { illegal(); };
+  Object.setPrototypeOf(W.HTMLOptionsCollection.prototype, W.HTMLCollection.prototype);
+  W.HTMLFormControlsCollection = function HTMLFormControlsCollection() { illegal(); };
+  Object.setPrototypeOf(W.HTMLFormControlsCollection.prototype, W.HTMLCollection.prototype);
+  W.NamedNodeMap = function NamedNodeMap() { illegal(); };
   W.NodeFilter = { FILTER_ACCEPT: 1, FILTER_REJECT: 2, FILTER_SKIP: 3, SHOW_ALL: 0xFFFFFFFF, SHOW_ELEMENT: 1, SHOW_ATTRIBUTE: 2, SHOW_TEXT: 4, SHOW_CDATA_SECTION: 8, SHOW_COMMENT: 128, SHOW_DOCUMENT: 256 };
   // ---- what user interaction needs: focus, the activation behaviour of a click, the selection of a text control, labels,
   // Range and Selection. (Ranges are not adjusted when the tree changes under them.)
@@ -1386,14 +1392,18 @@
   });
 
   // labels and the control of a label
+  // the labels of a control: those whose for= is its id, and the label it is inside of (in tree order)
+  var cssQuote = function (v) {
+    var bs = String.fromCharCode(92);
+    return '"' + v.split(bs).join(bs + bs).split('"').join(bs + '"') + '"';
+  };
   var labelsOf = function (el) {
-    var id = el.getAttribute("id"), all = [], root = el.getRootNode();
-    var labels = root.querySelectorAll("label");
-    for (var i = 0; i < labels.length; i++) {
-      var l = labels[i], f = l.getAttribute("for");
-      if (f !== null ? (id !== null && f === id) : l.contains(el) && controlOf(l) === el) all.push(l);
-    }
-    return all;
+    var id = el.getAttribute("id"), out = [];
+    if (id) out = Array.prototype.slice.call(el.getRootNode().querySelectorAll("label[for=" + cssQuote(id) + "]"));
+    var wrap = el.closest("label");
+    if (wrap && !wrap.hasAttribute("for") && out.indexOf(wrap) < 0 && controlOf(wrap) === el) out.push(wrap);
+    if (out.length > 1) out.sort(function (a, b) { return a.compareDocumentPosition(b) & 4 ? -1 : 1; });
+    return out;
   };
   var LABELABLE = "input, select, textarea, button, meter, output, progress";
   var controlOf = function (label) {
@@ -1406,9 +1416,10 @@
     return inner && !(inner.localName === "input" && inner.getAttribute("type") === "hidden") ? inner : null;
   };
   ["HTMLInputElement", "HTMLSelectElement", "HTMLTextAreaElement", "HTMLButtonElement"].forEach(function (name) {
+    var LABELS = Symbol("labels");
     getter(P[name], "labels", function () {
       var el = this;
-      return liveCollection(function () { return labelsOf(el); });
+      return el[LABELS] || Object.defineProperty(el, LABELS, { value: liveCollection(function () { return labelsOf(el); }, false, "NodeList") })[LABELS];
     });
   });
   getter(P.HTMLLabelElement, "control", function () { return controlOf(this); });

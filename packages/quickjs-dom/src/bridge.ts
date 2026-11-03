@@ -32,7 +32,30 @@ interface Cell {
   count: number;
   t?: number;
   n?: string;
+  /** localName and tagName of an element: they never change, so they come with the handle. */
+  l?: string;
+  g?: string;
+  /** childNodes and children of this node, as the host has made them (one object each, so it is the same every time). */
+  cols?: Record<string, object>;
 }
+
+/** A handle as the guest sends it. */
+interface Handle {
+  i: number;
+  c?: string;
+  t?: number;
+  n?: string;
+  l?: string;
+  g?: string;
+}
+
+/** Methods that only read: what they answer holds until something that is not one of these runs. */
+const PURE_CALLS = new Set([
+  "matches", "closest", "contains", "getAttribute", "getAttributeNS", "hasAttribute", "hasAttributeNS", "getAttributeNames", "hasAttributes",
+  "querySelector", "querySelectorAll", "getElementsByTagName", "getElementsByClassName", "getElementsByName", "getElementById",
+  "compareDocumentPosition", "getRootNode", "isSameNode", "isEqualNode", "hasChildNodes", "getBoundingClientRect", "getClientRects",
+  "item", "namedItem", "lookupNamespaceURI", "lookupPrefix", "isDefaultNamespace", "toString",
+]);
 
 const HANDLE = Symbol("wasm-quickjs-dom.handle");
 const CLASS_NAME = Symbol("wasm-quickjs-dom.class");
@@ -61,6 +84,10 @@ export class Bridge {
   private released: [number, number][] = [];
   // wrappers the host put its own properties on: they stay until the bridge is disposed
   private readonly pinned = new Set<object>();
+  // What reads answered since the page last ran code of its own. Reading a property or calling a pure method again
+  // gives the same answer until the page changes (a write, any other call, a job or timer, a listener of the host's
+  // that ran): the cache is dropped then.
+  private readonly reads = new Map<string, unknown>();
   // functions of the host that the page holds: id <-> function
   private readonly fnIds = new Map<Function, number>();
   private readonly fnById = new Map<number, Function>();
@@ -92,6 +119,11 @@ export class Bridge {
     return this.sendJ(["live"]) as number;
   }
 
+  /** The page may have changed: forget what was read. (Called by whoever ran code in the page.) */
+  invalidate(): void {
+    if (this.reads.size) this.reads.clear();
+  }
+
   /** Collect the handles of wrappers that were garbage collected (they are sent with the next call anyway). */
   flush(): void {
     this.sendReleases();
@@ -103,12 +135,18 @@ export class Bridge {
     if (this.released.length === 0 || this.closed) return;
     const list = this.released;
     this.released = [];
+    this.invalidate(); // a released id may be given to another object
     this.sendJ(["release", list]);
   }
 
   /** An operation in the form of a JSON array: [op, ...]. */
   private sendJ(request: unknown[]): unknown {
-    return this.send("J" + JSON.stringify(request), request[0] === "release");
+    // a function of the page that is called, or an object made, may change anything
+    const runs = request[0] === "apply" || request[0] === "new" || request[0] === "del";
+    if (runs) this.invalidate();
+    const value = this.send("J" + JSON.stringify(request), request[0] === "release");
+    if (runs) this.invalidate();
+    return value;
   }
 
   /** One request (see rpc.js for its forms) and its answer, decoded. */
@@ -122,7 +160,7 @@ export class Bridge {
     try {
       result = this.vm.rpc(request);
       // promise reactions (mutation observers, awaited work of the page) run when the host's call is over
-      if (outer) this.vm.jobs();
+      if (outer && this.vm.jobs() > 0) this.invalidate();
     } finally {
       this.depth--;
     }
@@ -146,10 +184,10 @@ export class Bridge {
         return null;
       case 85: // U
         return undefined;
-      case 104: {
-        const [i, c, t, n] = r.slice(1).split("");
-        return this.wrapper({ i: Number(i), c: c || undefined, t: t === "" ? undefined : Number(t), n: n || undefined });
-      }
+      case 104:
+        return this.handleOf(r.slice(1));
+      case 97: // a: handles of a list, apart by \u0002
+        return r.length === 1 ? [] : r.slice(1).split("\u0002").map((s) => this.handleOf(s.slice(1)));
       case 106: // j
         return this.decode(JSON.parse(r.slice(1)));
       case 107: // k
@@ -157,6 +195,11 @@ export class Bridge {
       default:
         throw this.error(JSON.parse(r.slice(1)) as ErrorInfo);
     }
+  }
+
+  private handleOf(s: string): unknown {
+    const [i, c, t, n, l, g] = s.split("\u0001");
+    return this.wrapper({ i: Number(i), c: c || undefined, t: t === undefined || t === "" ? undefined : Number(t), n, l, g });
   }
 
   private error(info: ErrorInfo): Error {
@@ -172,15 +215,45 @@ export class Bridge {
   }
 
   private get(cell: Cell, key: string): unknown {
-    return this.send("g" + cell.id + "" + key);
+    const k = cell.id + "\u0001" + key;
+    if (this.reads.has(k)) return this.reads.get(k);
+    const value = this.send("g" + cell.id + "\u0001" + key);
+    if (this.reads.size > 100000) this.reads.clear();
+    this.reads.set(k, value);
+    return value;
   }
 
   private set(cell: Cell, key: string, value: unknown): void {
-    this.send("s" + cell.id + "" + key + "" + JSON.stringify(this.encode(value)));
+    this.invalidate();
+    this.send("s" + cell.id + "\u0001" + key + "\u0001" + JSON.stringify(this.encode(value)));
+  }
+
+  /** Arguments that are all strings go as is (no JSON on either side); the rest as a JSON array. */
+  private encodeArgs(args: unknown[]): string {
+    if (args.length === 0) return "";
+    let strings = true;
+    for (const a of args) {
+      if (typeof a !== "string" || a.includes("\u0002") || a.includes("\u0001")) {
+        strings = false;
+        break;
+      }
+    }
+    return strings ? "\u0003" + args.join("\u0002") : JSON.stringify(args.map((a) => this.encode(a)));
   }
 
   private call(cell: Cell, key: string, args: unknown[]): unknown {
-    return this.send("c" + cell.id + "" + key + "" + (args.length ? JSON.stringify(args.map((a) => this.encode(a))) : ""));
+    const encoded = this.encodeArgs(args);
+    if (!PURE_CALLS.has(key)) {
+      this.invalidate();
+      const value = this.send("c" + cell.id + "\u0001" + key + "\u0001" + encoded);
+      this.invalidate(); // what it ran may have changed anything
+      return value;
+    }
+    const k = cell.id + "\u0001" + key + "\u0001" + encoded;
+    if (this.reads.has(k)) return this.reads.get(k);
+    const value = this.send("c" + cell.id + "\u0001" + key + "\u0001" + encoded);
+    this.reads.set(k, value);
+    return value;
   }
 
   // ---- values ----
@@ -249,13 +322,13 @@ export class Bridge {
 
   // ---- wrappers ----
 
-  private wrapper(h: { i: number; c?: string; t?: number; n?: string }): unknown {
+  private wrapper(h: Handle): unknown {
     const known = this.wrappers.get(h.i)?.deref();
     if (known) {
       (known as any)[HANDLE].count++;
       return known;
     }
-    const cell: Cell = { id: h.i, count: 1, t: h.t, n: h.n };
+    const cell: Cell = { id: h.i, count: 1, t: h.t, n: h.n, l: h.l, g: h.g };
     let w: any;
     const cls = h.c ? this.classes.get(h.c) : undefined;
     if (h.c === "Function") w = this.functionWrapper(cell);
@@ -334,6 +407,41 @@ export class Bridge {
     });
   }
 
+  /**
+   * `childNodes` / `children`: a NodeList / HTMLCollection that is made here and filled by one call into the page
+   * (which then does not build a live collection of its own). It reads again after the page has changed, so it is live.
+   */
+  private collection(cell: Cell, key: "childNodes" | "children"): object {
+    const have = (cell.cols ??= {})[key];
+    if (have) return have;
+    const nodes = (): unknown[] => {
+      const k = cell.id + "\u0001*" + key;
+      let list = this.reads.get(k) as unknown[] | undefined;
+      if (!list) {
+        list = this.sendJ(["kids", cell.id, key === "children"]) as unknown[];
+        this.reads.set(k, list);
+      }
+      return list;
+    };
+    const proto = (this.classes.get(key === "childNodes" ? "NodeList" : "HTMLCollection") ?? Object).prototype;
+    const ARRAY_METHODS = new Set(["forEach", "entries", "keys", "values"]);
+    return (cell.cols[key] = new Proxy(Object.create(proto), {
+      get: (t, k, r) => {
+        if (typeof k === "string") {
+          if (k === "length") return nodes().length;
+          if (INDEX.test(k)) return nodes()[Number(k)];
+          if (k === "item") return (i: number) => nodes()[i] ?? null;
+          if (k === "namedItem") return (name: string) => nodes().find((n: any) => n.getAttribute?.("id") === name || n.getAttribute?.("name") === name) ?? null;
+          if (ARRAY_METHODS.has(k)) return (Array.prototype as any)[k].bind(nodes());
+        } else if (k === Symbol.iterator) return () => nodes()[Symbol.iterator]();
+        return Reflect.get(t, k, r);
+      },
+      has: (t, k) => (typeof k === "string" && INDEX.test(k) ? Number(k) < nodes().length : Reflect.has(t, k)),
+      ownKeys: () => [...nodes().keys()].map(String),
+      getOwnPropertyDescriptor: (t, k) => (typeof k === "string" && INDEX.test(k) && Number(k) < nodes().length ? { value: nodes()[Number(k)], enumerable: true, configurable: true, writable: false } : undefined),
+    }));
+  }
+
   // ---- the classes of the interfaces ----
 
   private buildClasses(schema: InterfaceSchema[]): void {
@@ -364,6 +472,12 @@ export class Bridge {
           });
         } else if (k === "nodeType") {
           Object.defineProperty(cls.prototype, k, { get(this: any) { const c = this[HANDLE] as Cell; return c.t ?? bridge.get(c, k); }, enumerable: true, configurable: true });
+        } else if ((k === "childNodes" || k === "children") && kind === 1) {
+          Object.defineProperty(cls.prototype, k, { get(this: any) { return bridge.collection(this[HANDLE] as Cell, k); }, enumerable: true, configurable: true });
+        } else if (k === "localName") {
+          Object.defineProperty(cls.prototype, k, { get(this: any) { const c = this[HANDLE] as Cell; return c.l ?? bridge.get(c, k); }, enumerable: true, configurable: true });
+        } else if (k === "tagName") {
+          Object.defineProperty(cls.prototype, k, { get(this: any) { const c = this[HANDLE] as Cell; return c.g ?? bridge.get(c, k); }, enumerable: true, configurable: true });
         } else if (k === "nodeName") {
           Object.defineProperty(cls.prototype, k, { get(this: any) { const c = this[HANDLE] as Cell; return c.n ?? bridge.get(c, k); }, enumerable: true, configurable: true });
         } else {
@@ -395,6 +509,7 @@ export class Bridge {
   callback(id: number, args: string): string | undefined {
     const fn = this.fnById.get(id);
     if (!fn) return undefined;
+    this.invalidate();
     this.depth++;
     try {
       const [self, list] = JSON.parse(args) as [unknown, unknown[]];
@@ -405,6 +520,7 @@ export class Bridge {
       return JSON.stringify({ x: { n: err.name, m: err.message, s: err.stack } });
     } finally {
       this.depth--;
+      this.invalidate();
     }
   }
 }

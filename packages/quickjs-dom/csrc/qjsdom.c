@@ -359,14 +359,23 @@ EXPORT("qd_eval") int qd_eval(const char *code, size_t len, const char *name, in
 
 /* Call the global function __rpc (scripts/edge-js/rpc.js) with a string; its string answer is the result. This is the way in
    for the bridge: no code to compile, and it may be called again from inside a host callback. 0: ok; 1: it threw. */
-EXPORT("qd_rpc") int qd_rpc(const char *req, size_t len) {
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue fn = JS_GetPropertyStr(ctx, global, "__rpc");
-    JS_FreeValue(ctx, global);
+/* Reads (g) and method calls without arguments (c) of the bridge are done here: the interpreter has nothing to do for them
+   unless the answer is an object (rpc.js: __reply makes its handle). The handle table is the array __byId of rpc.js. */
+static int rpc_set_prefixed(char prefix, const char *s, size_t n) {
+    free(result);
+    result = malloc(n + 2);
+    result[0] = (uint8_t)prefix;
+    if (n) memcpy(result + 1, s, n);
+    result[n + 1] = 0;
+    result_len = n + 1;
+    result_type = RES_STRING;
+    return 0;
+}
+
+static int rpc_slow(JSValueConst fn, const char *req, size_t len) {
     JSValue arg = JS_NewStringLen(ctx, req, len);
     JSValue v = JS_Call(ctx, fn, JS_UNDEFINED, 1, &arg);
     JS_FreeValue(ctx, arg);
-    JS_FreeValue(ctx, fn);
     if (JS_IsException(v)) {
         set_result_error();
         return 1;
@@ -374,6 +383,150 @@ EXPORT("qd_rpc") int qd_rpc(const char *req, size_t len) {
     set_result_value(v);
     JS_FreeValue(ctx, v);
     return 0;
+}
+
+/* the answer for value v (consumed): primitives here, an object through __reply */
+static int rpc_answer(JSValue v, JSValueConst reply_fn) {
+    int tag = JS_VALUE_GET_TAG(v);
+    if (tag == JS_TAG_STRING) {
+        size_t n;
+        const char *s = JS_ToCStringLen(ctx, &n, v);
+        if (s) {
+            rpc_set_prefixed('s', s, n);
+            JS_FreeCString(ctx, s);
+            JS_FreeValue(ctx, v);
+            return 0;
+        }
+    } else if (tag == JS_TAG_INT) {
+        char buf[16];
+        int n = snprintf(buf, sizeof buf, "%d", JS_VALUE_GET_INT(v));
+        rpc_set_prefixed('n', buf, (size_t)n);
+        return 0;
+    } else if (tag == JS_TAG_BOOL) {
+        rpc_set_prefixed(JS_VALUE_GET_BOOL(v) ? 'T' : 'F', "", 0);
+        return 0;
+    } else if (tag == JS_TAG_NULL) {
+        rpc_set_prefixed('N', "", 0);
+        return 0;
+    } else if (tag == JS_TAG_UNDEFINED) {
+        rpc_set_prefixed('U', "", 0);
+        return 0;
+    }
+    JSValue out = JS_Call(ctx, reply_fn, JS_UNDEFINED, 1, &v);
+    JS_FreeValue(ctx, v);
+    if (JS_IsException(out)) {
+        set_result_error();
+        return 1;
+    }
+    set_result_value(out);
+    JS_FreeValue(ctx, out);
+    return 0;
+}
+
+EXPORT("qd_rpc") int qd_rpc(const char *req, size_t len) {
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue fn = JS_GetPropertyStr(ctx, global, "__rpc");
+    JSValue reply_fn = JS_GetPropertyStr(ctx, global, "__reply");
+    JSValue error_fn = JS_GetPropertyStr(ctx, global, "__rpcError");
+    JSValue byid = JS_GetPropertyStr(ctx, global, "__byId");
+    JS_FreeValue(ctx, global);
+    int rc = -1;
+    if (len > 3 && (req[0] == 'g' || req[0] == 'c') && JS_IsFunction(ctx, reply_fn) && JS_IsFunction(ctx, error_fn) && JS_IsObject(byid)) {
+        const char *sep1 = memchr(req + 1, 1, len - 1);
+        const char *sep2 = req[0] == 'c' && sep1 ? memchr(sep1 + 1, 1, (size_t)(req + len - sep1 - 1)) : NULL;
+        int ok = sep1 != NULL && (req[0] == 'g' || sep2 != NULL);
+        uint32_t id = 0;
+        if (ok) {
+            for (const char *p = req + 1; p < sep1; p++) {
+                if (*p < '0' || *p > '9') { ok = 0; break; }
+                id = id * 10 + (uint32_t)(*p - '0');
+            }
+        }
+        if (ok) {
+            JSValue obj = JS_GetPropertyUint32(ctx, byid, id);
+            if (JS_IsObject(obj)) {
+                const char *key = sep1 + 1;
+                size_t keylen = (size_t)((req[0] == 'g' ? req + len : sep2) - key);
+                /* the arguments of a call: a JSON array of strings, numbers, booleans and null (anything else takes the slow way) */
+                JSValue argv_arr = JS_UNDEFINED;
+                JSValue *argv = NULL;
+                uint32_t argc = 0;
+                int plain = 1;
+                if (req[0] == 'c' && sep2 + 1 < req + len && sep2[1] == 3) {
+                    /* all arguments are strings: "\3" and the strings apart by "\2" */
+                    const char *p = sep2 + 2, *end = req + len;
+                    argc = 1;
+                    for (const char *q = p; q < end; q++) if (*q == 2) argc++;
+                    if (argc > 8) plain = 0;
+                    else {
+                        argv = alloca(sizeof(JSValue) * argc);
+                        for (uint32_t i = 0; i < argc; i++) {
+                            const char *stop = memchr(p, 2, (size_t)(end - p));
+                            if (!stop) stop = end;
+                            argv[i] = JS_NewStringLen(ctx, p, (size_t)(stop - p));
+                            p = stop + 1;
+                        }
+                    }
+                } else if (req[0] == 'c' && sep2 + 1 < req + len) {
+                    argv_arr = JS_ParseJSON(ctx, sep2 + 1, (size_t)(req + len - sep2 - 1), "<args>");
+                    if (JS_IsException(argv_arr)) {
+                        JS_FreeValue(ctx, JS_GetException(ctx));
+                        plain = 0;
+                    } else if (!JS_IsArray(argv_arr)) {
+                        plain = 0;
+                    } else {
+                        JSValue lenv = JS_GetPropertyStr(ctx, argv_arr, "length");
+                        JS_ToUint32(ctx, &argc, lenv);
+                        JS_FreeValue(ctx, lenv);
+                        if (argc > 8) plain = 0;
+                        else {
+                            argv = argc ? alloca(sizeof(JSValue) * argc) : NULL;
+                            for (uint32_t i = 0; i < argc; i++) {
+                                argv[i] = JS_GetPropertyUint32(ctx, argv_arr, i);
+                                if (JS_IsObject(argv[i])) plain = 0;
+                            }
+                        }
+                    }
+                }
+                if (!plain) {
+                    for (uint32_t i = 0; i < argc && argv; i++) JS_FreeValue(ctx, argv[i]);
+                    JS_FreeValue(ctx, argv_arr);
+                    JS_FreeValue(ctx, obj);
+                    goto slow;
+                }
+                JSAtom atom = JS_NewAtomLen(ctx, key, keylen);
+                JSValue v = req[0] == 'g' ? JS_GetProperty(ctx, obj, atom) : JS_Invoke(ctx, obj, atom, (int)argc, argv);
+                JS_FreeAtom(ctx, atom);
+                for (uint32_t i = 0; i < argc && argv; i++) JS_FreeValue(ctx, argv[i]);
+                JS_FreeValue(ctx, argv_arr);
+                JS_FreeValue(ctx, obj);
+                if (JS_IsException(v)) {
+                    JSValue exc = JS_GetException(ctx);
+                    JSValue out = JS_Call(ctx, error_fn, JS_UNDEFINED, 1, &exc);
+                    JS_FreeValue(ctx, exc);
+                    if (JS_IsException(out)) {
+                        set_result_error();
+                        rc = 1;
+                    } else {
+                        set_result_value(out);
+                        JS_FreeValue(ctx, out);
+                        rc = 0;
+                    }
+                } else {
+                    rc = rpc_answer(v, reply_fn);
+                }
+            } else {
+                JS_FreeValue(ctx, obj);
+            }
+        }
+    }
+slow:
+    if (rc < 0) rc = rpc_slow(fn, req, len);
+    JS_FreeValue(ctx, fn);
+    JS_FreeValue(ctx, reply_fn);
+    JS_FreeValue(ctx, error_fn);
+    JS_FreeValue(ctx, byid);
+    return rc;
 }
 
 /* Compile code to bytecode (without debug information) into qd_result_* as RES_BYTES. Used at build time. */

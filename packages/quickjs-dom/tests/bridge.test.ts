@@ -220,3 +220,51 @@ describe("bridge follows jsdom", () => {
     }
   });
 });
+
+describe("bridge: what was read is not kept past a change of the page", () => {
+  const fresh = () => {
+    const d = w.document;
+    d.body.innerHTML = "<p id=t>one</p>";
+    return d.getElementById("t");
+  };
+
+  it("repeated reads are the same, and a write shows at once", () => {
+    const p = fresh();
+    expect(p.textContent).toBe("one");
+    expect(p.textContent).toBe("one");
+    p.textContent = "two";
+    expect(p.textContent).toBe("two");
+    expect(p.matches(".x")).toBe(false);
+    p.className = "x";
+    expect(p.matches(".x")).toBe(true);
+    expect(p.getAttribute("class")).toBe("x");
+    p.removeAttribute("class");
+    expect(p.getAttribute("class")).toBe(null);
+  });
+
+  it("code the page runs (eval, a listener of the page, a timer) shows in the next read", async () => {
+    const p = fresh();
+    expect(p.textContent).toBe("one");
+    w.eval("document.getElementById('t').textContent = 'from eval'");
+    expect(p.textContent).toBe("from eval");
+    w.eval("document.getElementById('t').addEventListener('click', () => { document.getElementById('t').textContent = 'clicked' })");
+    expect(p.textContent).toBe("from eval");
+    p.click();
+    expect(p.textContent).toBe("clicked");
+    w.eval("setTimeout(() => { document.getElementById('t').textContent = 'later' }, 5)");
+    expect(p.textContent).toBe("clicked");
+    await dom.settle(30);
+    expect(p.textContent).toBe("later");
+  });
+
+  it("a list read before a change is not reused after it", () => {
+    const d = w.document;
+    d.body.innerHTML = "<i></i><i></i>";
+    expect(d.querySelectorAll("i").length).toBe(2);
+    d.body.appendChild(d.createElement("i"));
+    expect(d.querySelectorAll("i").length).toBe(3);
+    expect([...d.body.children].length).toBe(3);
+    d.body.firstChild.remove();
+    expect([...d.body.children].length).toBe(2);
+  });
+});

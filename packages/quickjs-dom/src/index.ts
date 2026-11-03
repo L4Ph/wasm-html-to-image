@@ -454,6 +454,7 @@ export function openPage(
   // evaluate code; false when it threw (a page's script error never stops the render)
   const run = (code: string, name: string, module = false): boolean => {
     if (closed) return false;
+    bridge?.invalidate();
     const result = vm.eval(code, name, module);
     if (result.type === "error") log({ type: "error", message: result.value, source: name });
     pump();
@@ -461,6 +462,7 @@ export function openPage(
   };
   const call = (expression: string): unknown => {
     if (closed) return undefined;
+    bridge?.invalidate();
     const result = vm.eval(expression, "call.js");
     if (result.type === "error") return undefined;
     pump();
