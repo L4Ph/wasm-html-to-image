@@ -97,6 +97,24 @@ npx wasm-quickjs-dom page.html --base-url https://example.com/      # a file; "-
 
 See [Command line](#command-line) below.
 
+## As a jsdom (Node.js and Bun)
+
+`wasm-quickjs-dom/jsdom` has the shape of jsdom's API. The constructor is synchronous, and `dom.window` is the page's `window`: the host's own code reads and writes its objects directly (every property read or method call is a synchronous call into the page, about 3 µs).
+
+```ts
+import { JSDOM } from "wasm-quickjs-dom/jsdom";
+
+const dom = new JSDOM("<p class=a>Hello</p><script>document.title = 'x'</script>", { runScripts: "dangerously" });
+const { document } = dom.window;
+document.querySelector("p.a").textContent; // "Hello"
+document.title; // "x"
+document.addEventListener("click", (e) => console.log(e.target.nodeName)); // a function of yours, called by the page
+dom.serialize();
+dom.window.close();
+```
+
+Supported: `url`, `referrer`, `runScripts` (`"dangerously"`, `"outside-only"`), `resources: "usable"` (scripts with a `src`), `virtualConsole`, `beforeParse`, `JSDOM.fromURL`, `JSDOM.fromFile`, `serialize()`, `window.close()`. The page's timers and `load` run behind the constructor and do not keep the process alive; `await dom.ready` waits for the scripts and the `load` event. Not supported: `getInternalVMContext()` (the page is not in a Node `vm` context; use `window.eval`), `nodeLocation()`, `cookieJar`, `reconfigure()`. The same objects are available from `createDOM` as `dom.bridge().window`.
+
 ## Pages you do not control
 
 A page's scripts can `fetch`, and so can the scripts and modules it loads. **Without `limits`, a page can reach every host your runtime can reach, internal ones included.** For anything you did not write, set them:

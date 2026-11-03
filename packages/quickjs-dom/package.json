@@ -51,6 +51,11 @@
       "import": "./dist/index.js",
       "default": "./dist/index.js"
     },
+    "./jsdom": {
+      "types": "./dist/jsdom.d.ts",
+      "import": "./dist/jsdom.js",
+      "default": "./dist/jsdom.js"
+    },
     "./quickjs.wasm": {
       "types": "./dist/quickjs-wasm.d.ts",
       "default": "./dist/quickjs.wasm"

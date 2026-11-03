@@ -765,7 +765,7 @@
   // HTMLCollection / NodeList are live: a read-through proxy that re-reads the C answer when any tree or attribute
   // has changed since (D.version()). It is not an Array (as in a browser) but has the length, indices, item,
   // namedItem and the array methods.
-  var liveCollection = function (compute) {
+  var liveCollection = function (compute, named) {
     var cache = null, ver = -1;
     var arr = function () {
       var v = D.version();
@@ -781,6 +781,9 @@
           return null;
         };
         var a2 = arr(), v2 = a2[k];
+        if (v2 === undefined && named && typeof k === "string") {
+          for (var j = 0; j < a2.length; j++) if (a2[j].getAttribute("id") === k || a2[j].getAttribute("name") === k) return a2[j];
+        }
         return typeof v2 === "function" ? v2.bind(a2) : v2;
       },
       has: function (_, k) { return k in arr(); },
@@ -816,6 +819,49 @@
     P[spec[0]] = C.prototype;
     for (var i = 1; i < spec.length; i++) D.setTagProto(spec[i], C.prototype);
   });
+  // a form's controls (by name too, as in form.elements.email) and a select's options
+  var CONTROLS = "input, select, textarea, button, fieldset, object, output";
+  getter(P.HTMLFormElement, "elements", function () {
+    var form = this;
+    return liveCollection(function () { return Array.prototype.slice.call(form.querySelectorAll(CONTROLS)); }, true);
+  });
+  getter(P.HTMLFormElement, "length", function () { return this.querySelectorAll(CONTROLS).length; });
+  getter(P.HTMLSelectElement, "options", function () {
+    var select = this;
+    return liveCollection(function () { return Array.prototype.slice.call(select.querySelectorAll("option")); });
+  });
+  getter(P.HTMLSelectElement, "length", function () { return this.querySelectorAll("option").length; });
+  getter(P.HTMLSelectElement, "selectedIndex", function () {
+    var opts = this.querySelectorAll("option");
+    for (var i = 0; i < opts.length; i++) if (opts[i].hasAttribute("selected")) return i;
+    return opts.length && !this.hasAttribute("multiple") ? 0 : -1;
+  }, function (v) {
+    var opts = this.querySelectorAll("option");
+    for (var i = 0; i < opts.length; i++) { if (i === Number(v)) opts[i].setAttribute("selected", ""); else opts[i].removeAttribute("selected"); }
+  });
+  getter(P.HTMLSelectElement, "selectedOptions", function () {
+    var select = this;
+    return liveCollection(function () {
+      var chosen = Array.prototype.filter.call(select.querySelectorAll("option"), function (o) { return o.hasAttribute("selected"); });
+      if (!chosen.length && !select.hasAttribute("multiple")) { var first = select.querySelector("option"); if (first) chosen = [first]; }
+      return chosen;
+    });
+  });
+  getter(P.HTMLOptionElement, "text", function () { return this.textContent; });
+  getter(P.HTMLOptionElement, "index", function () {
+    var select = this.closest("select");
+    return select ? Array.prototype.indexOf.call(select.querySelectorAll("option"), this) : 0;
+  });
+  def(P.HTMLFormElement, "reset", function () {
+    var controls = this.querySelectorAll(CONTROLS);
+    for (var i = 0; i < controls.length; i++) { var c = controls[i]; if (c.localName === "input") c.value = c.getAttribute("value") || ""; }
+    this.dispatchEvent(new W.Event("reset", { bubbles: true, cancelable: true }));
+  });
+  def(P.HTMLFormElement, "requestSubmit", function () {
+    if (this.dispatchEvent(new W.Event("submit", { bubbles: true, cancelable: true }))) { /* navigation: none here */ }
+  });
+  def(P.HTMLFormElement, "submit", function () { /* navigation: none here */ });
+
   // an anchor's address, taken apart (protocol, host, pathname, ...); empty strings when it has none that parses
   ["protocol", "host", "hostname", "port", "pathname", "search", "hash", "origin", "username", "password"].forEach(function (part) {
     Object.defineProperty(P.HTMLAnchorElement, part, {

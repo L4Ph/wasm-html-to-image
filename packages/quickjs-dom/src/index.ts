@@ -212,7 +212,73 @@ export async function createDOM(
   source: { url?: string; html?: string; baseUrl?: string },
   options: CreateDOMOptions = {},
 ): Promise<QuickJSDOM> {
-  const opts = options;
+  const timeout = options.timeout ?? DEFAULT_TIMEOUT;
+  const guard = createGuard(options.limits);
+  let html = source.html ?? "";
+  let baseUrl = source.baseUrl || "about:blank";
+  const first: PageLogEntry[] = [];
+  if (source.url) {
+    const entry = { type: "request" as const, method: "GET", url: source.url };
+    try {
+      const res = await Promise.race([
+        guard.fetch(source.url, {}),
+        sleep(timeout).then(() => {
+          throw new Error(`Timed out loading ${source.url} for the \`javascript\` option (${timeout} ms).`);
+        }),
+      ]);
+      first.push({ ...entry, status: res.status });
+      html = new TextDecoder().decode(await guard.bytes(res));
+      baseUrl = res.url || source.url;
+    } catch (error) {
+      try {
+        options.onLog?.({ ...entry, error: String(error) });
+      } catch {
+        // a listener's failure is not the page's
+      }
+      throw error;
+    }
+  }
+  const wasm = await loadModule(options.quickjsWasm);
+  const page = openPage(html, baseUrl, wasm, options, first, guard);
+  try {
+    await page.start();
+  } catch (error) {
+    page.dom.close();
+    throw error;
+  }
+  return page.dom;
+}
+
+/** A page that is open: its scripts have not necessarily run (see {@link openPage}). */
+export interface OpenedPage {
+  dom: QuickJSDOM;
+  /**
+   * Run the page's scripts, fire its load events and let it settle. `scripts` false runs none; `external` false skips
+   * the ones with a `src`; `settle` false returns once the scripts have run (the caller keeps the page going with
+   * {@link OpenedPage.step}).
+   */
+  start(mode?: { scripts?: boolean; external?: boolean; settle?: boolean }): Promise<void>;
+  /** Fire what is due (timers, scripts that were added) once. */
+  step(fresh?: boolean): Promise<void>;
+  /** Milliseconds until something is due (0 now); -1 when nothing is waiting for time or a request. */
+  nextWake(): number;
+  /** Set by the owner: called after the host used the page on its own (the bridge), when something may have become due. */
+  onActivity?: () => void;
+}
+
+/**
+ * Open a page from markup you have, synchronously: the DOM is built and the bridge works at once. The scripts have not
+ * run until {@link OpenedPage.start} (which the caller may await or let run behind). `createDOM` is this, awaited.
+ */
+export function openPage(
+  html: string,
+  baseUrl: string,
+  wasm: WebAssembly.Module,
+  opts: CreateDOMOptions = {},
+  first: PageLogEntry[] = [],
+  sharedGuard?: ReturnType<typeof createGuard>,
+): OpenedPage {
+  const options = opts;
   const viewportWidth = options.width ?? 800;
   const timeout = opts.timeout ?? DEFAULT_TIMEOUT;
   let started = Date.now();
@@ -224,7 +290,7 @@ export async function createDOM(
     deadline = started + timeout;
     vmDeadline?.(deadline);
   };
-  const guard = createGuard(opts.limits);
+  const guard = sharedGuard ?? createGuard(opts.limits);
   const logs: PageLogEntry[] = [];
   const log = (entry: PageLogEntry) => {
     logs.push(entry);
@@ -235,6 +301,7 @@ export async function createDOM(
       // a listener's failure is not the page's
     }
   };
+  for (const entry of first) log(entry);
   const loggedFetch = async (input: string | URL, init: RequestInit = {}, isPage = false): Promise<Response> => {
     const entry = { type: "request" as const, method: init.method ?? "GET", url: String(input) };
     try {
@@ -250,20 +317,6 @@ export async function createDOM(
   const text = async (res: Response) => new TextDecoder().decode(await guard.bytes(res));
   const remaining = () => Math.max(0, timeout - (Date.now() - started));
 
-  let html = source.html ?? "";
-  let baseUrl = source.baseUrl || "about:blank";
-  if (source.url) {
-    const res = await Promise.race([
-      loggedFetch(source.url, {}, true),
-      sleep(timeout).then(() => {
-        throw new Error(`Timed out loading ${source.url} for the \`javascript\` option (${timeout} ms).`);
-      }),
-    ]);
-    html = await text(res);
-    baseUrl = res.url || source.url;
-  }
-
-  const wasm = await loadModule(opts.quickjsWasm);
 
   let closed = false;
   const timers: { id: number; at: number }[] = [];
@@ -323,6 +376,7 @@ export async function createDOM(
 
   // the objects of the page, for the host's own code (see dom.bridge())
   let bridge: Bridge | undefined;
+  let bridgeActivity = () => {};
 
   // let the page's reactions to what happened run
   let pump = () => {};
@@ -452,14 +506,15 @@ export async function createDOM(
     if (boot.type === "error") throw new Error(`The QuickJS engine could not build the page: ${boot.value}`);
 
     // scripts in document order, the ones that scripts add included; each external one is fetched by the host
+    const mode = { scripts: true, external: true };
     const runScripts = async () => {
       for (;;) {
         const raw = call("__edgeNextScripts()");
         const list: { idx: number; src: string | null; text: string; module?: boolean; importmap?: boolean }[] = typeof raw === "string" ? JSON.parse(raw) : [];
-        if (!list.length || remaining() <= 0) return;
+        if (!list.length || remaining() <= 0 || !mode.scripts) return;
         // the external ones are all requested at once; they still run one by one, in document order
         const sources = list.map((s) => {
-          if (!s.src) return undefined;
+          if (!s.src || !mode.external) return undefined;
           const name = new URL(s.src, baseUrl).href;
           return loggedFetch(name, { signal: AbortSignal.timeout(Math.max(1, remaining())) })
             .then(text)
@@ -475,6 +530,7 @@ export async function createDOM(
           }
           let code = s.text;
           let name = "inline";
+          if (s.src && !mode.external) continue;
           if (s.src) {
             const loaded = await sources[i];
             if (!loaded) {
@@ -495,7 +551,8 @@ export async function createDOM(
       }
     };
     // timers that are due, scripts that were added, then a short sleep
-    const tick = async () => {
+    const step = async (fresh = false) => {
+      if (fresh) begin(); // a page that lives on gets a fresh budget each time
       pump();
       const now = Date.now();
       const due = timers.filter((t) => t.at <= now).sort((a, b) => a.at - b.at);
@@ -504,6 +561,9 @@ export async function createDOM(
         call(`__fire(${t.id})`);
       }
       await runScripts();
+    };
+    const tick = async () => {
+      await step();
       await sleep(4);
     };
 
@@ -535,9 +595,20 @@ export async function createDOM(
       return out;
     };
 
-    await runScripts();
-    call("__edgeDocumentEvents()");
-    await wait(opts.settleMs ?? DEFAULT_SETTLE_MS, opts.waitFor);
+    const start = async (how: { scripts?: boolean; external?: boolean; settle?: boolean } = {}) => {
+      mode.scripts = how.scripts ?? true;
+      mode.external = how.external ?? true;
+      begin();
+      const scripts = runScripts(); // the inline scripts run before this returns; only the ones that fetch wait
+      await scripts;
+      call("__edgeDocumentEvents()");
+      if (how.settle ?? true) await wait(opts.settleMs ?? DEFAULT_SETTLE_MS, opts.waitFor);
+    };
+    const nextWake = () => {
+      if (closed) return -1;
+      if (timers.length) return Math.max(0, Math.min(...timers.map((t) => t.at)) - Date.now());
+      return inflight.size ? 5 : -1;
+    };
 
     // eval(): the result lands in a global once the page's promise settles; the host ticks until it is there
     let queue: Promise<unknown> = Promise.resolve();
@@ -633,7 +704,7 @@ export async function createDOM(
       },
       bridge(options?: BridgeOptions) {
         if (closed) throw new Error("The DOM is closed.");
-        return (bridge ??= new Bridge(vm, { timeout, ...options }));
+        return (bridge ??= new Bridge(vm, { timeout, onCall: () => bridgeActivity(), ...options }));
       },
       toOptions<T extends PageInput>(options: T): T {
         const { javascript: _javascript, ...rest } = options;
@@ -641,7 +712,9 @@ export async function createDOM(
       },
       close,
     };
-    return dom;
+    const opened: OpenedPage = { dom, start, step, nextWake };
+    bridgeActivity = () => opened.onActivity?.();
+    return opened;
   } catch (error) {
     close();
     throw error;

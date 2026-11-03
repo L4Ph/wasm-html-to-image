@@ -42,6 +42,8 @@ const INDEX = /^(?:0|[1-9][0-9]*)$/;
 export interface BridgeOptions {
   /** How long one call from the host may keep the guest busy (ms, default 10000); 0 for no limit. */
   timeout?: number;
+  /** Called when a call of the host has returned from the page (the page may have set a timer or started a request). */
+  onCall?: () => void;
 }
 
 export class Bridge {
@@ -50,6 +52,7 @@ export class Bridge {
 
   readonly vm: BridgeVM;
   private readonly timeout: number;
+  private readonly onCall?: () => void;
   private depth = 0;
   private closed = false;
   private readonly classes = new Map<string, any>();
@@ -66,6 +69,7 @@ export class Bridge {
   constructor(vm: BridgeVM, options: BridgeOptions = {}) {
     this.vm = vm;
     this.timeout = options.timeout ?? 10000;
+    this.onCall = options.onCall;
     this.registry = new FinalizationRegistry<Cell>((cell) => {
       this.released.push([cell.id, cell.count]);
       const ref = this.wrappers.get(cell.id);
@@ -122,6 +126,7 @@ export class Bridge {
     } finally {
       this.depth--;
     }
+    if (outer) this.onCall?.();
     if (result.type === "error") throw new Error(result.value);
     if (result.type !== "string") throw new Error("The page did not answer.");
     return this.answer(result.value);
