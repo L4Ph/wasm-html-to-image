@@ -2137,10 +2137,14 @@
   });
   getter(P.Document, "referrer", function () { return ""; });
   getter(P.Document, "readyState", function () { return "complete"; });
-  getter(P.Document, "hidden", function () { return true; });
-  getter(P.Document, "visibilityState", function () { return "prerender"; });
+  // a document nobody renders is prerendering and unfocused; the page's own document is told
+  // otherwise by the boot code, through D.setVisual (jsdom's pretendToBeVisual, plumbed down)
+  var DOCVIS = Symbol("visual");
+  D.setVisual = function (doc, visual) { doc[DOCVIS] = visual ? { hidden: false, state: "visible" } : { hidden: true, state: "prerender" }; };
+  getter(P.Document, "hidden", function () { var v = this[DOCVIS]; return v ? v.hidden : true; });
+  getter(P.Document, "visibilityState", function () { var v = this[DOCVIS]; return v ? v.state : "prerender"; });
   getter(P.Document, "currentScript", function () { return null; });
-  def(P.Document, "hasFocus", function () { return false; });
+  def(P.Document, "hasFocus", function () { return FOCUSED_DOCS.has(this); });
   getter(P.Document, "dir", function () { var r = this.documentElement; return r ? r.getAttribute("dir") || "" : ""; }, function (v) { var r = this.documentElement; if (r) r.setAttribute("dir", String(v)); });
   var DOCJARS = new WeakMap();
   getter(P.Document, "cookie", function () {
@@ -2337,10 +2341,12 @@
   };
   var activeOf = function (doc) { return focused && focused.isConnected && focused.ownerDocument === doc ? focused : doc.body; };
   getter(P.Document, "activeElement", function () { return activeOf(this); });
+  var FOCUSED_DOCS = new WeakSet();
   def(P.HTMLElement, "focus", function () {
     if (!focusable(this) || focused === this) return;
     var prev = focused && focused.isConnected ? focused : null;
     focused = this;
+    if (this.ownerDocument) FOCUSED_DOCS.add(this.ownerDocument); // a document that has been focused stays focused (jsdom's answer after blur, too)
     if (prev) { prev.dispatchEvent(focusEvent("blur", false, this)); prev.dispatchEvent(focusEvent("focusout", true, this)); }
     this.dispatchEvent(focusEvent("focus", false, prev));
     this.dispatchEvent(focusEvent("focusin", true, prev));

@@ -98,7 +98,10 @@ const HTML = `<!doctype html><html><head><title>t</title></head><body>
 </body></html>`;
 
 function inventory(JSDOM) {
-  const dom = new JSDOM(HTML, { runScripts: "outside-only", url: "https://example.invalid/" });
+  // pretendToBeVisual on both sides: the inventory measures the full window surface, and since
+  // the facade learned jsdom's default (not visual), an unflagged window would lose the
+  // animation-frame names from the count without anything else changing
+  const dom = new JSDOM(HTML, { runScripts: "outside-only", url: "https://example.invalid/", pretendToBeVisual: true });
   try {
     return JSON.parse(dom.window.eval(WALKER));
   } finally {

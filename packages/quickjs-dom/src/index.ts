@@ -139,6 +139,12 @@ export interface CreateDOMOptions extends JavaScriptOptions, EdgeJavaScriptEngin
   onLog?: (entry: PageLogEntry) => void;
   /** `window.innerWidth` of the page (default 800). */
   width?: number;
+  /**
+   * Whether the page pretends to be visual: `requestAnimationFrame` exists, `document.visibilityState` is
+   * `\"visible\"` and the document has focus (default true). False removes the animation-frame functions and
+   * reports `\"prerender\"` / no focus, as jsdom does without `pretendToBeVisual`.
+   */
+  visual?: boolean;
 }
 
 /**
@@ -554,7 +560,7 @@ export function openPage(
       return code;
     };
 
-    const boot = vm.eval(`__edgeBoot(${JSON.stringify(html)}, ${JSON.stringify(baseUrl)}, ${Math.round(viewportWidth)}, ${JSON.stringify(randomSeed())})`, "boot.js");
+    const boot = vm.eval(`__edgeBoot(${JSON.stringify(html)}, ${JSON.stringify(baseUrl)}, ${Math.round(viewportWidth)}, ${JSON.stringify(randomSeed())}, ${options.visual !== false})`, "boot.js");
     if (boot.type === "error") throw new Error(`The QuickJS engine could not build the page: ${boot.value}`);
     [opts.beforeScripts ?? []].flat().forEach((code, i) => run(code, `before-scripts-${i + 1}.js`));
 

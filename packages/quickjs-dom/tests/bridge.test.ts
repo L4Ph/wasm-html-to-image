@@ -358,7 +358,7 @@ describe("bridge: objects of the page from the host", () => {
     expect(out).toBe(
       JSON.stringify([
         ["about:blank", "about:blank", "text/html", "CSS1Compat", "UTF-8", "UTF-8", "UTF-8",
-          "", "complete", true, "prerender", null, false, "",
+          "", "complete", false, "visible", null, false, "", // the engine's page pretends to be visual (the JSDOM facade's default does not, as in jsdom)
           0, 0, 0, 0, 0, 0, 0, 0,
           "function", "function", "function", 0, "object"],
         "p:q", "q", "p", "http://ns", "NotSupportedError", "click", true, "a=1; b=2", "text/html", "about:blank",

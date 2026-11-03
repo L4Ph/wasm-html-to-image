@@ -3,10 +3,15 @@
 (function (g) {
   var done = new WeakSet(), list = [], current = null;
 
-  g.__edgeBoot = function (html, url, width, seed) {
+  g.__edgeBoot = function (html, url, width, seed, visual) {
     g.__edgeStart(seed);
+    // jsdom's pretendToBeVisual, plumbed from the facade: without it there are no animation
+    // frames, the document is prerendering and unfocused
+    var isVisual = visual !== false;
+    if (!isVisual) { delete g.requestAnimationFrame; delete g.cancelAnimationFrame; }
     var N = g.__native.dom;
     var d = N.parse(html), w = N.window;
+    if (N.setVisual) N.setVisual(d, isVisual);
     // the page's document is an HTML document (nativedom.js keeps the HTMLDocument prototype for this)
     if (w.HTMLDocument) Object.setPrototypeOf(d, w.HTMLDocument.prototype);
     // the window of the document is the global object itself: its event listeners are the nodes' own mechanism

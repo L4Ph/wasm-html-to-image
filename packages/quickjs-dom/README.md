@@ -113,7 +113,7 @@ dom.serialize();
 dom.window.close();
 ```
 
-Supported: `url`, `referrer`, `runScripts` (`"dangerously"`, `"outside-only"`), `resources: "usable"` (scripts with a `src`), `virtualConsole`, `beforeParse`, `JSDOM.fromURL`, `JSDOM.fromFile`, `serialize()`, `window.close()`. The page's timers and `load` run behind the constructor and do not keep the process alive; `await dom.ready` waits for the scripts and the `load` event. Not supported: `getInternalVMContext()` (the page is not in a Node `vm` context; use `window.eval`), `nodeLocation()`, `cookieJar`, `reconfigure()`. The same objects are available from `createDOM` as `dom.bridge().window`.
+Supported: `url`, `referrer`, `runScripts` (`"dangerously"`, `"outside-only"`), `resources: "usable"` (scripts with a `src`), `pretendToBeVisual`, `virtualConsole`, `beforeParse`, `JSDOM.fromURL`, `JSDOM.fromFile`, `serialize()`, `window.close()`. The page's timers and `load` run behind the constructor and do not keep the process alive; `await dom.ready` waits for the scripts and the `load` event. Not supported: `getInternalVMContext()` (the page is not in a Node `vm` context; use `window.eval`), `nodeLocation()`, `cookieJar`, `reconfigure()`. Cookies: `document.cookie` works through a small jar of the page's own (expiry by `max-age` / `expires` included); a jar cannot be passed in or shared between pages — that is what the unsupported `cookieJar` option would do. The same objects are available from `createDOM` as `dom.bridge().window`.
 
 ### In tests (Vitest)
 

@@ -177,3 +177,56 @@ describe("JSDOM: answers like jsdom", () => {
     expect(probe(make(html).window)).toEqual(probe(new RealJSDOM(html).window));
   });
 });
+
+describe("JSDOM: pretendToBeVisual, error classification, charsets", () => {
+  const visual = (dom: JSDOM) => {
+    const w = dom.window;
+    return [typeof w.requestAnimationFrame, typeof w.cancelAnimationFrame, w.document.visibilityState, w.document.hidden, w.document.hasFocus()];
+  };
+  it("is not visual unless asked, as in jsdom", () => {
+    expect(visual(make("<p>"))).toEqual(["undefined", "undefined", "prerender", true, false]);
+    expect(visual(make("<p>", { pretendToBeVisual: true }))).toEqual(["function", "function", "visible", false, false]);
+    expect(visual(new RealJSDOM("<p>") as unknown as JSDOM)).toEqual(["undefined", "undefined", "prerender", true, false]);
+    // a document that has been focused reports focus, in either engine, and keeps reporting it after a blur
+    const dom = make("<input id=i>", { pretendToBeVisual: true });
+    dom.window.document.getElementById("i").focus();
+    expect(dom.window.document.hasFocus()).toBe(true);
+    dom.window.document.getElementById("i").blur();
+    expect(dom.window.document.hasFocus()).toBe(true);
+  });
+
+  it("classifies page errors on the virtual console as jsdom does", async () => {
+    const vc = new VirtualConsole();
+    const types: string[] = [];
+    vc.on("jsdomError", (e: Error & { type?: string }) => types.push(String(e.type)));
+    make("<script>throw new Error('boom')</script>", { runScripts: "dangerously", virtualConsole: vc });
+    make("<script>Promise.reject(new Error('later'))</script>", { runScripts: "dangerously", virtualConsole: vc });
+    await sleep(10);
+    expect(types).toEqual(["unhandled-exception", "unhandled-exception"]);
+  });
+
+  it("decodes a fetched page by its charset, from the header or a meta", async () => {
+    // "<p id=p>あ</p>" in Shift_JIS (あ = 82 A0), served two ways
+    const sjis = (head: string, tail: string) => new Uint8Array([...Buffer.from(head, "latin1"), 0x82, 0xa0, ...Buffer.from(tail, "latin1")]);
+    const server = createServer((req, res) => {
+      if (req.url === "/header") {
+        res.setHeader("content-type", "text/html; charset=shift_jis");
+        res.end(sjis("<p id=p>", "</p>"));
+      } else {
+        res.setHeader("content-type", "text/html");
+        res.end(sjis('<meta charset="shift_jis"><p id=p>', "</p>"));
+      }
+    }).listen(0);
+    await new Promise((r) => server.once("listening", r));
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+    try {
+      for (const path of ["/header", "/meta"]) {
+        const dom = await JSDOM.fromURL(base + path, { virtualConsole: null });
+        open.push(dom);
+        expect(dom.window.document.getElementById("p").textContent).toBe("あ");
+      }
+    } finally {
+      server.close();
+    }
+  });
+});
