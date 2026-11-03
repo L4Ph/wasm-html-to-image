@@ -45,6 +45,41 @@ describe("bridge: objects of the page from the host", () => {
     expect(() => new w.DOMTokenList()).toThrow(TypeError);
   });
 
+  it("builds the CSS rule classes from a sheet", async () => {
+    const out = await dom.eval(`(() => {
+      const d = document.implementation.createHTMLDocument("");
+      d.head.innerHTML = "<style>@media (min-width: 10px) { a { color: red } } @import \\"x.css\\"; @keyframes spin { from { left: 0 } to { left: 9px } } b { top: 1px }</style>";
+      const sheet = d.styleSheets[0];
+      const rules = sheet.cssRules;
+      const [media, imp, kf, style] = rules;
+      style.style.setProperty("left", "2px");
+      return JSON.stringify([
+        rules instanceof CSSRuleList, rules.length, rules.item(0) === media, CSSRule.MEDIA_RULE, CSSRule.KEYFRAMES_RULE,
+        media.constructor.name, media.type, media.conditionText, media.cssRules.length, media.cssRules[0].constructor.name,
+        media instanceof CSSGroupingRule, media instanceof CSSConditionRule, media.cssRules[0].parentRule === media, media.cssRules[0].parentStyleSheet === sheet,
+        imp.constructor.name, imp.type, imp.href, !!imp.styleSheet,
+        kf.constructor.name, kf.name, kf.cssRules.length, kf.cssRules[0].constructor.name, kf.cssRules[0].keyText, kf.cssRules[1].keyText,
+        style.type, style.selectorText, style.style instanceof CSSStyleProperties, style.style instanceof CSSStyleDeclaration,
+        style.style.getPropertyValue("top"), style.style.getPropertyValue("left"), style.parentStyleSheet === sheet,
+        typeof CSSFontFaceRule, typeof CSSPageRule, typeof CSSSupportsRule, typeof CSSNamespaceRule, typeof CSSCounterStyleRule,
+        typeof CSSLayerBlockRule, typeof CSSLayerStatementRule, typeof CSSContainerRule, typeof CSSScopeRule, typeof CSSNestedDeclarations,
+      ]);
+    })()`);
+    expect(out).toBe(
+      JSON.stringify([
+        true, 4, true, 4, 7,
+        "CSSMediaRule", 4, "(min-width: 10px)", 1, "CSSStyleRule",
+        true, true, true, true,
+        "CSSImportRule", 3, "x.css", true,
+        "CSSKeyframesRule", "spin", 2, "CSSKeyframeRule", "0%", "100%",
+        1, "b", true, true,
+        "1px", "2px", true,
+        "function", "function", "function", "function", "function",
+        "function", "function", "function", "function", "function",
+      ]),
+    );
+  });
+
   it("gives the navigator empty plugin and mime type arrays of the right classes", async () => {
     const out = await dom.eval(`JSON.stringify([
       navigator.plugins instanceof PluginArray, navigator.plugins.length, navigator.plugins.item(0), navigator.plugins.namedItem("x"), typeof navigator.plugins.refresh,

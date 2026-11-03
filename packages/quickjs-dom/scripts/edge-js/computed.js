@@ -726,7 +726,9 @@
         var store = function (list, fr) { var t = list.join("\n"); owner.textContent = t; owner.__rt = t; owner.__rl = list; owner.__fr = fr || null; };
         var cssRules = function () {
           listOf();
-          return owner.__fr || (owner.__fr = parseSheetFlat(owner.__rt));
+          var fr = owner.__fr || (owner.__fr = parseSheetFlat(owner.__rt));
+          stampSheet(fr, obj);
+          return fr;
         };
         var obj = {
           type: "text/css", href: null, ownerNode: owner, parentStyleSheet: null, title: owner.getAttribute("title"), media: makeMediaList(owner.getAttribute("media") || ""),
@@ -777,34 +779,181 @@
     }
     return out;
   };
-  var parseSheetFlat = function (text) {
-    return splitRules(stripComments(text)).map(function (rule) {
-      var open = findTop(rule, 0, "{");
-      var selector = rule.slice(0, open).trim(), decls = parseDeclarations(rule.slice(open + 1, rule.length - 1));
-      var style = {};
-      var items = [];
-      decls.forEach(function (d) { style[d[0]] = d[1]; style[camel(d[0])] = d[1]; items.push(d[0]); });
-      Object.defineProperties(style, {
-        getPropertyValue: { value: function (n) { return style[String(n)] || ""; } },
-        length: { value: items.length },
-        cssText: { value: decls.map(function (d) { return d[0] + ": " + d[1] + (d[2] ? " !important" : "") + ";"; }).join(" ") },
-      });
-      var r = Object.create(CSSStyleRule.prototype);
-      Object.defineProperties(r, {
-        selectorText: { value: selector, enumerable: true },
-        style: { value: style, enumerable: true },
-        cssText: { value: rule },
-        type: { value: selector.charAt(0) === "@" ? 4 : 1 },
-      });
-      return r;
+  // ---- the CSS rule classes, over the flat parser. The cascade never uses these objects (it
+  // reads the sheet text itself); they are the API surface a page sees through cssRules.
+  var CSSRule = function CSSRule() { throw new TypeError("Illegal constructor"); };
+  [["STYLE_RULE", 1], ["CHARSET_RULE", 2], ["IMPORT_RULE", 3], ["MEDIA_RULE", 4], ["FONT_FACE_RULE", 5], ["PAGE_RULE", 6], ["KEYFRAMES_RULE", 7], ["KEYFRAME_RULE", 8], ["MARGIN_RULE", 9], ["NAMESPACE_RULE", 10], ["COUNTER_STYLE_RULE", 11], ["SUPPORTS_RULE", 12], ["FONT_FEATURE_VALUES_RULE", 14]].forEach(function (p) {
+    CSSRule[p[0]] = p[1];
+    Object.defineProperty(CSSRule.prototype, p[0], { value: p[1] });
+  });
+  Object.defineProperties(CSSRule.prototype, {
+    type: { value: 0, writable: true, configurable: true },
+    cssText: { value: "", writable: true, configurable: true },
+    parentRule: { value: null, writable: true, configurable: true },
+    parentStyleSheet: { value: null, writable: true, configurable: true },
+  });
+  g.CSSRule = CSSRule;
+  var ruleClass = function (name, parent) {
+    var C = { [name]: function () { throw new TypeError("Illegal constructor"); } }[name];
+    C.prototype = Object.create((parent || CSSRule).prototype, { constructor: { value: C, writable: true, configurable: true } });
+    Object.setPrototypeOf(C, parent || CSSRule);
+    g[name] = C;
+    return C;
+  };
+  // a rule list is an array wearing the interface's prototype (the chain keeps the array methods)
+  var CSSRuleList = function CSSRuleList() { throw new TypeError("Illegal constructor"); };
+  Object.setPrototypeOf(CSSRuleList.prototype, Array.prototype);
+  CSSRuleList.prototype.item = function (i) { return i >= 0 && i < this.length ? this[i] : null; };
+  g.CSSRuleList = CSSRuleList;
+  var asRuleList = function (rules) { return Object.setPrototypeOf(rules, CSSRuleList.prototype); };
+  var CSSGroupingRule = ruleClass("CSSGroupingRule");
+  var CSSConditionRule = ruleClass("CSSConditionRule", CSSGroupingRule);
+  ruleClass("CSSMediaRule", CSSConditionRule);
+  ruleClass("CSSSupportsRule", CSSConditionRule);
+  ruleClass("CSSContainerRule", CSSConditionRule);
+  ruleClass("CSSLayerBlockRule", CSSGroupingRule);
+  ruleClass("CSSScopeRule", CSSGroupingRule);
+  ruleClass("CSSImportRule");
+  ruleClass("CSSFontFaceRule");
+  ruleClass("CSSPageRule");
+  ruleClass("CSSKeyframesRule");
+  ruleClass("CSSKeyframeRule");
+  ruleClass("CSSNamespaceRule");
+  ruleClass("CSSCounterStyleRule");
+  ruleClass("CSSLayerStatementRule");
+  ruleClass("CSSNestedDeclarations");
+  Object.setPrototypeOf(CSSStyleRule.prototype, CSSRule.prototype);
+  Object.setPrototypeOf(CSSStyleRule, CSSRule);
+  // CSSStyleProperties: a rule's declaration block — a CSSStyleDeclaration with its own store
+  var CSSStyleProperties = function CSSStyleProperties() { throw new TypeError("Illegal constructor"); };
+  Object.setPrototypeOf(CSSStyleProperties.prototype, Computed.prototype);
+  Object.setPrototypeOf(CSSStyleProperties, Computed);
+  g.CSSStyleProperties = CSSStyleProperties;
+  var declBlock = function (decls) {
+    var style = Object.create(CSSStyleProperties.prototype);
+    var items = decls.map(function (d) { return [d[0], d[1], !!d[2]]; });
+    var find = function (n) { return items.find(function (x) { return x[0] === String(n); }); };
+    var sync = function () { items.forEach(function (d) { style[d[0]] = d[1]; style[camel(d[0])] = d[1]; }); };
+    Object.defineProperties(style, {
+      getPropertyValue: { value: function (n) { var d = find(n); return d ? d[1] : ""; } },
+      getPropertyPriority: { value: function (n) { var d = find(n); return d && d[2] ? "important" : ""; } },
+      setProperty: { value: function (n, v, prio) {
+        n = String(n); v = String(v === undefined ? "" : v);
+        var d = find(n);
+        if (v === "") { if (d) items.splice(items.indexOf(d), 1); }
+        else if (d) { d[1] = v; d[2] = prio === "important"; }
+        else items.push([n, v, prio === "important"]);
+        sync();
+      } },
+      removeProperty: { value: function (n) { var old = style.getPropertyValue(n); var d = find(n); if (d) items.splice(items.indexOf(d), 1); return old; } },
+      item: { value: function (i) { return items[i] ? items[i][0] : ""; } },
+      length: { get: function () { return items.length; } },
+      cssText: {
+        get: function () { return items.map(function (d) { return d[0] + ": " + d[1] + (d[2] ? " !important" : "") + ";"; }).join(" "); },
+        set: function (v) { items = parseDeclarations(String(v)).map(function (d) { return [d[0], d[1], !!d[2]]; }); sync(); },
+      },
     });
+    sync();
+    return style;
+  };
+  var makeRule = function (proto, type, cssText, parentRule, extra) {
+    var r = Object.create(proto);
+    var props = {
+      type: { value: type, enumerable: true },
+      cssText: { value: cssText, enumerable: true },
+      parentRule: { value: parentRule || null, enumerable: true },
+    };
+    if (extra) for (var k in extra) props[k] = extra[k];
+    Object.defineProperties(r, props);
+    return r;
+  };
+  var emptySheet = function () {
+    var s = { type: "text/css", href: null, ownerNode: null, parentStyleSheet: null, title: null, media: makeMediaList(""), disabled: false, cssRules: asRuleList([]), rules: asRuleList([]) };
+    if (g.CSSStyleSheet) Object.setPrototypeOf(s, g.CSSStyleSheet.prototype);
+    return s;
+  };
+  var stampSheet = function (rules, sheet) {
+    for (var i = 0; i < rules.length; i++) {
+      var r = rules[i];
+      if (r.parentStyleSheet !== sheet) r.parentStyleSheet = sheet;
+      if (r.cssRules) stampSheet(r.cssRules, sheet);
+    }
+  };
+  var parseSheetFlat = function (text, parentRule) {
+    return asRuleList(splitRules(stripComments(text)).map(function (rule) {
+      var open = findTop(rule, 0, "{");
+      var prelude = (open < 0 ? rule : rule.slice(0, open)).trim();
+      var block = open < 0 ? "" : rule.slice(open + 1, rule.length - 1);
+      if (prelude.charAt(0) !== "@") {
+        return makeRule(CSSStyleRule.prototype, 1, rule, parentRule, {
+          selectorText: { value: prelude, enumerable: true },
+          style: { value: declBlock(parseDeclarations(block)), enumerable: true },
+        });
+      }
+      var m = /^@([\w-]+)\s*([\s\S]*)$/.exec(prelude.replace(/;\s*$/, ""));
+      var kw = m[1].toLowerCase(), rest = (m[2] || "").trim();
+      var grouped = function (proto, type, extra) {
+        var r = makeRule(proto, type, rule, parentRule, extra || {});
+        Object.defineProperties(r, { cssRules: { value: parseSheetFlat(block, r), enumerable: true } });
+        return r;
+      };
+      switch (kw) {
+        case "media": return grouped(g.CSSMediaRule.prototype, 4, { conditionText: { value: rest, enumerable: true }, media: { value: makeMediaList(rest), enumerable: true } });
+        case "supports": return grouped(g.CSSSupportsRule.prototype, 12, { conditionText: { value: rest, enumerable: true } });
+        case "container": return grouped(g.CSSContainerRule.prototype, 0, { conditionText: { value: rest, enumerable: true } });
+        case "layer":
+          if (open < 0) return makeRule(g.CSSLayerStatementRule.prototype, 0, rule, parentRule, { nameList: { value: rest ? rest.split(",").map(function (s) { return s.trim(); }) : [], enumerable: true } });
+          return grouped(g.CSSLayerBlockRule.prototype, 0, { name: { value: rest, enumerable: true } });
+        case "scope": return grouped(g.CSSScopeRule.prototype, 0, {});
+        case "import": {
+          var hm = /url\(\s*["']?([^"')]+)["']?\s*\)|^["']([^"']+)["']/.exec(rest);
+          return makeRule(g.CSSImportRule.prototype, 3, rule, parentRule, {
+            href: { value: hm ? (hm[1] !== undefined ? hm[1] : hm[2]) : "", enumerable: true },
+            media: { value: makeMediaList(hm ? rest.slice(hm[0].length).trim() : ""), enumerable: true },
+            styleSheet: { value: emptySheet(), enumerable: true },
+          });
+        }
+        case "font-face": return makeRule(g.CSSFontFaceRule.prototype, 5, rule, parentRule, { style: { value: declBlock(parseDeclarations(block)), enumerable: true } });
+        case "page": return makeRule(g.CSSPageRule.prototype, 6, rule, parentRule, {
+          selectorText: { value: rest, enumerable: true },
+          style: { value: declBlock(parseDeclarations(block)), enumerable: true },
+        });
+        case "counter-style": return makeRule(g.CSSCounterStyleRule.prototype, 11, rule, parentRule, {
+          name: { value: rest, enumerable: true },
+          style: { value: declBlock(parseDeclarations(block)), enumerable: true },
+        });
+        case "namespace": {
+          var nm = /^(?:(\S+)\s+)?(?:url\(\s*["']?([^"')]+)["']?\s*\)|["']([^"']+)["'])/.exec(rest);
+          return makeRule(g.CSSNamespaceRule.prototype, 10, rule, parentRule, {
+            prefix: { value: nm && nm[1] ? nm[1] : "", enumerable: true },
+            namespaceURI: { value: nm ? (nm[2] !== undefined ? nm[2] : nm[3]) : "", enumerable: true },
+          });
+        }
+        default: {
+          if (/(^|-)keyframes$/.test(kw)) {
+            var kr = makeRule(g.CSSKeyframesRule.prototype, 7, rule, parentRule, { name: { value: rest.split(/\s+/)[0] || "", enumerable: true } });
+            var frames = splitRules(stripComments(block)).map(function (fr) {
+              var fo = findTop(fr, 0, "{");
+              var keyText = fr.slice(0, fo).trim().split(",").map(function (s) { s = s.trim(); return s === "from" ? "0%" : s === "to" ? "100%" : s; }).join(", ");
+              return makeRule(g.CSSKeyframeRule.prototype, 8, fr, kr, {
+                keyText: { value: keyText, enumerable: true },
+                style: { value: declBlock(parseDeclarations(fr.slice(fo + 1, fr.length - 1))), enumerable: true },
+              });
+            });
+            Object.defineProperties(kr, { cssRules: { value: asRuleList(frames), enumerable: true } });
+            return kr;
+          }
+          return makeRule(CSSRule.prototype, 0, rule, parentRule, {});
+        }
+      }
+    }));
   };
   // constructable sheets (new CSSStyleSheet(), replaceSync, adoptedStyleSheets): they hold rules but do not enter the cascade
   if (!g.CSSStyleSheet) {
     g.CSSStyleRule = CSSStyleRule;
     g.CSSStyleSheet = class CSSStyleSheet {
       constructor(opts) { this._text = ""; this.media = makeMediaList((opts && opts.media) || ""); this.disabled = !!(opts && opts.disabled); this.ownerNode = null; this.parentStyleSheet = null; this.href = null; this.type = "text/css"; this.title = null; }
-      get cssRules() { return parseSheetFlat(this._text); }
+      get cssRules() { var r = parseSheetFlat(this._text); stampSheet(r, this); return r; }
       get rules() { return this.cssRules; }
       replaceSync(text) { this._text = String(text); }
       replace(text) { this._text = String(text); return Promise.resolve(this); }
