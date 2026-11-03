@@ -232,13 +232,17 @@ dom.window.close();
 | :--- | :--- |
 | `new JSDOM(html, options)` (synchronous parse & inline scripts) | `getInternalVMContext()` (runs in QuickJS WASM, not Node `vm`; use `window.eval`) |
 | `url`, `referrer`, `contentType`, `pretendToBeVisual` | `nodeLocation()` (parser does not retain source offsets) |
-| `runScripts: "dangerously"` \| `"outside-only"` | `cookieJar` |
+| `runScripts: "dangerously"` \| `"outside-only"` | `cookieJar` (shared/injected jar not supported; see below) |
 | `resources: "usable"` (fetches `<script src>` and `<link rel="stylesheet">`) | `reconfigure()` |
 | `virtualConsole` (`new VirtualConsole().sendTo(console)`) | |
 | `beforeParse(window)` | |
 | `JSDOM.fromURL(url, options)` & `JSDOM.fromFile(path, options)` | |
 | `dom.serialize()`, `dom.close()`, `dom.window.close()` | |
 | `await dom.ready` (waits for external scripts and the `load` event) | |
+
+> [!NOTE]
+> - **Timers & Lifecycle:** The page's timers and `load` event run behind the constructor and do not keep the Node process alive; `await dom.ready` waits for external scripts and the `load` event.
+> - **Cookies:** `document.cookie` works through a small in-memory jar belonging to the page itself (expiry via `max-age` / `expires` included). An external jar cannot be injected or shared between pages (which is what the unsupported `cookieJar` option would do).
 
 ---
 

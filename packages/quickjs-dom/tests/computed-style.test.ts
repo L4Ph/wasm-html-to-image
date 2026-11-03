@@ -50,7 +50,9 @@ describe("getComputedStyle", () => {
       // jsdom has no UA sheet beyond a few defaults and computes fewer properties: compare what both answered
       a.forEach((v, i) => {
         // jsdom lets a style attribute beat an !important of a sheet; the specification does not (checked below)
-        if (b[i] !== "" && !(sel === "#special" && props[i] === "color")) expect([sel, props[i], v]).toEqual([sel, props[i], b[i]]);
+        // jsdom 30 serializes a zero length without its unit ("0"); browsers and jsdom 26 answer "0px"
+        const zeroUnit = b[i] === "0" && v === "0px";
+        if (b[i] !== "" && !zeroUnit && !(sel === "#special" && props[i] === "color")) expect([sel, props[i], v]).toEqual([sel, props[i], b[i]]);
       });
     }
   });

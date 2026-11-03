@@ -204,14 +204,16 @@
   getter(P.Element, "classList", function () { return this[CL] || (this[CL] = new TokenList(this)); });
 
   // dataset: data-* attributes as camelCase properties
+  var DOMStringMap = function DOMStringMap() { throw new TypeError("Illegal constructor"); };
   var toAttr = function (key) { return "data-" + String(key).replace(/[A-Z]/g, function (c) { return "-" + c.toLowerCase(); }); };
   var toKey = function (attr) { return attr.slice(5).replace(/-([a-z])/g, function (_, c) { return c.toUpperCase(); }); };
   var DS = Symbol("dataset");
   getter(P.Element, "dataset", function () {
     if (this[DS]) return this[DS];
     var el = this;
-    return (this[DS] = new Proxy({}, {
-      get: function (_, key) { if (typeof key !== "string") return undefined; var v = el.getAttribute(toAttr(key)); return v === null ? undefined : v; },
+    return (this[DS] = new Proxy(Object.create(DOMStringMap.prototype), {
+      // a data-* attribute wins; anything else (constructor, toString, ...) falls through to the prototype
+      get: function (target, key) { if (typeof key !== "string") return Reflect.get(target, key); var v = el.getAttribute(toAttr(key)); return v === null ? Reflect.get(target, key) : v; },
       set: function (_, key, value) { if (typeof key === "string") el.setAttribute(toAttr(key), String(value)); return true; },
       has: function (_, key) { return typeof key === "string" && el.hasAttribute(toAttr(key)); },
       deleteProperty: function (_, key) { if (typeof key === "string") el.removeAttribute(toAttr(key)); return true; },
@@ -266,33 +268,62 @@
       }
     }
   };
-  var invoke = function (node, ev, phase) {
+  // an on<type> handler is a listener of its own (jsdom's model, and the one pages observe):
+  // it takes a slot in the list the first time it is set — by the IDL property or by being
+  // read from a content attribute — and keeps that slot when set to null and back, the null
+  // simply leaving the slot inert. ensureHandlerEntry claims the slot.
+  var ensureHandlerEntry = function (node, type) {
+    var all = LISTENERS.get(node);
+    if (!all) LISTENERS.set(node, (all = {}));
+    var list = all[type] || (all[type] = []);
+    for (var i = 0; i < list.length; i++) if (list[i].handler) return;
+    list.push({ handler: true, capture: false, once: false, passive: false, removed: false });
+  };
+  var invoke = function (node, ev, phase, seenTarget) {
+    // an attribute handler claims its slot the first time a dispatch reaches its node
+    if (phase !== 1 && node.nodeType === 1 && node.hasAttribute && node.hasAttribute("on" + ev.type)) ensureHandlerEntry(node, ev.type);
     var all = LISTENERS.get(node), list = all && all[ev.type];
     ev.currentTarget = node;
     ev.eventPhase = phase;
+    if (seenTarget) { ev.target = seenTarget; ev.srcElement = seenTarget; }
+    var sawHandler = false;
     if (list) {
       list = list.slice();
+      // (at the target the list runs in registration order: jsdom runs capture listeners first
+      // there, which departs from the spec and from this package's own event test — adjudicated
+      // in the parity ledger, Phase 2 — so it is deliberately not copied)
       for (var i = 0; i < list.length; i++) {
         var entry = list[i];
         if (entry.removed) continue;
         if (phase === 1 && !entry.capture) continue;
         if (phase === 3 && entry.capture) continue;
-        if (entry.once) removeListener.call(node, ev.type, entry.fn, { capture: entry.capture });
-        try {
-          if (typeof entry.fn === "function") entry.fn.call(node, ev);
-          else if (entry.fn && typeof entry.fn.handleEvent === "function") entry.fn.handleEvent(ev);
-        } catch (e) {
-          // an exception in a listener is reported and does not stop the others
-          if (typeof globalThis.reportError === "function") globalThis.reportError(e);
-          else if (globalThis.console) globalThis.console.error(e);
+        if (entry.handler) {
+          sawHandler = true;
+          var h = node["on" + ev.type];
+          if (typeof h === "function") {
+            try { h.call(node, ev); } catch (e) { if (globalThis.console) globalThis.console.error(e); }
+          }
+        } else {
+          if (entry.once) removeListener.call(node, ev.type, entry.fn, { capture: entry.capture });
+          try {
+            if (typeof entry.fn === "function") entry.fn.call(node, ev);
+            else if (entry.fn && typeof entry.fn.handleEvent === "function") entry.fn.handleEvent(ev);
+          } catch (e) {
+            // an exception in a listener is reported and does not stop the others
+            if (typeof globalThis.reportError === "function") globalThis.reportError(e);
+            else if (globalThis.console) globalThis.console.error(e);
+          }
         }
         if (ev._stopImmediatePropagationFlag) return;
       }
     }
-    // on<type> handler properties
-    var handler = node["on" + ev.type];
-    if (phase !== 1 && typeof handler === "function") {
-      try { handler.call(node, ev); } catch (e) { if (globalThis.console) globalThis.console.error(e); }
+    // a handler assigned as a plain property on an object that has no on* accessor (the
+    // EventTarget subclasses of the shims — WebSocket, ports) still fires, after the list
+    if (!sawHandler && phase !== 1) {
+      var own = Object.getOwnPropertyDescriptor(node, "on" + ev.type);
+      if (own && typeof own.value === "function") {
+        try { own.value.call(node, ev); } catch (e) { if (globalThis.console) globalThis.console.error(e); }
+      }
     }
   };
   var parentOf = function (n) {
@@ -302,16 +333,35 @@
   };
   var dispatch = function (ev) {
     if (!ev || typeof ev.type !== "string") throw new TypeError("The event provided is not an Event.");
+    // the propagation path crosses a shadow boundary only for a composed event (parentOf steps
+    // from a shadow root to its host); the last node inside the tree is where it stops otherwise
     var path = [], n = this;
-    for (; n; n = parentOf(n)) path.push(n);
+    for (; n; n = parentOf(n)) {
+      path.push(n);
+      if (n.nodeType === 11 && n.host && !ev.composed) break;
+    }
+    // what a listener sees as the target: the first node of its own tree's stretch of the path —
+    // a listener outside a shadow tree sees the host, not the node inside (the document's stretch
+    // runs on up to the window, which sees the same target as the document does)
+    var seen = [], seg = 0;
+    for (i = 0; i < path.length; i++) {
+      if (i > 0 && path[i - 1].nodeType === 11 && path[i - 1].host) seg = i;
+      seen.push(path[seg]);
+    }
     ev.target = ev.srcElement = this;
-    ev._path = path.map(function (x) { return { currentTarget: x }; });
+    ev._path = path.map(function (x, i) { return { currentTarget: x, target: seen[i] }; });
     ev.cancelBubble = false;
     ev._stopImmediatePropagationFlag = false;
     var i;
-    for (i = path.length - 1; i > 0 && !ev.cancelBubble; i--) invoke(path[i], ev, 1);
-    if (!ev.cancelBubble) invoke(this, ev, 2);
-    if (ev.bubbles) for (i = 1; i < path.length && !ev.cancelBubble; i++) invoke(path[i], ev, 3);
+    for (i = path.length - 1; i > 0 && !ev.cancelBubble; i--) invoke(path[i], ev, 1, seen[i]);
+    if (!ev.cancelBubble) invoke(this, ev, 2, this);
+    // the bubble pass: a node the event is retargeted onto (the host of a tree the event came
+    // out of) hears it even when the event does not bubble — in its own tree the host IS the
+    // target — while ordinary ancestors of a non-bubbling event hear nothing
+    for (i = 1; i < path.length && !ev.cancelBubble; i++) {
+      if (ev.bubbles || seen[i] === path[i]) invoke(path[i], ev, 3, seen[i]);
+    }
+    ev.target = ev.srcElement = this;
     ev.currentTarget = null;
     ev.eventPhase = 0;
     return !ev.defaultPrevented;
@@ -352,13 +402,14 @@
       if (recs.length) o._callback.call(o, recs, o);
     });
   };
+  var MutationRecord = function MutationRecord() { throw new TypeError("Illegal constructor"); };
   var record = function (type, target, extra) {
     var base = { type: type, target: target, addedNodes: [], removedNodes: [], previousSibling: null, nextSibling: null, attributeName: null, attributeNamespace: null, oldValue: null };
     interested(target, function (o, opt) {
       if (type === "childList" && !opt.childList) return;
       if (type === "attributes" && (!opt.attributes || (opt.attributeFilter && opt.attributeFilter.indexOf(extra.attributeName) < 0))) return;
       if (type === "characterData" && !opt.characterData) return;
-      var rec = Object.assign({}, base, extra);
+      var rec = Object.assign(Object.create(MutationRecord.prototype), base, extra);
       if (!((type === "attributes" && opt.attributeOldValue) || (type === "characterData" && opt.characterDataOldValue))) rec.oldValue = null;
       queue(o, rec);
     }, target);
@@ -702,7 +753,12 @@
     });
     return out;
   };
-  var StyleDecl = function (el) { Object.defineProperty(this, "_el", { value: el }); };
+  var StyleDecl = function CSSStyleDeclaration(el) { Object.defineProperty(this, "_el", { value: el }); };
+  // the one CSSStyleDeclaration for both el.style (here) and getComputedStyle (computed.js picks
+  // it up from here). It stays off the bridge's window table, like DOMStringMap: a style object is
+  // all named properties, and the bridge's class wrappers would keep host-side sets local.
+  D.CSSStyleDeclarationCtor = StyleDecl;
+  Object.defineProperty(StyleDecl.prototype, "parentRule", { value: null, writable: true, configurable: true });
   var styleItems = function (s) { return parseStyle(s._el.getAttribute("style")); };
   var styleWrite = function (s, items) {
     var text = items.map(function (d) { return d[0] + ": " + d[1] + ";"; }).join(" ");
@@ -758,34 +814,59 @@
     var parts = spec.split(":");
     if (!Object.getOwnPropertyDescriptor(P.HTMLElement, parts[0])) reflectString(P.HTMLElement, parts[0], parts[1]);
   });
-  ["hidden", "disabled", "checked", "selected", "required", "readOnly:readonly", "multiple", "autofocus", "open", "async", "defer"].forEach(function (spec) {
+  ["hidden", "disabled", "required", "readOnly:readonly", "multiple", "autofocus", "open", "async", "defer"].forEach(function (spec) {
     var parts = spec.split(":");
     if (!Object.getOwnPropertyDescriptor(P.HTMLElement, parts[0])) reflectBool(P.HTMLElement, parts[0], parts[1]);
   });
-  // value: a textarea's is its text, a select's the selected option's, the others' the attribute
+  // value: a control's value is state of its own, seeded by its default (the value attribute for
+  // an input, the text for a textarea) and parting from it once set — the dirty flag the spec
+  // keeps. Before, value and the attribute were one thing, so form.reset() had nothing to
+  // restore and a late attribute write moved a value the page had already typed over.
+  var VAL = Symbol("value");
+  var sanitizeValue = function (el, v) {
+    var type = el.localName === "input" ? el.type : "";
+    if (type === "number") return /^-?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(v) ? v : "";
+    if (/^(text|search|tel|url|email|password)$/.test(type)) return v.replace(/[\r\n]/g, "");
+    return v;
+  };
   var valueDesc = Object.getOwnPropertyDescriptor(P.HTMLElement, "value");
   if (!valueDesc) {
-    var VAL = Symbol("value");
     getter(P.HTMLElement, "value", function () {
       var tag = this.localName;
-      if (tag === "textarea") return this.textContent;
+      if (tag === "textarea") return this[VAL] !== undefined ? this[VAL] : this.textContent;
       if (tag === "select") {
-        var o = this.querySelector("option[selected]") || this.querySelector("option");
-        return o ? o.value : "";
+        var opts = this.querySelectorAll("option");
+        for (var i = 0; i < opts.length; i++) if (opts[i].selected) return opts[i].value;
+        return "";
       }
       if (tag === "option") { var v = this.getAttribute("value"); return v === null ? this.textContent : v; }
       if (this[VAL] !== undefined) return this[VAL];
       var a = this.getAttribute("value");
-      return a === null ? "" : a;
+      return tag === "input" ? sanitizeValue(this, a === null ? "" : a) : a === null ? "" : a;
     }, function (v) {
       var tag = this.localName;
-      if (tag === "textarea") this.textContent = String(v);
+      if (tag === "textarea") this[VAL] = String(v);
       else if (tag === "select") {
         var opts = this.querySelectorAll("option");
-        for (var i = 0; i < opts.length; i++) { if (opts[i].value === String(v)) opts[i].setAttribute("selected", ""); else opts[i].removeAttribute("selected"); }
-      } else this.setAttribute("value", String(v));
+        for (var i = 0; i < opts.length; i++) opts[i].selected = opts[i].value === String(v);
+      } else if (tag === "input") this[VAL] = sanitizeValue(this, String(v));
+      else this.setAttribute("value", String(v));
     });
   }
+  getter(P.HTMLElement, "defaultValue", function () {
+    if (this.localName === "textarea") return this.textContent;
+    var a = this.getAttribute("value");
+    return a === null ? "" : a;
+  }, function (v) {
+    if (this.localName === "textarea") this.textContent = String(v);
+    else this.setAttribute("value", String(v));
+  });
+  // checkedness is state too, seeded by the checked attribute; checking a radio unchecks its group
+  var CHK = Symbol("checked");
+  var uncheckRadioGroup = function (el) {
+    var group = radiosOf(el);
+    for (var i = 0; i < group.length; i++) if (group[i] !== el) group[i][CHK] = false;
+  };
   getter(P.HTMLElement, "form", function () { return this.closest("form"); });
   getter(P.HTMLElement, "isContentEditable", function () { return this.getAttribute("contenteditable") !== null && this.getAttribute("contenteditable") !== "false"; });
 
@@ -803,14 +884,58 @@
     return root;
   });
   getter(P.Element, "shadowRoot", function () { var r = this[SHADOW]; return r && r.mode === "open" ? r : null; });
+  // ElementInternals: what a custom element reports about itself. The shadow root is the real
+  // one (a closed root is visible here, as it should be); the form side is inert — these elements
+  // are not form-associated in this engine, so validity is a standing all-valid state and the
+  // setters have nothing to set.
+  var ElementInternals = function ElementInternals() { illegal(); };
+  D.ctors.ElementInternals = ElementInternals;
+  var INTERNALS = new WeakMap();
+  def(P.HTMLElement, "attachInternals", function () {
+    // only a custom element has internals (the spec's condition), and only once
+    if (!defs.has(this.localName)) { var e0 = new Error("Failed to execute 'attachInternals' on 'HTMLElement': The target element is not a custom element."); e0.name = "NotSupportedError"; throw e0; }
+    if (INTERNALS.has(this)) { var e = new Error("Failed to execute 'attachInternals' on 'HTMLElement': This element has already been attached to an internals object."); e.name = "NotSupportedError"; throw e; }
+    var el = this;
+    var internals = Object.create(ElementInternals.prototype);
+    var validity = Object.create(W.ValidityState.prototype);
+    ["valueMissing", "typeMismatch", "patternMismatch", "tooLong", "tooShort", "rangeUnderflow", "rangeOverflow", "stepMismatch", "badInput", "customError"].forEach(function (k) {
+      Object.defineProperty(validity, k, { value: false, enumerable: true });
+    });
+    Object.defineProperty(validity, "valid", { value: true, enumerable: true });
+    Object.defineProperties(internals, {
+      shadowRoot: { get: function () { return el[SHADOW] || null; }, enumerable: true },
+      form: { value: null, enumerable: true },
+      labels: { value: null, enumerable: true },
+      willValidate: { value: false, enumerable: true },
+      validationMessage: { value: "", enumerable: true },
+      validity: { value: validity, enumerable: true },
+      checkValidity: { value: function () { return true; } },
+      reportValidity: { value: function () { return true; } },
+      setValidity: { value: function () {} },
+      setFormValue: { value: function () {} },
+    });
+    INTERNALS.set(this, internals);
+    return internals;
+  });
   // events leave a shadow tree through its host
   var plainParent = parentOf;
   parentOf = function (n) { return n.parentNode || (n.nodeType === 11 && n.host) || plainParent(n); };
+  // and a node of a shadow tree is connected when its host is: the native walk stops at the
+  // root, which for a shadow tree is the fragment, so the last step goes through the host
+  var nativeConnected = Object.getOwnPropertyDescriptor(P.Node, "isConnected");
+  if (nativeConnected && nativeConnected.get) {
+    var nativeGet = nativeConnected.get;
+    getter(P.Node, "isConnected", function () {
+      if (nativeGet.call(this)) return true;
+      var r = this.getRootNode ? this.getRootNode() : null;
+      return !!(r && r.nodeType === 11 && r.host && r.host.isConnected);
+    });
+  }
 
   // HTMLCollection / NodeList are live: a read-through proxy that re-reads the C answer when any tree or attribute
   // has changed since (D.version()). It is not an Array (as in a browser) but has the length, indices, item,
   // namedItem and the array methods.
-  var liveCollection = function (compute, named, kind) {
+  var liveCollection = function (compute, named, kind, namedItem) {
     var cache = null, ver = -1;
     var arr = function () {
       var v = D.version();
@@ -823,11 +948,13 @@
         if (k === "item") return function (i) { return arr()[i] || null; };
         if (k === "namedItem") return function (name) {
           var a = arr();
+          if (namedItem) { var r = namedItem(String(name), a); if (r !== undefined) return r; }
           for (var i = 0; i < a.length; i++) if (a[i].getAttribute && (a[i].getAttribute("id") === name || a[i].getAttribute("name") === name)) return a[i];
           return null;
         };
         var a2 = arr(), v2 = a2[k];
         if (v2 === undefined && named && typeof k === "string") {
+          if (namedItem) { var r2 = namedItem(k, a2); if (r2 !== undefined) return r2; }
           for (var j = 0; j < a2.length; j++) if (a2[j].getAttribute("id") === k || a2[j].getAttribute("name") === k) return a2[j];
         }
         return typeof v2 === "function" ? v2.bind(a2) : v2;
@@ -856,6 +983,8 @@
     ["HTMLHeadingElement", "h1", "h2", "h3", "h4", "h5", "h6"], ["HTMLTableRowElement", "tr"], ["HTMLTableCellElement", "td", "th"],
     ["HTMLVideoElement", "video"], ["HTMLAudioElement", "audio"], ["HTMLSourceElement", "source"], ["HTMLPreElement", "pre"],
     ["HTMLHRElement", "hr"], ["HTMLDialogElement", "dialog"], ["HTMLDetailsElement", "details"], ["HTMLFieldSetElement", "fieldset"],
+    ["HTMLTableCaptionElement", "caption"], ["HTMLTableColElement", "col", "colgroup"], ["HTMLTableSectionElement", "thead", "tbody", "tfoot"],
+    ["HTMLDirectoryElement", "dir"], ["HTMLFrameElement", "frame"], ["HTMLFrameSetElement", "frameset"], ["HTMLMarqueeElement", "marquee"],
   ];
   classes.forEach(function (spec) {
     var C = { [spec[0]]: function () { illegal(); } }[spec[0]];
@@ -867,6 +996,15 @@
   });
   // type: an input without a known one is a text field, a button without one submits
   var INPUT_TYPES = ["hidden", "text", "search", "tel", "url", "email", "password", "date", "month", "week", "time", "datetime-local", "number", "range", "color", "checkbox", "radio", "file", "submit", "image", "reset", "button"];
+  getter(P.HTMLInputElement, "checked", function () {
+    return this[CHK] !== undefined ? this[CHK] : this.hasAttribute("checked");
+  }, function (v) {
+    this[CHK] = !!v;
+    if (v && this.type === "radio") uncheckRadioGroup(this);
+  });
+  getter(P.HTMLInputElement, "defaultChecked", function () { return this.hasAttribute("checked"); }, function (v) {
+    if (v) this.setAttribute("checked", ""); else this.removeAttribute("checked");
+  });
   getter(P.HTMLInputElement, "type", function () {
     var t = (this.getAttribute("type") || "").toLowerCase();
     return INPUT_TYPES.indexOf(t) >= 0 ? t : "text";
@@ -883,16 +1021,30 @@
   });
   getter(P.HTMLOptionElement, "text", function () { return this.textContent.replace(/[ \t\n\f\r]+/g, " ").trim(); }, function (v) { this.textContent = String(v); });
 
-  // an option that is selected deselects the others of a single select
-  getter(P.HTMLOptionElement, "selected", function () { return this.hasAttribute("selected"); }, function (v) {
+  // an option's selectedness is state of its own, seeded by the selected attribute (its
+  // defaultSelected): before, the two were one attribute, so a select could not hold a
+  // deselected state (selectedIndex = -1 read back 0) and reset had no defaults to return to.
+  // An untouched single select shows its first option, as browsers and jsdom do.
+  var SEL = Symbol("selectedness");
+  var optionSelected = function (o) {
+    if (o[SEL] !== undefined) return o[SEL];
+    if (o.hasAttribute("selected")) return true;
+    var select = o.closest("select");
+    if (!select || select.hasAttribute("multiple")) return false;
+    var opts = select.querySelectorAll("option");
+    if (opts[0] !== o) return false;
+    for (var i = 0; i < opts.length; i++) if (opts[i][SEL] || opts[i].hasAttribute("selected")) return false;
+    return true;
+  };
+  getter(P.HTMLOptionElement, "selected", function () { return optionSelected(this); }, function (v) {
+    this[SEL] = !!v;
     if (v) {
       var select = this.closest("select");
       if (select && !select.hasAttribute("multiple")) {
         var all = select.querySelectorAll("option");
-        for (var i = 0; i < all.length; i++) if (all[i] !== this) all[i].removeAttribute("selected");
+        for (var i = 0; i < all.length; i++) if (all[i] !== this) all[i][SEL] = false;
       }
-      this.setAttribute("selected", "");
-    } else this.removeAttribute("selected");
+    }
   });
   getter(P.HTMLOptionElement, "defaultSelected", function () { return this.hasAttribute("selected"); }, function (v) { if (v) this.setAttribute("selected", ""); else this.removeAttribute("selected"); });
 
@@ -905,11 +1057,11 @@
     "progress ratechange reset resize scroll scrollend securitypolicyviolation seeked seeking select selectionchange selectstart slotchange stalled submit suspend " +
     "timeupdate toggle touchcancel touchend touchmove touchstart transitioncancel transitionend transitionrun transitionstart volumechange waiting wheel").split(" ");
   var HANDLER = Symbol("handlers");
-  [P.HTMLElement, P.Document].forEach(function (proto) {
-    HANDLER_EVENTS.forEach(function (type) {
+  var defHandlers = function (target, events) {
+    events.forEach(function (type) {
       var name = "on" + type;
-      if (Object.getOwnPropertyDescriptor(proto, name)) return;
-      getter(proto, name, function () {
+      if (Object.getOwnPropertyDescriptor(target, name)) return;
+      getter(target, name, function () {
         var h = this[HANDLER] && this[HANDLER][type];
         if (h !== undefined) return h;
         var code = this.nodeType === 1 ? this.getAttribute(name) : null;
@@ -920,15 +1072,45 @@
         return fn;
       }, function (v) {
         (this[HANDLER] || Object.defineProperty(this, HANDLER, { value: {}, configurable: true })[HANDLER])[type] = typeof v === "function" ? v : null;
+        if (typeof v === "function") ensureHandlerEntry(this, type);
       });
     });
-  });
+  };
+  [P.HTMLElement, P.Document].forEach(function (proto) { defHandlers(proto, HANDLER_EVENTS); });
+  // the window has its own handler list on top of the shared one (print, unload, message, storage, ...)
+  defHandlers(globalThis, HANDLER_EVENTS.concat(("afterprint beforematch beforeprint beforetoggle beforeunload contextlost contextrestored cuechange hashchange " +
+    "languagechange message messageerror offline online pagehide pageshow pointerrawupdate popstate rejectionhandled storage unhandledrejection unload " +
+    "webkitanimationend webkitanimationiteration webkitanimationstart webkittransitionend").split(" ")));
 
   // a form's controls (by name too, as in form.elements.email) and a select's options
   var CONTROLS = "input, select, textarea, button, fieldset, object, output";
+  // a name shared by several radio buttons answers a RadioNodeList, not the first of them
+  var RadioNodeList = function RadioNodeList() { illegal(); };
+  var makeRadioNodeList = function (nodes) {
+    var list = Object.create(RadioNodeList.prototype);
+    nodes.forEach(function (n, i) { list[i] = n; });
+    list.length = nodes.length;
+    return list;
+  };
+  Object.defineProperty(RadioNodeList.prototype, "value", {
+    configurable: true,
+    get: function () { for (var i = 0; i < this.length; i++) if (this[i].checked) return this[i].value; return ""; },
+    set: function (v) {
+      v = String(v);
+      for (var i = 0; i < this.length; i++) if (this[i].value === v) { this[i].checked = true; return; }
+      if (v === "") for (var j = 0; j < this.length; j++) this[j].checked = false;
+    },
+  });
+  RadioNodeList.prototype.item = function (i) { return i >= 0 && i < this.length ? this[i] : null; };
+  RadioNodeList.prototype[Symbol.iterator] = Array.prototype[Symbol.iterator];
+  var formNamedItem = function (name, a) {
+    var matches = a.filter(function (el) { return el.getAttribute && (el.getAttribute("id") === name || el.getAttribute("name") === name); });
+    if (matches.length > 1 && matches.every(function (el) { return el.type === "radio"; })) return makeRadioNodeList(matches);
+    return undefined;
+  };
   getter(P.HTMLFormElement, "elements", function () {
     var form = this;
-    return liveCollection(function () { return Array.prototype.slice.call(form.querySelectorAll(CONTROLS)); }, true, "HTMLFormControlsCollection");
+    return liveCollection(function () { return Array.prototype.slice.call(form.querySelectorAll(CONTROLS)); }, true, "HTMLFormControlsCollection", formNamedItem);
   });
   getter(P.HTMLFormElement, "length", function () { return this.querySelectorAll(CONTROLS).length; });
   getter(P.HTMLSelectElement, "options", function () {
@@ -943,18 +1125,16 @@
   });
   getter(P.HTMLSelectElement, "selectedIndex", function () {
     var opts = this.querySelectorAll("option");
-    for (var i = 0; i < opts.length; i++) if (opts[i].hasAttribute("selected")) return i;
-    return opts.length && !this.hasAttribute("multiple") ? 0 : -1;
+    for (var i = 0; i < opts.length; i++) if (optionSelected(opts[i])) return i;
+    return -1;
   }, function (v) {
     var opts = this.querySelectorAll("option");
-    for (var i = 0; i < opts.length; i++) { if (i === Number(v)) opts[i].setAttribute("selected", ""); else opts[i].removeAttribute("selected"); }
+    for (var i = 0; i < opts.length; i++) opts[i][SEL] = i === Number(v);
   });
   getter(P.HTMLSelectElement, "selectedOptions", function () {
     var select = this;
     return liveCollection(function () {
-      var chosen = Array.prototype.filter.call(select.querySelectorAll("option"), function (o) { return o.hasAttribute("selected"); });
-      if (!chosen.length && !select.hasAttribute("multiple")) { var first = select.querySelector("option"); if (first) chosen = [first]; }
-      return chosen;
+      return Array.prototype.filter.call(select.querySelectorAll("option"), function (o) { return optionSelected(o); });
     });
   });
   getter(P.HTMLOptionElement, "index", function () {
@@ -962,9 +1142,18 @@
     return select ? Array.prototype.indexOf.call(select.querySelectorAll("option"), this) : 0;
   });
   def(P.HTMLFormElement, "reset", function () {
+    // the event goes first and can cancel the reset; the reset itself returns every control to
+    // its defaults by clearing the state that parted from them (value, checkedness, selectedness)
+    if (!this.dispatchEvent(new W.Event("reset", { bubbles: true, cancelable: true }))) return;
     var controls = this.querySelectorAll(CONTROLS);
-    for (var i = 0; i < controls.length; i++) { var c = controls[i]; if (c.localName === "input") c.value = c.getAttribute("value") || ""; }
-    this.dispatchEvent(new W.Event("reset", { bubbles: true, cancelable: true }));
+    for (var i = 0; i < controls.length; i++) {
+      var c = controls[i];
+      if (c.localName === "input" || c.localName === "textarea") { c[VAL] = undefined; if (c.localName === "input") c[CHK] = undefined; }
+      else if (c.localName === "select") {
+        var opts = c.querySelectorAll("option");
+        for (var j = 0; j < opts.length; j++) opts[j][SEL] = undefined;
+      }
+    }
   });
   def(P.HTMLFormElement, "requestSubmit", function () {
     if (this.dispatchEvent(new W.Event("submit", { bubbles: true, cancelable: true }))) { /* navigation: none here */ }
@@ -1013,6 +1202,13 @@
     value: function (x) { return !!x && x.nodeType === 1 && x.namespaceURI === SVG_URI && x.localName === "svg"; },
   });
   svgClass("SVGGElement", "SVGGraphicsElement", ["g"]);
+  svgClass("SVGSwitchElement", "SVGGraphicsElement", ["switch"]);
+  // <title> stays an HTML tag for the tag mapping (see above), so SVGTitleElement is recognised
+  // by namespace and name instead, the way SVGSVGElement is
+  svgClass("SVGTitleElement", "SVGElement");
+  Object.defineProperty(D.ctors.SVGTitleElement, Symbol.hasInstance, {
+    value: function (x) { return !!x && x.nodeType === 1 && x.namespaceURI === SVG_URI && x.localName === "title"; },
+  });
   svgClass("SVGUseElement", "SVGGraphicsElement", ["use"]);
   svgClass("SVGImageElement", "SVGGraphicsElement", ["image"]);
   svgClass("SVGForeignObjectElement", "SVGGraphicsElement", ["foreignobject"]);
@@ -1030,15 +1226,33 @@
   // viewport, and geometry (getBBox, getTotalLength, getPointAtLength) worked out from the attributes
   (function () {
     var SE = P.SVGElement, SG = P.SVGGraphicsElement;
-    var animated = function (read, write) {
+    // the SVG value interfaces: the animated pairs below wear them where a value actually arises.
+    // They are stashed for boot.js to install as globals, NOT registered as ctors: an animated
+    // value is all named properties (baseVal/animVal), and the bridge's class wrappers would keep
+    // host-side writes (className.baseVal = ...) local instead of forwarding them — the
+    // DOMStringMap lesson.
+    var svgValue = function (name) { var C = { [name]: function () { illegal(); } }[name]; (D.svgValueCtors || (D.svgValueCtors = {}))[name] = C; return C; };
+    var SVGAnimatedString = svgValue("SVGAnimatedString");
+    var SVGAnimatedRect = svgValue("SVGAnimatedRect");
+    var SVGRect = svgValue("SVGRect");
+    svgValue("SVGNumber");
+    svgValue("SVGStringList");
+    var SVGPreserveAspectRatio = svgValue("SVGPreserveAspectRatio");
+    [["SVG_PRESERVEASPECTRATIO_UNKNOWN", 0], ["SVG_PRESERVEASPECTRATIO_NONE", 1], ["SVG_PRESERVEASPECTRATIO_XMINYMIN", 2], ["SVG_PRESERVEASPECTRATIO_XMIDYMIN", 3], ["SVG_PRESERVEASPECTRATIO_XMAXYMIN", 4], ["SVG_PRESERVEASPECTRATIO_XMINYMID", 5], ["SVG_PRESERVEASPECTRATIO_XMIDYMID", 6], ["SVG_PRESERVEASPECTRATIO_XMAXYMID", 7], ["SVG_PRESERVEASPECTRATIO_XMINYMAX", 8], ["SVG_PRESERVEASPECTRATIO_XMIDYMAX", 9], ["SVG_PRESERVEASPECTRATIO_XMAXYMAX", 10], ["SVG_MEETORSLICE_UNKNOWN", 0], ["SVG_MEETORSLICE_MEET", 1], ["SVG_MEETORSLICE_SLICE", 2]].forEach(function (p) {
+      SVGPreserveAspectRatio[p[0]] = p[1];
+      Object.defineProperty(SVGPreserveAspectRatio.prototype, p[0], { value: p[1] });
+    });
+    svgValue("SVGAnimatedPreserveAspectRatio");
+    var animated = function (read, write, proto) {
       var o = {};
+      if (proto) Object.setPrototypeOf(o, proto);
       Object.defineProperty(o, "baseVal", { get: read, set: write, enumerable: true });
       Object.defineProperty(o, "animVal", { get: read, enumerable: true });
       return o;
     };
     getter(SE, "className", function () {
       var el = this;
-      return animated(function () { return el.getAttribute("class") || ""; }, function (v) { el.setAttribute("class", String(v)); });
+      return animated(function () { return el.getAttribute("class") || ""; }, function (v) { el.setAttribute("class", String(v)); }, SVGAnimatedString.prototype);
     }, function (v) { this.setAttribute("class", String(v)); });
     var UNITS = [[/%$/, 2, 0], [/em$/, 3, 16], [/ex$/, 4, 8], [/px$/, 5, 1], [/cm$/, 6, 96 / 2.54], [/mm$/, 7, 96 / 25.4], [/in$/, 8, 96], [/pt$/, 9, 4 / 3], [/pc$/, 10, 16]];
     var unitOf = function (s) {
@@ -1064,13 +1278,14 @@
       var el = this;
       var read = function () {
         var p = (el.getAttribute("viewBox") || "").trim().split(/[\s,]+/).map(parseFloat);
-        return p.length === 4 && p.every(isFinite) ? { x: p[0], y: p[1], width: p[2], height: p[3] } : { x: 0, y: 0, width: 0, height: 0 };
+        var r = p.length === 4 && p.every(isFinite) ? { x: p[0], y: p[1], width: p[2], height: p[3] } : { x: 0, y: 0, width: 0, height: 0 };
+        return Object.setPrototypeOf(r, SVGRect.prototype);
       };
-      return animated(read);
+      return animated(read, undefined, SVGAnimatedRect.prototype);
     });
     getter(SE, "href", function () {
       var el = this;
-      return animated(function () { var v = el.getAttribute("href"); return v !== null ? v : el.getAttribute("xlink:href") || ""; }, function (v) { el.setAttribute("href", String(v)); });
+      return animated(function () { var v = el.getAttribute("href"); return v !== null ? v : el.getAttribute("xlink:href") || ""; }, function (v) { el.setAttribute("href", String(v)); }, SVGAnimatedString.prototype);
     });
     getter(SE, "ownerSVGElement", function () {
       for (var n = this.parentNode; n && n.nodeType === 1; n = n.parentNode) if (n.localName === "svg") return n;
@@ -1208,7 +1423,7 @@
         }
         return any ? box(ax0, ay0, ax1 - ax0, ay1 - ay0) : box(0, 0, 0, 0);
       }
-      if (t === "image" || t === "foreignobject" || t === "use") return box(attrNum(this, "x"), attrNum(this, "y"), attrNum(this, "width"), attrNum(this, "height"));
+      if (t === "image" || t === "foreignObject" || t === "use") return box(attrNum(this, "x"), attrNum(this, "y"), attrNum(this, "width"), attrNum(this, "height"));
       return box(attrNum(this, "x"), attrNum(this, "y"), 0, 0); // text: no layout
     });
   })();
@@ -1219,14 +1434,32 @@
   var NSKEY = Symbol("ns");
   getter(P.Element, "namespaceURI", function () {
     if (this[NSKEY]) return this[NSKEY];
-    for (var n = this; n && n.nodeType === 1; n = n.parentNode) {
-      var t = n.localName;
-      if (t === "svg") return NS.svg;
-      if (t === "math") return NS.math;
-      if (n.localName === "foreignobject") return NS.html;
+    // the element itself is foreign when it is (or sits in) an svg/math root; an integration
+    // point (foreignObject, an annotation-xml serving HTML, an svg desc/title) makes its
+    // CHILDREN HTML, not itself — so those are only met walking up from the parent
+    var t = this.localName;
+    if (t === "svg") return NS.svg;
+    if (t === "math") return NS.math;
+    for (var n = this.parentNode; n && n.nodeType === 1; n = n.parentNode) {
+      var lt = n.localName;
+      if (lt === "svg") return NS.svg;
+      if (lt === "math") return NS.math;
+      if (lt === "foreignObject" || lt === "desc" || lt === "title") return NS.html;
+      if (lt === "annotation-xml" && n.getAttribute("encoding") === "text/html") return NS.html;
     }
     return NS.html;
   });
+  // tagName (and with it nodeName) is upper-cased for an HTML element in an HTML document only;
+  // a foreign element keeps its adjusted name (foreignObject), an XML document's its own case.
+  // The native getter upper-cases everything, so the two are answered here.
+  var elementName = function (el) {
+    var ln = el.localName;
+    var d = el.ownerDocument;
+    if (el.namespaceURI === NS.html && d && !(typeof XMLDocument !== "undefined" && d instanceof XMLDocument)) return ln.replace(/[a-z]/g, function (ch) { return ch.toUpperCase(); });
+    return ln;
+  };
+  getter(P.Element, "tagName", function () { return elementName(this); });
+  getter(P.Element, "nodeName", function () { return elementName(this); });
   getter(P.Element, "prefix", function () { return null; });
   def(P.Document, "createElementNS", function (ns, name) {
     var el = this.createElement(String(name));
@@ -1335,6 +1568,7 @@
   var W = (D.window = {});
   Object.keys(D.ctors).forEach(function (k) { W[k] = D.ctors[k]; });
   W.MutationObserver = MutationObserver;
+  W.MutationRecord = MutationRecord;
   W.HTMLElement = HTMLElementShim;
   W.customElements = registry;
 
@@ -1400,6 +1634,18 @@
   subclass("PageTransitionEvent", Event, { persisted: false });
   subclass("ErrorEvent", Event, { message: "", filename: "", lineno: 0, colno: 0, error: null });
   subclass("ProgressEvent", Event, { lengthComputable: false, loaded: 0, total: 0 });
+  subclass("BeforeUnloadEvent", Event, {});
+  subclass("BlobEvent", Event, { data: null, timecode: 0 });
+  subclass("CloseEvent", Event, { wasClean: false, code: 0, reason: "" });
+  subclass("PromiseRejectionEvent", Event, { promise: null, reason: undefined });
+  subclass("DeviceOrientationEvent", Event, { alpha: null, beta: null, gamma: null, absolute: false });
+  subclass("DeviceMotionEvent", Event, { acceleration: null, accelerationIncludingGravity: null, rotationRate: null, interval: 0 });
+  // the motion component interfaces: never constructed, their values ride on a DeviceMotionEvent
+  [["DeviceMotionEventAcceleration", ["x", "y", "z"]], ["DeviceMotionEventRotationRate", ["alpha", "beta", "gamma"]]].forEach(function (pair) {
+    var C = { [pair[0]]: function () { illegal(); } }[pair[0]];
+    pair[1].forEach(function (k) { getter(C.prototype, k, function () { return null; }); });
+    W[pair[0]] = C;
+  });
 
   var EventTarget = function EventTarget() {};
   def(EventTarget.prototype, "addEventListener", addListener);
@@ -1492,13 +1738,17 @@
     while (sib.lastChild) sib = sib.lastChild;
     return sib;
   };
+  var NodeIterator = function NodeIterator() { illegal(); };
+  W.NodeIterator = NodeIterator;
+  var TreeWalker = function TreeWalker() { illegal(); };
+  W.TreeWalker = TreeWalker;
   def(P.Document, "createNodeIterator", function (root, what, filter) {
     what = what === undefined ? 0xFFFFFFFF : what >>> 0;
     var cur = null;
-    return {
+    return Object.setPrototypeOf({
       root: root, whatToShow: what, filter: filter || null,
       get referenceNode() { return cur || root; },
-      pointerBeforeReference: false,
+      pointerBeforeReferenceNode: false,
       nextNode: function () {
         // without a filter the mask in C decides, in one call
         if (!filter && cur !== null) { var m = following(cur, root, false, what); if (m) cur = m; return m; }
@@ -1510,11 +1760,11 @@
         return null;
       },
       detach: function () {},
-    };
+    }, NodeIterator.prototype);
   });
   def(P.Document, "createTreeWalker", function (root, what, filter) {
     what = what === undefined ? 0xFFFFFFFF : what >>> 0;
-    var w = { root: root, whatToShow: what, filter: filter || null, currentNode: root };
+    var w = Object.setPrototypeOf({ root: root, whatToShow: what, filter: filter || null, currentNode: root }, TreeWalker.prototype);
     var ok = function (n) { return verdict(n, what, filter); };
     var walkNext = function () {
       if (!filter) { var m = following(w.currentNode, root, false, what); if (m) w.currentNode = m; return m; }
@@ -1646,7 +1896,125 @@
     return doc;
   };
   var DOMParser = function DOMParser() {};
-  def(DOMParser.prototype, "parseFromString", function (markup) { return D.parse(String(markup)); });
+  // A small strict XML parser for DOMParser's XML types. The HTML parser cannot serve them (it
+  // would wrap the content in html/head/body): well-formed input becomes a real tree of the XML
+  // document, anything else the parsererror document browsers and jsdom answer. CDATA sections
+  // become text (there is no CDATA node kind here, so they serialise escaped — a recorded
+  // remainder), processing instructions are skipped, and namespaces are not resolved: names
+  // keep their qualified spelling.
+  var parseXMLDocument = function (markup, type) {
+    var doc = D.createXMLDocument();
+    Object.setPrototypeOf(doc, XMLDocument.prototype);
+    Object.defineProperty(doc, "contentType", { value: type, configurable: true });
+    var fail = function (msg) {
+      // the error document replaces the parse entirely (a partial tree may already hang off doc)
+      var fresh = D.createXMLDocument();
+      Object.setPrototypeOf(fresh, XMLDocument.prototype);
+      Object.defineProperty(fresh, "contentType", { value: type, configurable: true });
+      var err = fresh.createElement("parsererror");
+      err.setAttribute("xmlns", "http://www.mozilla.org/newlayout/xml/parsererror.xml");
+      err.textContent = "XML Parsing Error: " + msg;
+      fresh.appendChild(err);
+      return fresh;
+    };
+    var s = String(markup), i = 0, n = s.length;
+    var stack = [doc], names = [null], rootSeen = false;
+    var ENT = { lt: "<", gt: ">", amp: "&", apos: "'", quot: "\"" };
+    var expand = function (text) {
+      if (/&(?!(#x[0-9a-fA-F]+|#\d+|[A-Za-z_][\w.-]*);)/.test(text)) throw new Error("bare & in content");
+      return text.replace(/&(#x[0-9a-fA-F]+|#\d+|[A-Za-z_][\w.-]*);/g, function (m, body) {
+        if (body.charAt(0) === "#") { var cp = body.charAt(1) === "x" ? parseInt(body.slice(2), 16) : parseInt(body.slice(1), 10); return String.fromCodePoint(cp); }
+        if (!(body in ENT)) throw new Error("undefined entity &" + body + ";");
+        return ENT[body];
+      });
+    };
+    var top = function () { return stack[stack.length - 1]; };
+    var addText = function (text, raw) {
+      if (!text) return;
+      if (stack.length === 1) { if (/\S/.test(text)) throw new Error("text outside the root element"); return; }
+      top().appendChild(doc.createTextNode(raw ? text : expand(text)));
+    };
+    try {
+      while (i < n) {
+        var lt = s.indexOf("<", i);
+        if (lt < 0) { addText(s.slice(i)); i = n; break; }
+        if (lt > i) addText(s.slice(i, lt));
+        i = lt;
+        if (s.startsWith("<!--", i)) {
+          var e1 = s.indexOf("-->", i + 4);
+          if (e1 < 0) throw new Error("unterminated comment");
+          top().appendChild(doc.createComment(s.slice(i + 4, e1)));
+          i = e1 + 3;
+        } else if (s.startsWith("<![CDATA[", i)) {
+          var e2 = s.indexOf("]]>", i + 9);
+          if (e2 < 0) throw new Error("unterminated CDATA section");
+          addText(s.slice(i + 9, e2), true);
+          i = e2 + 3;
+        } else if (s.startsWith("<?", i)) {
+          var e3 = s.indexOf("?>", i + 2);
+          if (e3 < 0) throw new Error("unterminated processing instruction");
+          i = e3 + 2;
+        } else if (s.startsWith("<!DOCTYPE", i)) {
+          var j = i + 9, depth = 0;
+          while (j < n && (s[j] !== ">" || depth > 0)) { if (s[j] === "[") depth++; else if (s[j] === "]") depth--; j++; }
+          if (j >= n) throw new Error("unterminated doctype");
+          var decl = s.slice(i + 9, j).trim();
+          var dm = decl.match(/^([^\s[]+)(?:\s+(PUBLIC|SYSTEM)\s+"([^"]*)"(?:\s+"([^"]*)")?)?/);
+          if (dm && stack.length === 1) {
+            var dt = doc.implementation.createDocumentType(dm[1], dm[2] === "PUBLIC" ? dm[3] : "", dm[2] === "PUBLIC" ? (dm[4] || "") : (dm[2] === "SYSTEM" ? dm[3] : ""));
+            doc.appendChild(dt);
+          }
+          i = j + 1;
+        } else if (s.startsWith("</", i)) {
+          var e4 = s.indexOf(">", i + 2);
+          if (e4 < 0) throw new Error("unterminated end tag");
+          var cname = s.slice(i + 2, e4).trim();
+          if (stack.length === 1 || names[names.length - 1] !== cname) throw new Error("mismatched end tag </" + cname + ">");
+          stack.pop(); names.pop();
+          i = e4 + 1;
+        } else if (s[i + 1] === "!") {
+          throw new Error("unsupported markup declaration");
+        } else {
+          var m = /^<([A-Za-z_][\w.:-]*)/.exec(s.slice(i, i + 256));
+          if (!m) throw new Error("malformed tag");
+          var el = doc.createElement(m[1]);
+          var j2 = i + m[0].length, seen = {}, selfClose = false;
+          for (;;) {
+            while (j2 < n && /\s/.test(s[j2])) j2++;
+            if (s.startsWith("/>", j2)) { selfClose = true; j2 += 2; break; }
+            if (s[j2] === ">") { j2++; break; }
+            if (j2 >= n) throw new Error("unterminated start tag");
+            var am = /^([A-Za-z_][\w.:-]*)\s*=\s*("([^"]*)"|'([^']*)')/.exec(s.slice(j2, j2 + 512));
+            if (!am) throw new Error("malformed attribute in <" + m[1] + ">");
+            if (seen[am[1]]) throw new Error("duplicate attribute " + am[1]);
+            seen[am[1]] = 1;
+            el.setAttribute(am[1], expand(am[3] !== undefined ? am[3] : am[4]));
+            j2 += am[0].length;
+          }
+          if (stack.length === 1) { if (rootSeen) throw new Error("multiple root elements"); rootSeen = true; }
+          top().appendChild(el);
+          if (!selfClose) { stack.push(el); names.push(m[1]); }
+          i = j2;
+        }
+      }
+      if (stack.length !== 1) throw new Error("unclosed element <" + names[names.length - 1] + ">");
+      if (!rootSeen) throw new Error("no root element");
+    } catch (e) {
+      return fail(e && e.message ? e.message : String(e));
+    }
+    return doc;
+  };
+  def(DOMParser.prototype, "parseFromString", function (markup, type) {
+    if (type && type !== "text/html" && (/(^|\/)xml$/.test(type) || type === "image/svg+xml" || /\+xml$/.test(type))) return parseXMLDocument(markup, type);
+    var doc = D.parse(String(markup));
+    // HTMLDocument and XMLDocument are defined further down; at call time they exist, and the
+    // result takes the class of the type it was parsed as (the parsing itself is the one parser)
+    if (typeof HTMLDocument !== "undefined") {
+      if (type === undefined || type === "text/html") Object.setPrototypeOf(doc, HTMLDocument.prototype);
+      else if (/(^|\/)xml$/.test(type || "") || type === "image/svg+xml") Object.setPrototypeOf(doc, XMLDocument.prototype);
+    }
+    return doc;
+  });
   W.DOMParser = DOMParser;
   W.XMLSerializer = function XMLSerializer() {};
   def(W.XMLSerializer.prototype, "serializeToString", function (node) { return D.serialize(node); });
@@ -1706,11 +2074,241 @@
       var list = el.getAttributeNames().map(function (name) { return makeAttr(name, el, el.getAttribute(name)); });
       list.forEach(function (at) { if (!(at.name in list)) list[at.name] = at; });
       Object.defineProperty(list, "getNamedItem", { value: function (n) { return el.getAttributeNode(n); } });
+      Object.defineProperty(list, "getNamedItemNS", { value: function (ns, n) { var at = el.getAttributeNode(n); if (at) return at; for (var i = 0; i < this.length; i++) if (this[i].localName === n) return this[i]; return null; } });
       Object.defineProperty(list, "removeNamedItem", { value: function (n) { var at = el.getAttributeNode(n); if (at) el.removeAttribute(n); return at; } });
       Object.defineProperty(list, "setNamedItem", { value: function (at) { return el.setAttributeNode(at); } });
       return list;
     }, false, "NamedNodeMap") })[ATTRS];
   });
+  // document.implementation: one DOMImplementation per document. The C parser keeps no doctype
+  // name/ids (a recorded gap), so createDocumentType parses a declaration for a real DocumentType
+  // node and shadows the three fields with the values it was asked for.
+  var DOMImplementation = function DOMImplementation() { illegal(); };
+  W.DOMImplementation = DOMImplementation;
+  // HTMLDocument: a Document subclass in name and prototype only — the C layer makes every document
+  // with Document.prototype, so HTML documents (the page's own, createHTMLDocument's, DOMParser's
+  // text/html results) have their prototype swapped for this one, which inherits Document's.
+  var HTMLDocument = function HTMLDocument() { illegal(); };
+  Object.setPrototypeOf(HTMLDocument.prototype, P.Document);
+  Object.setPrototypeOf(HTMLDocument, D.ctors.Document);
+  W.HTMLDocument = HTMLDocument;
+  // the same treatment for the other document class and the node classes no HTML document can
+  // hold: their interfaces exist (and createCDATASection rightly refuses for HTML documents),
+  // instances arrive only through createDocument and XML parsing paths
+  var XMLDocument = function XMLDocument() { illegal(); };
+  Object.setPrototypeOf(XMLDocument.prototype, P.Document);
+  Object.setPrototypeOf(XMLDocument, D.ctors.Document);
+  W.XMLDocument = XMLDocument;
+  var CDATASection = function CDATASection() { illegal(); };
+  Object.setPrototypeOf(CDATASection.prototype, P.Text);
+  Object.setPrototypeOf(CDATASection, D.ctors.Text);
+  W.CDATASection = CDATASection;
+  var ProcessingInstruction = function ProcessingInstruction() { illegal(); };
+  Object.setPrototypeOf(ProcessingInstruction.prototype, P.CharacterData);
+  Object.setPrototypeOf(ProcessingInstruction, D.ctors.CharacterData);
+  W.ProcessingInstruction = ProcessingInstruction;
+  // the custom elements registry object gets its interface
+  var CustomElementRegistry = function CustomElementRegistry() { illegal(); };
+  W.CustomElementRegistry = CustomElementRegistry;
+  Object.setPrototypeOf(registry, CustomElementRegistry.prototype);
+  def(DOMImplementation.prototype, "hasFeature", function () { return true; });
+  def(DOMImplementation.prototype, "createDocumentType", function (name, publicId, systemId) {
+    name = String(name); publicId = String(publicId || ""); systemId = String(systemId || "");
+    var decl = "<!DOCTYPE " + name +
+      (publicId ? " PUBLIC \"" + publicId + "\"" + (systemId ? " \"" + systemId + "\"" : "") : systemId ? " SYSTEM \"" + systemId + "\"" : "") +
+      "><html></html>";
+    var dt = D.parse(decl).doctype;
+    Object.defineProperties(dt, {
+      name: { value: name, configurable: true, enumerable: true },
+      publicId: { value: publicId, configurable: true, enumerable: true },
+      systemId: { value: systemId, configurable: true, enumerable: true },
+    });
+    return dt;
+  });
+  def(DOMImplementation.prototype, "createDocument", function (ns, qname, doctype) {
+    var doc = D.createXMLDocument();
+    Object.setPrototypeOf(doc, XMLDocument.prototype);
+    if (doctype) doc.appendChild(doctype);
+    if (qname) doc.appendChild(ns ? doc.createElementNS(ns, String(qname)) : doc.createElement(String(qname)));
+    return doc;
+  });
+  def(DOMImplementation.prototype, "createHTMLDocument", function (title) {
+    var doc = D.parse("<!doctype html><html><head></head><body></body></html>");
+    Object.setPrototypeOf(doc, HTMLDocument.prototype);
+    if (title !== undefined) doc.title = String(title);
+    return doc;
+  });
+  var IMPL = new WeakMap();
+  getter(P.Document, "implementation", function () {
+    var im = IMPL.get(this);
+    if (!im) IMPL.set(this, (im = Object.create(DOMImplementation.prototype)));
+    return im;
+  });
+  // ---- the Document members jsdom answers and this layer had not: identity, state, the legacy
+  // collections, and the legacy write/open family. defaultView and cookie live here too, so that
+  // documents beyond the page's own (DOMParser, createHTMLDocument) answer them as well; boot.js
+  // still defines the page document's own defaultView/cookie, which shadow these.
+  getter(P.Document, "defaultView", function () { return null; });
+  getter(P.Document, "URL", function () { var v = this.defaultView; return v ? v.location.href : "about:blank"; });
+  getter(P.Document, "documentURI", function () { return this.URL; });
+  getter(P.Document, "contentType", function () { return "application/xml"; });
+  getter(HTMLDocument.prototype, "contentType", function () { return "text/html"; });
+  getter(P.Document, "compatMode", function () { return this.doctype ? "CSS1Compat" : "BackCompat"; });
+  ["characterSet", "charset", "inputEncoding"].forEach(function (k) { getter(P.Document, k, function () { return "UTF-8"; }); });
+  var LASTMOD = new WeakMap();
+  getter(P.Document, "lastModified", function () {
+    var s = LASTMOD.get(this);
+    if (!s) {
+      var d = new Date(), p = function (n) { return String(n).padStart(2, "0"); };
+      LASTMOD.set(this, (s = p(d.getMonth() + 1) + "/" + p(d.getDate()) + "/" + d.getFullYear() + " " + p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds())));
+    }
+    return s;
+  });
+  getter(P.Document, "referrer", function () { return ""; });
+  getter(P.Document, "readyState", function () { return "complete"; });
+  // a document nobody renders is prerendering and unfocused; the page's own document is told
+  // otherwise by the boot code, through D.setVisual (jsdom's pretendToBeVisual, plumbed down)
+  var DOCVIS = Symbol("visual");
+  D.setVisual = function (doc, visual) { doc[DOCVIS] = visual ? { hidden: false, state: "visible" } : { hidden: true, state: "prerender" }; };
+  getter(P.Document, "hidden", function () { var v = this[DOCVIS]; return v ? v.hidden : true; });
+  getter(P.Document, "visibilityState", function () { var v = this[DOCVIS]; return v ? v.state : "prerender"; });
+  getter(P.Document, "currentScript", function () { return null; });
+  def(P.Document, "hasFocus", function () { return FOCUSED_DOCS.has(this); });
+  getter(P.Document, "dir", function () { var r = this.documentElement; return r ? r.getAttribute("dir") || "" : ""; }, function (v) { var r = this.documentElement; if (r) r.setAttribute("dir", String(v)); });
+  var DOCJARS = new WeakMap();
+  getter(P.Document, "cookie", function () {
+    var jar = DOCJARS.get(this);
+    return jar ? Array.from(jar.entries()).map(function (e) { return e[0] + "=" + e[1]; }).join("; ") : "";
+  }, function (v) {
+    var jar = DOCJARS.get(this);
+    if (!jar) DOCJARS.set(this, (jar = new Map()));
+    var parts = String(v).split(";"), kv = parts[0], i = kv.indexOf("=");
+    var name = (i < 0 ? "" : kv.slice(0, i)).trim(), value = i < 0 ? kv.trim() : kv.slice(i + 1).trim();
+    var expired = parts.slice(1).some(function (p) {
+      var m = /^\s*(max-age|expires)\s*=\s*(.*)$/.exec(p);
+      return m && (m[1].toLowerCase() === "max-age" ? parseInt(m[2], 10) <= 0 : Date.parse(m[2]) < Date.now());
+    });
+    if (expired) jar.delete(name); else if (name) jar.set(name, value);
+  });
+  var docCollection = function (doc, selector) {
+    return liveCollection(function () { return Array.prototype.slice.call(doc.querySelectorAll(selector)); }, false, "HTMLCollection");
+  };
+  [["forms", "form"], ["images", "img"], ["scripts", "script"], ["embeds", "embed"], ["plugins", "embed"], ["applets", "applet"], ["anchors", "a[name]"], ["links", "a[href], area[href]"]].forEach(function (pair) {
+    getter(P.Document, pair[0], function () { return docCollection(this, pair[1]); });
+  });
+  def(P.Document, "getElementsByName", function (n) { return this.querySelectorAll('[name="' + String(n).replace(/\\/g, "\\\\").replace(/"/g, '\\"') + '"]'); });
+  def(P.Document, "captureEvents", function () {});
+  def(P.Document, "releaseEvents", function () {});
+  def(P.Document, "open", function () { while (this.firstChild) this.removeChild(this.firstChild); return this; });
+  def(P.Document, "close", function () {});
+  var docWrite = function (doc, markup) {
+    var parsed = D.parse(markup);
+    if (!doc.documentElement) {
+      while (parsed.firstChild) doc.appendChild(parsed.firstChild);
+    } else {
+      var src = parsed.body, dst = doc.body || doc.documentElement;
+      if (src) while (src.firstChild) dst.appendChild(src.firstChild);
+    }
+  };
+  def(P.Document, "write", function () { docWrite(this, Array.prototype.map.call(arguments, String).join("")); });
+  def(P.Document, "writeln", function () { docWrite(this, Array.prototype.map.call(arguments, String).join("") + "\n"); });
+  def(P.Document, "clear", function () {});
+  def(P.Document, "createAttributeNS", function (ns, qname) {
+    qname = String(qname);
+    var at = Object.create(Attr.prototype), i = qname.indexOf(":");
+    Object.defineProperty(at, ATTR, { value: { owner: null, value: "" }, writable: true });
+    Object.defineProperties(at, {
+      name: { value: qname, enumerable: true },
+      localName: { value: i < 0 ? qname : qname.slice(i + 1), enumerable: true },
+      prefix: { value: i < 0 ? null : qname.slice(0, i), enumerable: true },
+      namespaceURI: { value: ns ? String(ns) : null, enumerable: true },
+    });
+    return at;
+  });
+  def(P.Document, "createCDATASection", function () { var e = new Error("This operation is not supported for HTML documents."); e.name = "NotSupportedError"; throw e; });
+  // createEvent: the legacy factory, over the window's own event classes
+  def(P.Document, "createEvent", function (type) {
+    var table = { Event: "Event", Events: "Event", HTMLEvents: "Event", UIEvent: "UIEvent", UIEvents: "UIEvent", MouseEvent: "MouseEvent", MouseEvents: "MouseEvent", KeyboardEvent: "KeyboardEvent", KeyboardEvents: "KeyboardEvent", FocusEvent: "FocusEvent", InputEvent: "InputEvent", CustomEvent: "CustomEvent", MessageEvent: "MessageEvent", ProgressEvent: "ProgressEvent", MutationEvents: "MutationEvent" };
+    var C = W[table[type] || "Event"] || W.Event;
+    return new C("");
+  });
+  // the Document's own extra handler properties (the window list's document half)
+  defHandlers(P.Document, ["beforematch", "beforetoggle", "contextlost", "contextrestored", "cuechange", "pointerrawupdate", "readystatechange", "visibilitychange", "webkitanimationend", "webkitanimationiteration", "webkitanimationstart", "webkittransitionend"]);
+  // ---- member gaps the surface walk shows on elements generally, and on the table/legacy
+  // interfaces exposed alongside: the element handler extras, the NS attribute-node pair,
+  // webkitMatchesSelector, translate, and the legacy elements' own reflections.
+  defHandlers(P.HTMLElement, ["beforematch", "beforetoggle", "contextlost", "contextrestored", "cuechange", "pointerrawupdate", "webkitanimationend", "webkitanimationiteration", "webkitanimationstart", "webkittransitionend"]);
+  // a frameset carries the window's handlers (the spec puts them on the frameset element)
+  defHandlers(P.HTMLFrameSetElement, ["afterprint", "beforeprint", "beforeunload", "hashchange", "languagechange", "message", "messageerror", "offline", "online", "pagehide", "pageshow", "popstate", "rejectionhandled", "storage", "unhandledrejection", "unload", "beforematch", "beforetoggle", "contextlost", "contextrestored", "cuechange", "pointerrawupdate", "webkitanimationend", "webkitanimationiteration", "webkitanimationstart", "webkittransitionend"]);
+  def(P.Element, "webkitMatchesSelector", function (s) { return this.matches(s); });
+  def(P.Element, "getAttributeNodeNS", function (ns, local) {
+    var list = this.attributes;
+    for (var i = 0; i < list.length; i++) { var at = list[i]; if (at.localName === String(local) && (at.namespaceURI || null) === (ns || null)) return at; }
+    return null;
+  });
+  def(P.Element, "setAttributeNodeNS", function (at) {
+    var old = this.getAttributeNodeNS(at.namespaceURI, at.localName);
+    this.setAttribute(at.name, at.value);
+    return old;
+  });
+  reflectBool(P.HTMLElement, "translate", "translate");
+  reflectString(P.HTMLTableCaptionElement, "align", "align");
+  [["align", "align"], ["ch", "char"], ["chOff", "charoff"], ["vAlign", "valign"]].forEach(function (pair) {
+    reflectString(P.HTMLTableSectionElement, pair[0], pair[1]);
+    reflectString(P.HTMLTableColElement, pair[0], pair[1]);
+  });
+  reflectString(P.HTMLTableColElement, "width", "width");
+  getter(P.HTMLTableColElement, "span", function () { var n = parseInt(this.getAttribute("span"), 10); return isNaN(n) || n < 1 ? 1 : n; }, function (v) { this.setAttribute("span", String(v)); });
+  reflectBool(P.HTMLDirectoryElement, "compact", "compact");
+  ["frameBorder", "longDesc", "marginHeight", "marginWidth", "scrolling"].forEach(function (k) { reflectString(P.HTMLFrameElement, k, k.toLowerCase()); });
+  reflectBool(P.HTMLFrameElement, "noResize", "noresize");
+  getter(P.HTMLFrameElement, "contentDocument", function () { return null; });
+  getter(P.HTMLFrameElement, "contentWindow", function () { return null; });
+  reflectString(P.HTMLFrameSetElement, "cols", "cols");
+  reflectString(P.HTMLFrameSetElement, "rows", "rows");
+  ["behavior", "bgColor", "direction", "width", "height"].forEach(function (k) { reflectString(P.HTMLMarqueeElement, k, k.toLowerCase()); });
+  ["hspace", "vspace", "scrollAmount", "scrollDelay"].forEach(function (k) {
+    getter(P.HTMLMarqueeElement, k, function () { var n = parseInt(this.getAttribute(k.toLowerCase()), 10); return isNaN(n) ? 0 : n; }, function (v) { this.setAttribute(k.toLowerCase(), String(v)); });
+  });
+  reflectBool(P.HTMLMarqueeElement, "trueSpeed", "truespeed");
+  def(P.HTMLMarqueeElement, "start", function () {});
+  def(P.HTMLMarqueeElement, "stop", function () {});
+  // small legacy members the surface inventory found missing, each a line or two over what exists:
+  // the six Node constants for node kinds this engine never creates (on the constructor and, as in
+  // jsdom, on the prototype, so instances answer them too)
+  [["ATTRIBUTE_NODE", 2], ["CDATA_SECTION_NODE", 4], ["ENTITY_REFERENCE_NODE", 5], ["ENTITY_NODE", 6], ["PROCESSING_INSTRUCTION_NODE", 7], ["NOTATION_NODE", 12]].forEach(function (kv) {
+    if (!(kv[0] in W.Node)) Object.defineProperty(W.Node, kv[0], { value: kv[1], enumerable: true });
+    if (!(kv[0] in P.Node)) Object.defineProperty(P.Node, kv[0], { value: kv[1], enumerable: true });
+  });
+  // getElementsByTagNameNS: namespaces are not distinguished in HTML documents here, so the
+  // namespace is accepted and the plain search runs (jsdom answers the same nodes for HTML content)
+  def(P.Document, "getElementsByTagNameNS", function (ns, name) { return this.getElementsByTagName(name); });
+  def(P.Element, "getElementsByTagNameNS", function (ns, name) { return this.getElementsByTagName(name); });
+  // Text: splitText, wholeText, assignedSlot (never assigned outside a shadow tree, and a text node
+  // in one reads its slot through the flattened tree only in browsers with full shadow support)
+  def(P.Text, "splitText", function (offset) {
+    offset = offset >>> 0;
+    var data = this.data;
+    if (offset > data.length) { var e = new Error("Failed to execute 'splitText' on 'Text': The offset " + offset + " is greater than the length " + data.length + "."); e.name = "IndexSizeError"; throw e; }
+    var rest = this.ownerDocument.createTextNode(data.slice(offset));
+    this.data = data.slice(0, offset);
+    if (this.parentNode) this.parentNode.insertBefore(rest, this.nextSibling);
+    return rest;
+  });
+  getter(P.Text, "wholeText", function () {
+    var out = this.data, n;
+    for (n = this.previousSibling; n && n.nodeType === 3; n = n.previousSibling) out = n.data + out;
+    for (n = this.nextSibling; n && n.nodeType === 3; n = n.nextSibling) out += n.data;
+    return out;
+  });
+  getter(P.Text, "assignedSlot", function () { return null; });
+  // CharacterData is a child node too: the element siblings skip non-elements
+  var elemSibling = function (node, dir) {
+    for (var n = node[dir]; n; n = n[dir]) if (n.nodeType === 1) return n;
+    return null;
+  };
+  getter(P.CharacterData, "previousElementSibling", function () { return elemSibling(this, "previousSibling"); });
+  getter(P.CharacterData, "nextElementSibling", function () { return elemSibling(this, "nextSibling"); });
   // document.title is the text of the first <title>
   getter(P.Document, "title", function () {
     var t = this.querySelector("title");
@@ -1732,6 +2330,17 @@
   W.HTMLFormControlsCollection = function HTMLFormControlsCollection() { illegal(); };
   Object.setPrototypeOf(W.HTMLFormControlsCollection.prototype, W.HTMLCollection.prototype);
   W.NamedNodeMap = function NamedNodeMap() { illegal(); };
+  W.RadioNodeList = RadioNodeList;
+  Object.setPrototypeOf(RadioNodeList.prototype, NodeList.prototype);
+  // NOT on the window table: the bridge would classify dataset objects as a known interface, and its class
+  // wrappers keep host-side sets local (for expando properties) instead of forwarding them to the page —
+  // but a DOMStringMap is nothing but named properties. boot.js picks the constructor up from here and
+  // puts it on the global directly, like the other named-property objects (style) that stay unregistered.
+  D.DOMStringMapCtor = DOMStringMap;
+  // classList (and relList) objects are TokenList instances; the DOMTokenList name is the public one
+  W.DOMTokenList = function DOMTokenList() { illegal(); };
+  W.DOMTokenList.prototype = TokenList.prototype;
+  Object.defineProperty(TokenList.prototype, "constructor", { value: W.DOMTokenList, writable: true, configurable: true });
   W.NodeFilter = { FILTER_ACCEPT: 1, FILTER_REJECT: 2, FILTER_SKIP: 3, SHOW_ALL: 0xFFFFFFFF, SHOW_ELEMENT: 1, SHOW_ATTRIBUTE: 2, SHOW_TEXT: 4, SHOW_CDATA_SECTION: 8, SHOW_COMMENT: 128, SHOW_DOCUMENT: 256 };
   // ---- what user interaction needs: focus, the activation behaviour of a click, the selection of a text control, labels,
   // Range and Selection. (Ranges are not adjusted when the tree changes under them.)
@@ -1757,14 +2366,16 @@
   };
   var focusEvent = function (type, bubbles, related) {
     var E = W.FocusEvent || W.Event;
-    return new E(type, { bubbles: bubbles, cancelable: false, relatedTarget: related || null });
+    return new E(type, { bubbles: bubbles, cancelable: false, composed: true, relatedTarget: related || null });
   };
   var activeOf = function (doc) { return focused && focused.isConnected && focused.ownerDocument === doc ? focused : doc.body; };
   getter(P.Document, "activeElement", function () { return activeOf(this); });
+  var FOCUSED_DOCS = new WeakSet();
   def(P.HTMLElement, "focus", function () {
     if (!focusable(this) || focused === this) return;
     var prev = focused && focused.isConnected ? focused : null;
     focused = this;
+    if (this.ownerDocument) FOCUSED_DOCS.add(this.ownerDocument); // a document that has been focused stays focused (jsdom's answer after blur, too)
     if (prev) { prev.dispatchEvent(focusEvent("blur", false, this)); prev.dispatchEvent(focusEvent("focusout", true, this)); }
     this.dispatchEvent(focusEvent("focus", false, prev));
     this.dispatchEvent(focusEvent("focusin", true, prev));
@@ -1804,6 +2415,9 @@
     var LABELS = Symbol("labels");
     getter(P[name], "labels", function () {
       var el = this;
+      // a hidden input is not labelable, and its labels are null, not an empty list (the spec,
+      // jsdom, and the libraries that branch on it)
+      if (name === "HTMLInputElement" && el.type === "hidden") return null;
       return el[LABELS] || Object.defineProperty(el, LABELS, { value: liveCollection(function () { return labelsOf(el); }, false, "NodeList") })[LABELS];
     });
   });
@@ -2128,6 +2742,8 @@
     return comparePoints(p, i, this._ec, this._eo) < 0 && comparePoints(p, i + 1, this._sc, this._so) > 0;
   });
   def(rangeProto, "compareBoundaryPoints", function (how, source) {
+    // the spec (and jsdom, and comparePoint above): different roots are an error, not a number
+    if (rootOf(this._sc) !== rootOf(source._sc)) throw domError("WrongDocumentError", "The source range is in another tree.");
     var a, ao, b, bo;
     if (how === 0) { a = this._sc; ao = this._so; b = source._sc; bo = source._so; }
     else if (how === 1) { a = this._ec; ao = this._eo; b = source._sc; bo = source._so; }
@@ -2181,13 +2797,32 @@
   def(rangeProto, "cloneContents", function () {
     var frag = this.commonAncestorContainer.ownerDocument ? this.commonAncestorContainer.ownerDocument.createDocumentFragment() : document.createDocumentFragment();
     if (this.collapsed) return frag;
-    var s = this._sc, e = this._ec;
+    var s = this._sc, e = this._ec, range = this;
     if (s === e && (s.nodeType === 3 || s.nodeType === 8)) {
       var one = s.cloneNode(false); one.data = s.data.slice(this._so, this._eo); frag.appendChild(one); return frag;
     }
-    if (s.nodeType === 3) { var head = s.cloneNode(false); head.data = s.data.slice(this._so); frag.appendChild(head); }
-    contained(this).forEach(function (n) { frag.appendChild(n.cloneNode(true)); });
-    if (e.nodeType === 3 && s !== e) { var tail = e.cloneNode(false); tail.data = e.data.slice(0, this._eo); frag.appendChild(tail); }
+    // the spec's clone: a node the range cuts into is cloned shallowly and filled with the part
+    // that lies inside, so partial ancestors appear in the fragment (the old code took only the
+    // wholly-contained nodes and the two cut texts, and lost every wrapper around them)
+    var cloneInto = function (container, out) {
+      for (var c = container.firstChild; c; c = c.nextSibling) {
+        var p = c.parentNode, i = indexOf(c);
+        if (comparePoints(p, i + 1, range._sc, range._so) <= 0) continue; // ends at or before the start
+        if (comparePoints(p, i, range._ec, range._eo) >= 0) continue; // begins at or after the end
+        var whole = comparePoints(p, i, range._sc, range._so) >= 0 && comparePoints(p, i + 1, range._ec, range._eo) <= 0;
+        if (whole) { out.appendChild(c.cloneNode(true)); continue; }
+        if (c.nodeType === 3 || c.nodeType === 8) {
+          var t = c.cloneNode(false);
+          t.data = c.data.slice(c === range._sc ? range._so : 0, c === range._ec ? range._eo : c.data.length);
+          out.appendChild(t);
+          continue;
+        }
+        var shallow = c.cloneNode(false);
+        cloneInto(c, shallow);
+        out.appendChild(shallow);
+      }
+    };
+    cloneInto(this.commonAncestorContainer, frag);
     return frag;
   });
   def(rangeProto, "extractContents", function () {
@@ -2216,6 +2851,27 @@
   def(rangeProto, "getBoundingClientRect", function () { return { x: 0, y: 0, width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0 }; });
   def(rangeProto, "getClientRects", function () { return []; });
   W.Range = Range;
+  // AbstractRange: the layer above Range (its boundary members stay on Range.prototype, where
+  // they were built; this adds the name and the instanceof). StaticRange is a real constructor
+  // over an init dictionary, immutable in practice because nothing writes its fields afterwards.
+  var AbstractRange = function AbstractRange() { illegal(); };
+  Object.setPrototypeOf(Range.prototype, AbstractRange.prototype);
+  Object.setPrototypeOf(Range, AbstractRange);
+  W.AbstractRange = AbstractRange;
+  var StaticRange = function StaticRange(init) {
+    init = init || {};
+    var miss = ["startContainer", "startOffset", "endContainer", "endOffset"].filter(function (k) { return !(k in init); });
+    if (miss.length) throw new TypeError("Failed to construct 'StaticRange': " + miss.map(function (k) { return "property " + k; }).join(", ") + " missing.");
+    this._sc = init.startContainer; this._so = init.startOffset >>> 0;
+    this._ec = init.endContainer; this._eo = init.endOffset >>> 0;
+  };
+  Object.setPrototypeOf(StaticRange.prototype, AbstractRange.prototype);
+  Object.setPrototypeOf(StaticRange, AbstractRange);
+  [["startContainer", "_sc"], ["startOffset", "_so"], ["endContainer", "_ec"], ["endOffset", "_eo"]].forEach(function (p) {
+    getter(StaticRange.prototype, p[0], function () { return this[p[1]]; });
+  });
+  getter(StaticRange.prototype, "collapsed", function () { return this._sc === this._ec && this._so === this._eo; });
+  W.StaticRange = StaticRange;
   def(P.Document, "createRange", function () {
     var r = new Range();
     r._sc = r._ec = this;
@@ -2610,10 +3266,25 @@
     return xpResult(fn({ node: ctx, pos: 1, size: 1 }), type | 0);
   };
   def(P.Document, "evaluate", function (src, ctx, resolver, type) { return xpEvaluate(src, ctx || this, type); });
+  var XPathExpression = function XPathExpression() { illegal(); };
+  W.XPathExpression = XPathExpression;
+  var XPathException = function XPathException(message) {
+    Object.defineProperties(this, {
+      message: { value: String(message || ""), enumerable: true },
+      name: { value: "XPathException", enumerable: true },
+      code: { value: 0, enumerable: true },
+    });
+  };
+  Object.setPrototypeOf(XPathException.prototype, Error.prototype);
+  XPathException.INVALID_EXPRESSION_ERR = 51;
+  XPathException.TYPE_ERR = 52;
+  Object.defineProperty(XPathException.prototype, "INVALID_EXPRESSION_ERR", { value: 51 });
+  Object.defineProperty(XPathException.prototype, "TYPE_ERR", { value: 52 });
+  W.XPathException = XPathException;
   def(P.Document, "createExpression", function (src) {
     var text = String(src);
     xpCompile(text);
-    return { evaluate: function (ctx, type) { return xpEvaluate(text, ctx, type); } };
+    return Object.setPrototypeOf({ evaluate: function (ctx, type) { return xpEvaluate(text, ctx, type); } }, XPathExpression.prototype);
   });
   def(P.Document, "createNSResolver", function (n) { return { lookupNamespaceURI: function () { return null; } }; });
   var XPathEvaluator = function XPathEvaluator() {};
@@ -2677,7 +3348,18 @@
     getter(P.HTMLInputElement, "indeterminate", function () { return !!INDET.get(this); }, function (v) { INDET.set(this, !!v); });
     getter(P.HTMLInputElement, "valueAsNumber", function () { var n = parseFloat(this.value); return isFinite(n) ? n : NaN; }, function (v) { this.value = String(v); });
     getter(P.HTMLInputElement, "valueAsDate", function () { var t = Date.parse(this.value); return isNaN(t) ? null : new Date(t); });
-    getter(P.HTMLInputElement, "files", function () { return this.type === "file" ? Object.assign([], { item: function () { return null; } }) : null; });
+    // files: a FileList per input, empty until something can put files in (there is no DataTransfer yet)
+    var FileList = function FileList() { illegal(); };
+    FileList.prototype.item = function (i) { return i >= 0 && i < this.length ? this[i] : null; };
+    FileList.prototype[Symbol.iterator] = Array.prototype[Symbol.iterator];
+    W.FileList = FileList;
+    var FILES = new WeakMap();
+    getter(P.HTMLInputElement, "files", function () {
+      if (this.type !== "file") return null;
+      var l = FILES.get(this);
+      if (!l) { l = Object.create(FileList.prototype); l.length = 0; FILES.set(this, l); }
+      return l;
+    });
     getter(P.HTMLInputElement, "list", function () { var id = this.getAttribute("list"); return id ? this.ownerDocument.getElementById(id) : null; });
     var step = function (el, dir, n) {
       var cur = parseFloat(el.value), s = parseFloat(el.getAttribute("step")) || 1;
@@ -2809,6 +3491,24 @@
       if (index < -1 || index >= rows.length) throw domError("IndexSizeError", "The provided index (" + index + ") is outside the range [-1, " + (rows.length - 1) + "].");
       if (rows[index]) rows[index].remove();
     });
+    // a section's own rows and row editing (the table's work over all of them)
+    var sectionRows = function (s) { return Array.prototype.filter.call(s.children, function (c) { return c.localName === "tr"; }); };
+    getter(P.HTMLTableSectionElement, "rows", function () { var s = this; return liveCollection(function () { return sectionRows(s); }, false, "HTMLCollection"); });
+    def(P.HTMLTableSectionElement, "insertRow", function (index) {
+      index = index === undefined ? -1 : +index;
+      var rows = sectionRows(this);
+      if (index < -1 || index > rows.length) throw domError("IndexSizeError", "The provided index (" + index + ") is outside the range [-1, " + rows.length + "].");
+      var tr = this.ownerDocument.createElement("tr");
+      this.insertBefore(tr, index === -1 || index === rows.length ? null : rows[index]);
+      return tr;
+    });
+    def(P.HTMLTableSectionElement, "deleteRow", function (index) {
+      var rows = sectionRows(this);
+      index = +index;
+      if (index === -1) index = rows.length - 1;
+      if (index < -1 || index >= rows.length) throw domError("IndexSizeError", "The provided index (" + index + ") is outside the range [-1, " + (rows.length - 1) + "].");
+      if (rows[index]) rows[index].remove();
+    });
     var cellsOf = function (tr) { return Array.prototype.filter.call(tr.children, function (c) { return c.localName === "td" || c.localName === "th"; }); };
     getter(P.HTMLTableRowElement, "cells", function () { var t = this; return liveCollection(function () { return cellsOf(t); }, false, "HTMLCollection"); });
     getter(P.HTMLTableRowElement, "rowIndex", function () {
@@ -2855,7 +3555,14 @@
     getter(P.Element, "clientLeft", function () { return 0; });
     nullable(P.HTMLElement, "nonce", "nonce");
     nullable(P.Element, "role", "role");
-    nullable(P.Element, "ariaLabel", "aria-label");
+    // the ARIAMixin string reflections: every aria* IDL property mirrors its aria-* attribute.
+    // The attribute names are NOT a mechanical kebab-casing of the IDL names (ariaValueNow mirrors
+    // aria-valuenow, ariaReadOnly mirrors aria-readonly, ...), so the pairs are spelled out.
+    // (The element-reference ones — ariaControls, ariaLabelledBy, ... — are not string reflections
+    // and jsdom does not define them either.)
+    [["ariaAtomic", "aria-atomic"], ["ariaAutoComplete", "aria-autocomplete"], ["ariaBusy", "aria-busy"], ["ariaChecked", "aria-checked"], ["ariaColCount", "aria-colcount"], ["ariaColIndex", "aria-colindex"], ["ariaColIndexText", "aria-colindextext"], ["ariaColSpan", "aria-colspan"], ["ariaCurrent", "aria-current"], ["ariaDescription", "aria-description"], ["ariaDisabled", "aria-disabled"], ["ariaExpanded", "aria-expanded"], ["ariaHasPopup", "aria-haspopup"], ["ariaHidden", "aria-hidden"], ["ariaInvalid", "aria-invalid"], ["ariaKeyShortcuts", "aria-keyshortcuts"], ["ariaLabel", "aria-label"], ["ariaLevel", "aria-level"], ["ariaLive", "aria-live"], ["ariaModal", "aria-modal"], ["ariaMultiLine", "aria-multiline"], ["ariaMultiSelectable", "aria-multiselectable"], ["ariaOrientation", "aria-orientation"], ["ariaPlaceholder", "aria-placeholder"], ["ariaPosInSet", "aria-posinset"], ["ariaPressed", "aria-pressed"], ["ariaReadOnly", "aria-readonly"], ["ariaRelevant", "aria-relevant"], ["ariaRequired", "aria-required"], ["ariaRoleDescription", "aria-roledescription"], ["ariaRowCount", "aria-rowcount"], ["ariaRowIndex", "aria-rowindex"], ["ariaRowIndexText", "aria-rowindextext"], ["ariaRowSpan", "aria-rowspan"], ["ariaSelected", "aria-selected"], ["ariaSetSize", "aria-setsize"], ["ariaSort", "aria-sort"], ["ariaValueMax", "aria-valuemax"], ["ariaValueMin", "aria-valuemin"], ["ariaValueNow", "aria-valuenow"], ["ariaValueText", "aria-valuetext"]].forEach(function (pair) {
+      nullable(P.Element, pair[0], pair[1]);
+    });
     getter(P.HTMLElement, "draggable", function () { return this.getAttribute("draggable") === "true"; }, function (v) { this.setAttribute("draggable", v ? "true" : "false"); });
   })();
 

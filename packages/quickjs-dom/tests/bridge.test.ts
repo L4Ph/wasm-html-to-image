@@ -37,6 +37,641 @@ describe("bridge: objects of the page from the host", () => {
     expect(a.ELEMENT_NODE).toBe(1);
   });
 
+  it("exposes DOMTokenList for classList", () => {
+    const a = w.document.getElementById("a");
+    expect(typeof w.DOMTokenList).toBe("function");
+    expect(a.classList instanceof w.DOMTokenList).toBe(true);
+    expect(a.classList.constructor.name).toBe("DOMTokenList");
+    expect(() => new w.DOMTokenList()).toThrow(TypeError);
+  });
+
+  it("keeps events inside a shadow tree unless they are composed, and retargets them at the host", async () => {
+    const out = await dom.eval(`(() => {
+      // a document of its own: focusing marks a document as focused for good (jsdom's model),
+      // and the shared page's hasFocus answer is pinned by another test
+      const d = document.implementation.createHTMLDocument("");
+      const host = d.createElement("div");
+      d.body.appendChild(host);
+      const root = host.attachShadow({ mode: "closed" });
+      const inner = d.createElement("span");
+      root.appendChild(inner);
+      const seen = [];
+      host.addEventListener("click", (e) => seen.push("click:" + (e.target === host)));
+      host.addEventListener("change", () => seen.push("change"));
+      host.addEventListener("focus", () => seen.push("focus"));
+      root.addEventListener("click", () => seen.push("root-click"));
+      inner.dispatchEvent(new Event("click", { bubbles: true, composed: true }));
+      inner.dispatchEvent(new Event("change", { bubbles: true, composed: false }));
+      const input = d.createElement("input");
+      root.appendChild(input);
+      input.focus();
+      host.remove();
+      return JSON.stringify(seen);
+    })()`);
+    expect(out).toBe(JSON.stringify(["root-click", "click:true", "focus"]));
+  });
+
+  it("constructs the page's classes reached as values, and keeps host subclasses distinct", async () => {
+    const { window } = dom.bridge();
+    const file = new window.File(["x"], "a.txt", { type: "text/plain" });
+    expect([file.name, file.size, file.type]).toEqual(["a.txt", 1, "text/plain"]);
+    // every subclass of the page's HTMLElement used to arrive in the page as the base class
+    // itself (the class marker was inherited), so the second define always threw
+    class First extends window.HTMLElement {}
+    class Second extends window.HTMLElement {}
+    window.customElements.define("x-first", First);
+    window.customElements.define("x-second", Second);
+    expect(window.customElements.get("x-first")).toBe(First);
+    expect(window.customElements.get("x-second")).toBe(Second);
+    const out = await dom.eval(`(() => {
+      const input = document.createElement("input");
+      const before = input.labels && input.labels.length;
+      input.type = "hidden";
+      const span = document.createElement("span");
+      return JSON.stringify([before, input.labels, "checked" in span, span.checked]);
+    })()`);
+    expect(out).toBe(JSON.stringify([0, null, false, undefined]));
+  });
+
+  it("builds the tree the standard builds: adoption, foster parenting, tables, foreign case, XML", async () => {
+    const out = await dom.eval(`(() => {
+      const d = document.implementation.createHTMLDocument("");
+      const cases = [
+        "<b><i>x</b>y</i>",
+        "<table><div>f</div><tr><td>c</td></tr></table>",
+        "<a href='/x'>one<a href='/y'>two</a>",
+        "<isindex prompt='what'>",
+        "<body><p>hi</p></body>",
+        "<table><td>cell</td></table>",
+        "<svg><foreignObject><div>x</div></foreignObject><circle r='1'/></svg>",
+      ];
+      const got = cases.map((m) => { d.body.innerHTML = m; return d.body.innerHTML; });
+      const fo = d.querySelector("foreignObject");
+      got.push(fo.localName + "/" + fo.namespaceURI.split("/").pop() + "/" + fo.firstElementChild.namespaceURI.split("/").pop());
+      const xml = new DOMParser().parseFromString("<root><a x='1'>t</a></root>", "text/xml");
+      got.push(new XMLSerializer().serializeToString(xml));
+      const bad = new DOMParser().parseFromString("<root><oops>", "text/xml");
+      got.push(bad.documentElement.localName);
+      return JSON.stringify(got);
+    })()`);
+    expect(out).toBe(JSON.stringify([
+      "<b><i>x</i></b><i>y</i>",
+      "<div>f</div><table><tbody><tr><td>c</td></tr></tbody></table>",
+      '<a href="/x">one</a><a href="/y">two</a>',
+      '<isindex prompt="what"></isindex>',
+      "<p>hi</p>",
+      "<table><tbody><tr><td>cell</td></tr></tbody></table>",
+      '<svg><foreignObject><div>x</div></foreignObject><circle r="1"></circle></svg>',
+      "foreignObject/svg/xhtml",
+      '<root><a x="1">t</a></root>',
+      "parsererror",
+    ]));
+  });
+
+  it("keeps form state apart from its defaults: dirty values, radio groups, deselection, reset", async () => {
+    const out = await dom.eval(`(() => {
+      const d = document.implementation.createHTMLDocument("");
+      d.body.innerHTML = '<form id="f"><input id="t" value="dv"><input id="c" type="checkbox" checked>'
+        + '<input id="r1" type="radio" name="g" value="1"><input id="r2" type="radio" name="g" value="2" checked>'
+        + '<select id="s"><option value="a">A</option><option value="b" selected>B</option><option>C</option></select>'
+        + '<input id="n" type="number"></form>';
+      const $ = (id) => d.getElementById(id);
+      const log = [];
+      $("r1").checked = true;
+      log.push("radio:" + $("r1").checked + "," + $("r2").checked + "/" + $("r2").defaultChecked);
+      $("s").selectedIndex = -1;
+      log.push("desel:" + $("s").selectedIndex + ":" + JSON.stringify($("s").value));
+      $("t").value = "typed"; $("t").setAttribute("value", "attr2");
+      log.push("dirty:" + JSON.stringify($("t").value) + "/" + JSON.stringify($("t").defaultValue));
+      $("n").value = "abc";
+      log.push("num:" + JSON.stringify($("n").value));
+      $("c").checked = false; $("s").selectedIndex = 0;
+      $("f").reset();
+      log.push("reset:" + $("c").checked + "/" + $("s").selectedIndex + "/" + JSON.stringify($("t").value));
+      return JSON.stringify(log);
+    })()`);
+    expect(out).toBe(JSON.stringify(["radio:true,false/true", "desel:-1:\"\"", "dirty:\"typed\"/\"attr2\"", "num:\"\"", "reset:true/1/\"attr2\""]));
+  });
+
+  it("clones a range's partial ancestors, and refuses cross-tree comparisons", async () => {
+    const out = await dom.eval(`(() => {
+      const d = document.implementation.createHTMLDocument("");
+      d.body.innerHTML = '<div id="r"><p>hello <b>bold</b> tail</p><p>second para</p></div>';
+      const nodes = [];
+      const walk = (n) => { nodes.push(n); for (const c of n.childNodes) walk(c); };
+      walk(d.getElementById("r"));
+      const r = d.createRange();
+      r.setStart(nodes[2], 2); // inside "hello " text, after "he"
+      r.setEnd(nodes[7], 3); // inside "second para", after "sec"
+      const div = d.createElement("div");
+      div.appendChild(r.cloneContents());
+      let cmp = "no throw";
+      const detached = d.createElement("div");
+      detached.textContent = "x";
+      const r2 = d.createRange();
+      r2.setStart(detached.firstChild, 0); r2.setEnd(detached.firstChild, 1);
+      try { r.compareBoundaryPoints(Range.START_TO_START, r2); } catch (e) { cmp = e.name; }
+      return JSON.stringify([div.innerHTML, cmp]);
+    })()`);
+    expect(out).toBe(JSON.stringify(['<p>llo <b>bold</b> tail</p><p>sec</p>', "WrongDocumentError"]));
+  });
+
+  it("orders handlers the way jsdom does: capture first at the target, the on* slot kept", async () => {
+    const out = await dom.eval(`(() => {
+      const d = document.implementation.createHTMLDocument("");
+      d.body.innerHTML = "<div id=c>x</div>";
+      const c = d.getElementById("c");
+      const log = [];
+      // at the target the list runs in registration order (the spec order, and the one this
+      // package's own event test pins; jsdom's capture-first order there is a recorded deviation)
+      c.addEventListener("click", () => log.push("B1"));
+      c.addEventListener("click", () => log.push("CAP"), true);
+      c.addEventListener("click", () => log.push("B2"));
+      c.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      const first = log.join(",");
+      // the handler's slot is where it was first set, across null and re-set
+      log.length = 0;
+      const el = d.createElement("div");
+      el.onclick = () => log.push("ATTR2");
+      el.addEventListener("click", () => log.push("L1"));
+      el.onclick = null;
+      el.addEventListener("click", () => log.push("L2"));
+      el.onclick = () => log.push("ATTR2");
+      el.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      return JSON.stringify([first, log.join(",")]);
+    })()`);
+    expect(out).toBe(JSON.stringify(["B1,CAP,B2", "ATTR2,L1,L2"]));
+  });
+
+  it("answers the SVG value interfaces, XPath classes and ElementInternals", async () => {
+    const out = await dom.eval(`(() => {
+      const d = document;
+      const svg = d.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("viewBox", "0 0 10 20");
+      svg.setAttribute("class", "c1");
+      const expr = d.createExpression("//b");
+      if (!customElements.get("x-probe")) customElements.define("x-probe", class extends HTMLElement {});
+      const host = d.createElement("x-probe");
+      const internals = host.attachInternals();
+      let again = "no throw";
+      try { host.attachInternals(); } catch (e) { again = e.name; }
+      return JSON.stringify([
+        svg.className instanceof SVGAnimatedString, svg.className.baseVal, svg.href instanceof SVGAnimatedString,
+        svg.viewBox instanceof SVGAnimatedRect, svg.viewBox.baseVal instanceof SVGRect, svg.viewBox.baseVal.width,
+        typeof SVGNumber, typeof SVGStringList, typeof SVGPreserveAspectRatio, SVGPreserveAspectRatio.SVG_PRESERVEASPECTRATIO_XMIDYMID, typeof SVGAnimatedPreserveAspectRatio,
+        expr instanceof XPathExpression, expr.evaluate(d, 0).snapshotLength >= 0, typeof XPathException, XPathException.TYPE_ERR,
+        internals instanceof ElementInternals, internals.validity.valid, internals.checkValidity(), internals.form, again,
+      ]);
+    })()`);
+    expect(out).toBe(
+      JSON.stringify([
+        true, "c1", true,
+        true, true, 10,
+        "function", "function", "function", 6, "function",
+        true, true, "function", 52,
+        true, true, true, null, "NotSupportedError",
+      ]),
+    );
+  });
+
+  it("builds the CSS rule classes from a sheet", async () => {
+    const out = await dom.eval(`(() => {
+      const d = document.implementation.createHTMLDocument("");
+      d.head.innerHTML = "<style>@media (min-width: 10px) { a { color: red } } @import \\"x.css\\"; @keyframes spin { from { left: 0 } to { left: 9px } } b { top: 1px }</style>";
+      const sheet = d.styleSheets[0];
+      const rules = sheet.cssRules;
+      const [media, imp, kf, style] = rules;
+      style.style.setProperty("left", "2px");
+      return JSON.stringify([
+        rules instanceof CSSRuleList, rules.length, rules.item(0) === media, CSSRule.MEDIA_RULE, CSSRule.KEYFRAMES_RULE,
+        media.constructor.name, media.type, media.conditionText, media.cssRules.length, media.cssRules[0].constructor.name,
+        media instanceof CSSGroupingRule, media instanceof CSSConditionRule, media.cssRules[0].parentRule === media, media.cssRules[0].parentStyleSheet === sheet,
+        imp.constructor.name, imp.type, imp.href, !!imp.styleSheet,
+        kf.constructor.name, kf.name, kf.cssRules.length, kf.cssRules[0].constructor.name, kf.cssRules[0].keyText, kf.cssRules[1].keyText,
+        style.type, style.selectorText, style.style instanceof CSSStyleProperties, style.style instanceof CSSStyleDeclaration,
+        style.style.getPropertyValue("top"), style.style.getPropertyValue("left"), style.parentStyleSheet === sheet,
+        typeof CSSFontFaceRule, typeof CSSPageRule, typeof CSSSupportsRule, typeof CSSNamespaceRule, typeof CSSCounterStyleRule,
+        typeof CSSLayerBlockRule, typeof CSSLayerStatementRule, typeof CSSContainerRule, typeof CSSScopeRule, typeof CSSNestedDeclarations,
+      ]);
+    })()`);
+    expect(out).toBe(
+      JSON.stringify([
+        true, 4, true, 4, 7,
+        "CSSMediaRule", 4, "(min-width: 10px)", 1, "CSSStyleRule",
+        true, true, true, true,
+        "CSSImportRule", 3, "x.css", true,
+        "CSSKeyframesRule", "spin", 2, "CSSKeyframeRule", "0%", "100%",
+        1, "b", true, true,
+        "1px", "2px", true,
+        "function", "function", "function", "function", "function",
+        "function", "function", "function", "function", "function",
+      ]),
+    );
+  });
+
+  it("gives the navigator empty plugin and mime type arrays of the right classes", async () => {
+    const out = await dom.eval(`JSON.stringify([
+      navigator.plugins instanceof PluginArray, navigator.plugins.length, navigator.plugins.item(0), navigator.plugins.namedItem("x"), typeof navigator.plugins.refresh,
+      navigator.mimeTypes instanceof MimeTypeArray, navigator.mimeTypes.length, navigator.mimeTypes.item(0),
+      typeof Plugin, typeof MimeType,
+    ])`);
+    expect(out).toBe(JSON.stringify([true, 0, null, null, "function", true, 0, null, "function", "function"]));
+  });
+
+  it("gives the table, legacy and SVG elements their interfaces, and iterators theirs", async () => {
+    const out = await dom.eval(`(() => {
+      const d = document.implementation.createHTMLDocument("");
+      d.body.innerHTML = "<table><caption>c</caption><colgroup><col></colgroup><thead><tr><td>x</td></tr></thead></table><frameset></frameset><marquee>m</marquee><dir></dir>";
+      const q = (s) => d.querySelector(s);
+      const it = d.createNodeIterator(d.body, 0xFFFFFFFF);
+      const tw = d.createTreeWalker(d.body, 0xFFFFFFFF);
+      const svg = d.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.innerHTML = "<title>t</title><switch></switch>";
+      return JSON.stringify([
+        q("caption") instanceof HTMLTableCaptionElement, q("col") instanceof HTMLTableColElement, q("colgroup") instanceof HTMLTableColElement,
+        q("thead") instanceof HTMLTableSectionElement, q("frameset") instanceof HTMLFrameSetElement, q("marquee") instanceof HTMLMarqueeElement, q("dir") instanceof HTMLDirectoryElement,
+        typeof HTMLFrameElement, it instanceof NodeIterator, tw instanceof TreeWalker, it.nextNode() === d.body,
+        svg.firstChild instanceof SVGTitleElement, svg.lastChild instanceof SVGSwitchElement,
+        d.createElement("title") instanceof SVGTitleElement,
+        q("thead").rows.length, q("thead").rows[0].tagName, typeof q("caption").webkitMatchesSelector, q("caption").translate,
+        q("col").span, it.pointerBeforeReferenceNode,
+      ]);
+    })()`);
+    expect(out).toBe(
+      JSON.stringify([
+        true, true, true,
+        true, true, true, true,
+        "function", true, true, true,
+        true, true,
+        false,
+        1, "TR", "function", false,
+        1, false,
+      ]),
+    );
+  });
+
+  it("constructs the remaining event classes and the XHR family", async () => {
+    const out = await dom.eval(`(() => {
+      const ce = new CloseEvent("close", { wasClean: true, code: 1000, reason: "bye" });
+      const pre = new PromiseRejectionEvent("unhandledrejection", { promise: Promise.resolve(1), reason: "r" });
+      const dm = new DeviceMotionEvent("devicemotion", { interval: 16 });
+      const xhr = new XMLHttpRequest();
+      const qe = new QuotaExceededError("full");
+      return JSON.stringify([
+        ce.type, ce.wasClean, ce.code, ce.reason, ce instanceof Event,
+        pre.reason, pre.promise instanceof Promise, pre instanceof Event,
+        dm.interval, dm.acceleration, new BlobEvent("blob", { data: null }).type,
+        typeof BeforeUnloadEvent, typeof DeviceOrientationEvent, typeof DeviceMotionEventAcceleration, typeof DeviceMotionEventRotationRate,
+        xhr instanceof XMLHttpRequestEventTarget, xhr instanceof EventTarget, xhr.upload instanceof XMLHttpRequestUpload, xhr.upload instanceof XMLHttpRequestEventTarget,
+        qe.name, qe.code, qe instanceof DOMException, typeof QuotaExceededError,
+      ]);
+    })()`);
+    expect(out).toBe(
+      JSON.stringify([
+        "close", true, 1000, "bye", true,
+        "r", true, true,
+        16, null, "blob",
+        "function", "function", "function", "function",
+        true, true, true, true,
+        "QuotaExceededError", 22, true, "function",
+      ]),
+    );
+  });
+
+  it("constructs Option and Audio, and names the document and range classes", async () => {
+    const out = await dom.eval(`(() => {
+      const opt = new Option("hi", "v", false, true);
+      const aud = new Audio("x.mp3");
+      const img = new Image();
+      const xd = document.implementation.createDocument(null, "root", null);
+      const xp = new DOMParser().parseFromString("<root/>", "text/xml");
+      const r = document.createRange();
+      const sr = new StaticRange({ startContainer: document.body, startOffset: 0, endContainer: document.body, endOffset: 0 });
+      return JSON.stringify([
+        opt.tagName, opt.textContent, opt.value, opt.selected, opt instanceof Option, opt instanceof HTMLOptionElement,
+        aud.tagName, aud.getAttribute("src"), aud instanceof Audio, img instanceof Image,
+        xd instanceof XMLDocument, xd.contentType, xp instanceof XMLDocument,
+        typeof CDATASection, typeof ProcessingInstruction, typeof CustomElementRegistry,
+        customElements instanceof CustomElementRegistry, customElements.constructor.name,
+        r instanceof AbstractRange, sr instanceof StaticRange, sr instanceof AbstractRange, sr.collapsed, sr.startContainer === document.body,
+        typeof XMLDocument,
+      ]);
+    })()`);
+    expect(out).toBe(
+      JSON.stringify([
+        "OPTION", "hi", "v", true, true, true,
+        "AUDIO", "x.mp3", true, true,
+        true, "application/xml", true,
+        "function", "function", "function",
+        true, "CustomElementRegistry",
+        true, true, true, true, true,
+        "function",
+      ]),
+    );
+  });
+
+  it("answers the window's own functions", async () => {
+    const out = await dom.eval(`(async () => {
+      const got = [];
+      window.addEventListener("message", (e) => got.push([e.data, e.origin, e instanceof MessageEvent]));
+      const sync = [
+        typeof alert, typeof confirm, typeof prompt, typeof focus, typeof blur, typeof print, typeof stop, typeof open,
+        confirm(), prompt(), open(), webkitURL === URL, crypto instanceof Crypto, typeof Crypto,
+      ];
+      window.postMessage({ a: 1 });
+      await new Promise((r) => setTimeout(r, 20));
+      return JSON.stringify([sync, got]);
+    })()`);
+    expect(out).toBe(
+      JSON.stringify([
+        ["function", "function", "function", "function", "function", "function", "function", "function", false, null, null, true, true, "function"],
+        [[{ a: 1 }, "", true]],
+      ]),
+    );
+  });
+
+  it("answers the Document members jsdom answers", async () => {
+    const out = await dom.eval(`(() => {
+      const d = document;
+      const before = [d.URL, d.documentURI, d.contentType, d.compatMode, d.characterSet, d.charset, d.inputEncoding,
+        d.referrer, d.readyState, d.hidden, d.visibilityState, d.currentScript, d.hasFocus(), d.dir,
+        d.forms.length, d.images.length, d.scripts.length, d.links.length, d.anchors.length, d.embeds.length, d.plugins.length, d.applets.length,
+        typeof d.open, typeof d.write, typeof d.captureEvents, d.getElementsByName("n").length, typeof d.onvisibilitychange];
+      const at = d.createAttributeNS("http://ns", "p:q");
+      let cdata = "no throw";
+      try { d.createCDATASection("x"); } catch (e) { cdata = e.name; }
+      const ev = d.createEvent("MouseEvents"); ev.initEvent("click", true, false);
+      const parsed = new DOMParser().parseFromString("<p>y</p>", "text/html");
+      parsed.cookie = "a=1"; parsed.cookie = "b=2";
+      return JSON.stringify([before, at.name, at.localName, at.prefix, at.namespaceURI, cdata, ev.type, ev instanceof MouseEvent, parsed.cookie, parsed.contentType, parsed.URL]);
+    })()`);
+    expect(out).toBe(
+      JSON.stringify([
+        ["about:blank", "about:blank", "text/html", "CSS1Compat", "UTF-8", "UTF-8", "UTF-8",
+          "", "complete", false, "visible", null, false, "", // the engine's page pretends to be visual (the JSDOM facade's default does not, as in jsdom)
+          0, 0, 0, 0, 0, 0, 0, 0,
+          "function", "function", "function", 0, "object"],
+        "p:q", "q", "p", "http://ns", "NotSupportedError", "click", true, "a=1; b=2", "text/html", "about:blank",
+      ]),
+    );
+  });
+
+  it("makes el.style and computed styles instances of the one CSSStyleDeclaration", async () => {
+    const out = await dom.eval(`(() => {
+      const el = document.getElementById("a");
+      el.style.color = "red";
+      const cs = getComputedStyle(el);
+      const proto = CSSStyleDeclaration.prototype;
+      return JSON.stringify([
+        typeof CSSStyleDeclaration, el.style instanceof CSSStyleDeclaration, cs instanceof CSSStyleDeclaration,
+        el.style.constructor.name, el.style.getPropertyValue("color"), cs.getPropertyValue("color"),
+        typeof proto.getPropertyValue, typeof proto.setProperty, typeof proto.removeProperty, typeof proto.getPropertyPriority, typeof proto.item,
+        "cssText" in proto, "length" in proto, el.style.parentRule, cs.parentRule,
+      ]);
+    })()`);
+    expect(out).toBe(
+      JSON.stringify([
+        "function", true, true,
+        "CSSStyleDeclaration", "red", "rgb(255, 0, 0)",
+        "function", "function", "function", "function", "function",
+        true, true, null, null,
+      ]),
+    );
+  });
+
+  it("gives the window its on* handler properties", async () => {
+    const out = await dom.eval(`(() => {
+      const seen = [];
+      const names = [];
+      let o = window;
+      while (o) { for (const k of Object.getOwnPropertyNames(o)) if (/^on./.test(k) && !names.includes(k)) names.push(k); o = Object.getPrototypeOf(o); }
+      const before = [window.onclick, window.onload];
+      window.onclick = (e) => seen.push("win:" + e.target.id);
+      document.getElementById("a").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      const mid = [typeof window.onclick, seen.join(",")];
+      window.onclick = null;
+      return JSON.stringify([names.length, before, mid, window.onclick, typeof window.onbeforeunload, typeof window.onmessage]);
+    })()`);
+    expect(out).toBe(JSON.stringify([118, [null, null], ["function", "win:a"], null, "object", "object"]));
+  });
+
+  it("reflects the aria* properties onto their attributes", async () => {
+    const out = await dom.eval(`(() => {
+      const el = document.getElementById("a");
+      const before = [el.ariaLabel, el.ariaBusy, el.ariaValueNow];
+      el.ariaBusy = "true"; el.ariaValueNow = "5"; el.ariaColIndexText = "x";
+      const mid = [el.getAttribute("aria-busy"), el.getAttribute("aria-valuenow"), el.getAttribute("aria-colindextext")];
+      el.ariaBusy = null;
+      const names = [];
+      let o = el;
+      while (o) { for (const k of Object.getOwnPropertyNames(o)) if (/^aria[A-Z]/.test(k) && !names.includes(k)) names.push(k); o = Object.getPrototypeOf(o); }
+      return JSON.stringify([before, mid, el.ariaBusy, el.hasAttribute("aria-busy"), names.length]);
+    })()`);
+    expect(out).toBe(JSON.stringify([[null, null, null], ["true", "5", "x"], null, false, 41]));
+  });
+
+  it("answers the legacy constants, splitText and the namespace lookups", async () => {
+    const out = await dom.eval(`(() => {
+      const host = document.createElement("div");
+      host.innerHTML = "<b>1</b>mid<i>2</i>";
+      const text = host.childNodes[1];
+      const rest = text.splitText(1);
+      const p = document.getElementById("a");
+      p.setAttribute("data-z", "9");
+      return JSON.stringify([
+        Node.ATTRIBUTE_NODE, Node.CDATA_SECTION_NODE, Node.ENTITY_REFERENCE_NODE, Node.ENTITY_NODE, Node.PROCESSING_INSTRUCTION_NODE, Node.NOTATION_NODE,
+        host.ATTRIBUTE_NODE, host.ENTITY_NODE,
+        text.data, rest.data, host.textContent, rest.wholeText, text.assignedSlot,
+        text.previousElementSibling.tagName, text.nextElementSibling.tagName,
+        document.getElementsByTagNameNS("*", "b").length, host.getElementsByTagNameNS("", "i").length,
+        p.attributes.getNamedItemNS("", "data-z").value, p.attributes.getNamedItemNS("", "nope"),
+      ]);
+    })()`);
+    expect(out).toBe(
+      JSON.stringify([
+        2, 4, 5, 6, 7, 12,
+        2, 6,
+        "m", "id", "1mid2", "mid", null,
+        "B", "I",
+        1, 1,
+        "9", null,
+      ]),
+    );
+  });
+
+  it("exposes BarProp, External and the window's scalar properties", async () => {
+    const out = await dom.eval(`JSON.stringify([
+      typeof BarProp, typeof External,
+      locationbar instanceof BarProp, menubar instanceof BarProp, toolbar.visible, scrollbars.visible,
+      external instanceof External, external.constructor.name,
+      pageXOffset, scrollX, pageYOffset, scrollY, screenX, screenLeft, screenY, screenTop,
+      name, status, origin === location.origin, frameElement, length, "event" in window,
+    ])`);
+    expect(out).toBe(
+      JSON.stringify([
+        "function", "function",
+        true, true, true, true,
+        true, "External",
+        0, 0, 0, 0, 0, 0, 0, 0,
+        "", "", true, null, 0, true,
+      ]),
+    );
+  });
+
+  it("exposes DOMImplementation and HTMLDocument", async () => {
+    const out = await dom.eval(`(() => {
+      const impl = document.implementation;
+      const dt = impl.createDocumentType("html", "-//X//EN", "sys");
+      const hd = impl.createHTMLDocument("T");
+      const xd = impl.createDocument(null, "root", null);
+      const parsed = new DOMParser().parseFromString("<p>y</p>", "text/html");
+      return JSON.stringify([
+        typeof DOMImplementation, impl instanceof DOMImplementation, impl.constructor.name, document.implementation === impl,
+        impl.hasFeature("HTML", "1.0"),
+        dt.nodeType, dt instanceof DocumentType, dt.name, dt.publicId, dt.systemId,
+        hd instanceof HTMLDocument, hd instanceof Document, hd.constructor.name, hd.title, hd.body.tagName,
+        xd.documentElement.tagName, xd instanceof HTMLDocument, // "root" as created: an XML document's tagName keeps its case (jsdom agrees; the native getter used to upper-case every element)
+        document instanceof HTMLDocument, document.constructor.name,
+        parsed instanceof HTMLDocument,
+        (() => { try { new DOMImplementation(); return "no error"; } catch (e) { return e.name; } })(),
+      ]);
+    })()`);
+    expect(out).toBe(
+      JSON.stringify([
+        "function", true, "DOMImplementation", true,
+        true,
+        10, true, "html", "-//X//EN", "sys",
+        true, true, "HTMLDocument", "T", "BODY",
+        "root", false, // as created: an XML document's tagName keeps its case, as jsdom's does
+        true, "HTMLDocument",
+        true,
+        "TypeError",
+      ]),
+    );
+  });
+
+  it("exposes RadioNodeList for a radio group", async () => {
+    const out = await dom.eval(`(() => {
+      const f = document.createElement("form");
+      f.innerHTML = '<input type=radio name=r value=a><input type=radio name=r value=b checked><input type=text name=t value=x>';
+      document.body.appendChild(f);
+      const list = f.elements.namedItem("r");
+      const viaProp = f.elements.r;
+      const single = f.elements.namedItem("t");
+      const ans = [
+        typeof RadioNodeList, list instanceof RadioNodeList, list instanceof NodeList, list.constructor.name,
+        list.length, list.value, viaProp === list || viaProp instanceof RadioNodeList, single === f.querySelector("input[type=text]"),
+      ];
+      list.value = "a";
+      ans.push(list.value, f.querySelectorAll("input")[0].checked);
+      list.value = "";
+      ans.push(list.value);
+      f.remove();
+      return JSON.stringify(ans);
+    })()`);
+    expect(out).toBe(JSON.stringify(["function", true, true, "RadioNodeList", 2, "b", true, true, "a", true, ""]));
+  });
+
+  it("exposes FileList for input.files", async () => {
+    const out = await dom.eval(`(() => {
+      const f = document.createElement("input"); f.type = "file";
+      const t = document.createElement("input");
+      return JSON.stringify([
+        typeof FileList, f.files instanceof FileList, f.files.constructor.name, f.files.length,
+        f.files.item(0), [...f.files].length, f.files === f.files, t.files,
+        (() => { try { new FileList(); return "no error"; } catch (e) { return e.name; } })(),
+      ]);
+    })()`);
+    expect(out).toBe(JSON.stringify(["function", true, "FileList", 0, null, 0, true, null, "TypeError"]));
+  });
+
+  it("exposes StyleSheet, MediaList and StyleSheetList for the sheets", async () => {
+    const out = await dom.eval(`(() => {
+      const st = document.createElement("style");
+      st.setAttribute("media", "screen and (min-width: 100px), print");
+      st.textContent = "p { color: red }";
+      document.head.appendChild(st);
+      const sheets = document.styleSheets;
+      const sheet = sheets[sheets.length - 1];
+      const m = sheet.media;
+      const before = [m.length, m.item(0), m.item(1), m.item(2), m[0], String(m)];
+      m.appendMedium("tv"); m.deleteMedium("print");
+      return JSON.stringify([
+        typeof StyleSheet, typeof MediaList, typeof StyleSheetList,
+        sheets instanceof StyleSheetList, sheets.item(sheets.length - 1) === sheet, [...sheets].length === sheets.length,
+        sheet instanceof CSSStyleSheet, sheet instanceof StyleSheet, sheet.constructor.name,
+        st.sheet === sheet, m instanceof MediaList, m.constructor.name, before,
+        m.mediaText, m.length,
+        (() => { try { new StyleSheet(); return "no error"; } catch (e) { return e.name; } })(),
+      ]);
+    })()`);
+    expect(out).toBe(
+      JSON.stringify([
+        "function", "function", "function",
+        true, true, true,
+        true, true, "CSSStyleSheet",
+        true, true, "MediaList", [2, "screen and (min-width: 100px)", "print", null, "screen and (min-width: 100px)", "screen and (min-width: 100px), print"],
+        "screen and (min-width: 100px), tv", 2,
+        "TypeError",
+      ]),
+    );
+  });
+
+  it("exposes Location for the location", async () => {
+    expect(
+      await dom.eval(`JSON.stringify([
+        typeof Location, location instanceof Location, location instanceof URL, location.constructor.name,
+        location.pathname, (() => { try { new Location(); return "no error"; } catch (e) { return e.name; } })(),
+      ])`),
+    ).toBe(JSON.stringify(["function", true, true, "Location", "blank", "TypeError"]));
+  });
+
+  it("exposes DOMStringMap for dataset", async () => {
+    expect(typeof w.DOMStringMap).toBe("function");
+    expect(
+      await dom.eval(`(() => {
+        const el = document.getElementById("a");
+        const out = [el.dataset instanceof DOMStringMap, el.dataset.constructor.name, el.dataset.x];
+        el.setAttribute("data-constructor", "zzz");
+        out.push(el.dataset.constructor);
+        el.removeAttribute("data-constructor");
+        out.push(typeof el.dataset.constructor);
+        return JSON.stringify(out);
+      })()`),
+    ).toBe(JSON.stringify([true, "DOMStringMap", undefined, "zzz", "function"]));
+  });
+
+  it("exposes History, Navigator, Screen and Performance for the window singletons", async () => {
+    expect(typeof w.History).toBe("function");
+    expect(typeof w.Navigator).toBe("function");
+    expect(typeof w.Screen).toBe("function");
+    expect(typeof w.Performance).toBe("function");
+    // in the page the singletons are instances of their interfaces (the bridge's host wrappers
+    // for non-node objects do not carry the page's prototypes, so this is checked in the page)
+    expect(
+      await dom.eval(`JSON.stringify([
+        history instanceof History, navigator instanceof Navigator, screen instanceof Screen, performance instanceof Performance,
+        history.constructor.name, navigator.constructor.name, screen.constructor.name, performance.constructor.name,
+        (() => { try { new History(); return "no error"; } catch (e) { return e.name; } })(),
+      ])`),
+    ).toBe(JSON.stringify([true, true, true, true, "History", "Navigator", "Screen", "Performance", "TypeError"]));
+    // the singletons still behave: pushState moves the location and grows the history
+    const before = w.history.length;
+    w.history.pushState({ a: 1 }, "", "/there");
+    expect(w.history.state).toEqual({ a: 1 });
+    expect(w.history.length).toBe(before + 1);
+    expect(w.location.pathname).toBe("/there");
+  });
+
+  it("exposes MutationRecord for mutation records", async () => {
+    const out = await dom.eval(`new Promise((res) => {
+      const mo = new MutationObserver((rs) => res([typeof MutationRecord, rs[0] instanceof MutationRecord, rs[0].constructor.name, (() => { try { new MutationRecord(); return "no error"; } catch (e) { return e.name; } })()]));
+      mo.observe(document.body, { childList: true });
+      document.body.appendChild(document.createElement("i"));
+    })`);
+    expect(out).toEqual(["function", true, "MutationRecord", "TypeError"]);
+  });
+
   it("gives the same wrapper for the same node", () => {
     const d = w.document;
     expect(d.getElementById("a")).toBe(d.getElementById("a"));

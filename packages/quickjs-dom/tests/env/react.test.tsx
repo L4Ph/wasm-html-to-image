@@ -100,6 +100,26 @@ describe("react", () => {
     expect(submitted).toEqual([{ name: "Ada", agree: true, color: "green" }]);
   });
 
+  it("user-event tab moves focus through the form in order", async () => {
+    const user = userEvent.setup();
+    render(
+      <form>
+        <label>first <input id="f1" /></label>
+        <button type="button">middle</button>
+        <label>last <input id="f2" /></label>
+      </form>,
+    );
+    const seen: string[] = [];
+    await user.tab();
+    seen.push(document.activeElement?.id || document.activeElement?.textContent || "?");
+    await user.tab();
+    seen.push(document.activeElement?.id || document.activeElement?.textContent || "?");
+    await user.tab();
+    seen.push(document.activeElement?.id || document.activeElement?.textContent || "?");
+    expect(seen).toEqual(["f1", "middle", "f2"]);
+    expect(document.hasFocus()).toBe(true);
+  });
+
   it("effects and timers: findBy waits for what a timer renders", async () => {
     render(<Loader />);
     expect(screen.getByText("loading")).toBeInTheDocument();

@@ -113,6 +113,9 @@
       case "bigint": return { $: "n", v: String(v), b: 1 };
       case "string": case "boolean": return v;
       case "function":
+        // a function of the host's, echoed back (a custom element class read from the
+        // registry, say): it returns as the same function, not as a handle to its wrapper here
+        if (typeof v.__hostFn === "number") return { $: "f", i: v.__hostFn };
         if (!ctorNames) collect();
         return ctorNames.has(v) ? { $: "c", n: ctorNames.get(v) } : handle(v, true);
       default:
@@ -150,6 +153,7 @@
     var ref = callbacks.get(id), f = ref && ref.deref();
     if (!f) {
       f = function () { return callHost(id, this, arguments); };
+      f.__hostFn = id;
       callbacks.set(id, new WeakRef(f));
     }
     return f;
@@ -229,6 +233,7 @@
     del: function (r) { return delete target(r[1])[r[2]]; },
     keys: function (r) { return json(Object.getOwnPropertyNames(Object(target(r[1])))); },
     apply: function (r) { return target(r[1]).apply(dec(r[2]), decAll(r[3])); },
+    construct: function (r) { return Reflect.construct(target(r[1]), decAll(r[2])); },
     "new": function (r) { return Reflect.construct(ctorOf(r[1]), decAll(r[2])); },
     array: function (r) { return Array.from(target(r[1])); },
     // the children of a node (r[2]: elements only), without making the page build a live collection for them

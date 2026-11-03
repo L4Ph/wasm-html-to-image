@@ -3,10 +3,17 @@
 (function (g) {
   var done = new WeakSet(), list = [], current = null;
 
-  g.__edgeBoot = function (html, url, width, seed) {
+  g.__edgeBoot = function (html, url, width, seed, visual) {
     g.__edgeStart(seed);
+    // jsdom's pretendToBeVisual, plumbed from the facade: without it there are no animation
+    // frames, the document is prerendering and unfocused
+    var isVisual = visual !== false;
+    if (!isVisual) { delete g.requestAnimationFrame; delete g.cancelAnimationFrame; }
     var N = g.__native.dom;
     var d = N.parse(html), w = N.window;
+    if (N.setVisual) N.setVisual(d, isVisual);
+    // the page's document is an HTML document (nativedom.js keeps the HTMLDocument prototype for this)
+    if (w.HTMLDocument) Object.setPrototypeOf(d, w.HTMLDocument.prototype);
     // the window of the document is the global object itself: its event listeners are the nodes' own mechanism
     ["addEventListener", "removeEventListener", "dispatchEvent"].forEach(function (k) {
       Object.defineProperty(g, k, { configurable: true, writable: true, value: N.protos.Node[k] });
@@ -49,28 +56,99 @@
     Object.keys(w).forEach(function (k) {
       if (!(k in g)) Object.defineProperty(g, k, { configurable: true, writable: true, value: w[k] });
     });
+    // DOMStringMap is a global too, but stays off the window table (nativedom.js explains why)
+    if (N.DOMStringMapCtor && !("DOMStringMap" in g)) Object.defineProperty(g, "DOMStringMap", { configurable: true, writable: true, value: N.DOMStringMapCtor });
+    // CSSStyleDeclaration likewise (its objects are all named properties)
+    if (N.CSSStyleDeclarationCtor && !("CSSStyleDeclaration" in g)) Object.defineProperty(g, "CSSStyleDeclaration", { configurable: true, writable: true, value: N.CSSStyleDeclarationCtor });
+    // the SVG value interfaces likewise (their objects are baseVal/animVal pairs)
+    if (N.svgValueCtors) for (var vk in N.svgValueCtors) if (!(vk in g)) Object.defineProperty(g, vk, { configurable: true, writable: true, value: N.svgValueCtors[vk] });
     g.document = d;
     ["window", "self", "top", "parent", "frames"].forEach(function (k) {
       Object.defineProperty(g, k, { configurable: true, writable: true, value: g });
     });
 
+    // the location is a URL with the navigation methods tacked on; a Location prototype is inserted
+    // between it and URL's, so it is an instance of both and the URL accessors keep working
+    g.Location = function Location() { throw new TypeError("Illegal constructor"); };
     var loc = new g.URL(url);
+    Object.setPrototypeOf(g.Location.prototype, Object.getPrototypeOf(loc));
+    Object.setPrototypeOf(loc, g.Location.prototype);
     loc.assign = loc.replace = loc.reload = function () {};
     g.location = loc;
-    g.navigator = { userAgent: "Mozilla/5.0 (compatible; wasm-html-to-image) AppleWebKit/537.36 Chrome/120.0", language: "en-US", languages: ["en-US"], platform: "Linux", hardwareConcurrency: 1, onLine: true, cookieEnabled: false };
+    // The window's singleton objects carry their interface prototypes, so instanceof and constructor lookups work
+    var illegal = function () { throw new TypeError("Illegal constructor"); };
+    g.Navigator = function Navigator() { illegal(); };
+    g.navigator = Object.create(g.Navigator.prototype);
+    Object.assign(g.navigator, { userAgent: "Mozilla/5.0 (compatible; wasm-html-to-image) AppleWebKit/537.36 Chrome/120.0", language: "en-US", languages: ["en-US"], platform: "Linux", hardwareConcurrency: 1, onLine: true, cookieEnabled: false });
+    // plugins and mime types: none are registered, so both arrays are empty — but they are the
+    // real interfaces, with item/namedItem answering the way empty ones do
+    var emptyList = function (ctor) {
+      var o = Object.create(ctor.prototype);
+      Object.defineProperty(o, "length", { value: 0, enumerable: true });
+      return o;
+    };
+    g.Plugin = function Plugin() { illegal(); };
+    g.MimeType = function MimeType() { illegal(); };
+    g.PluginArray = function PluginArray() { illegal(); };
+    g.MimeTypeArray = function MimeTypeArray() { illegal(); };
+    Object.assign(g.PluginArray.prototype, { item: function () { return null; }, namedItem: function () { return null; }, refresh: function () {} });
+    Object.assign(g.MimeTypeArray.prototype, { item: function () { return null; }, namedItem: function () { return null; } });
+    g.navigator.plugins = emptyList(g.PluginArray);
+    g.navigator.mimeTypes = emptyList(g.MimeTypeArray);
     // pushState/replaceState move the location, as routers expect (no navigation happens)
     function moveTo(u) {
       if (u == null || u === "") return;
       var n = new g.URL(String(u), loc.href);
       ["protocol", "host", "hostname", "port", "pathname", "search", "hash", "origin", "searchParams"].forEach(function (k) { loc[k] = n[k]; });
     }
-    g.history = {
-      state: null, length: 1, scrollRestoration: "auto",
+    g.History = function History() { illegal(); };
+    Object.assign(g.History.prototype, {
       pushState: function (s, t, u) { this.state = s; this.length++; moveTo(u); },
       replaceState: function (s, t, u) { this.state = s; moveTo(u); },
       back: function () {}, forward: function () {}, go: function () {},
+    });
+    g.history = Object.create(g.History.prototype);
+    Object.assign(g.history, { state: null, length: 1, scrollRestoration: "auto" });
+    g.Screen = function Screen() { illegal(); };
+    g.screen = Object.create(g.Screen.prototype);
+    Object.assign(g.screen, { width: width, height: Math.round(width * 0.75) });
+    // the browser chrome bars, all visible as far as a page can tell, and the legacy external object
+    g.BarProp = function BarProp() { illegal(); };
+    ["locationbar", "menubar", "personalbar", "scrollbars", "statusbar", "toolbar"].forEach(function (k) {
+      var bar = Object.create(g.BarProp.prototype);
+      Object.defineProperty(bar, "visible", { value: true, enumerable: true });
+      g[k] = bar;
+    });
+    g.External = function External() { illegal(); };
+    g.external = Object.create(g.External.prototype);
+    // the window's scalar properties a page reads: no scrolling, no frames, not framed itself
+    g.pageXOffset = g.scrollX = g.pageYOffset = g.scrollY = 0;
+    g.screenX = g.screenLeft = g.screenY = g.screenTop = 0;
+    // the window's own functions: dialogs and window management have nothing to act on here
+    // (a script must not hang waiting for a user), and jsdom's answers are the same shape
+    g.alert = function () {};
+    g.confirm = function () { return false; };
+    g.prompt = function () { return null; };
+    g.focus = g.blur = function () {};
+    g.captureEvents = g.releaseEvents = function () {};
+    g.moveBy = g.moveTo = g.resizeBy = g.resizeTo = g.print = g.stop = function () {};
+    g.open = function () { return null; };
+    // postMessage to itself does deliver: a message event on the window, asynchronously
+    g.postMessage = function (message) {
+      var ev = new g.MessageEvent("message", { data: message, origin: loc.origin === "null" ? "" : loc.origin });
+      setTimeout(function () { g.dispatchEvent(ev); }, 0);
     };
-    g.screen = { width: width, height: Math.round(width * 0.75) };
+    if (!g.webkitURL) g.webkitURL = g.URL;
+    if (g.crypto && !g.Crypto) {
+      g.Crypto = function Crypto() { throw new TypeError("Illegal constructor"); };
+      Object.setPrototypeOf(g.crypto, g.Crypto.prototype);
+    }
+    g.name = "";
+    g.status = "";
+    g.origin = loc.origin;
+    g.frameElement = null;
+    g.length = 0;
+    g.event = undefined;
     g.innerWidth = g.outerWidth = width;
     g.innerHeight = g.outerHeight = Math.round(width * 0.75);
     g.devicePixelRatio = 1;
@@ -172,6 +250,23 @@
       if (height != null) i.setAttribute("height", height);
       return i;
     };
+    g.Image.prototype = Object.getPrototypeOf(d.createElement("img"));
+    // Option and Audio are the same kind of shortcut constructors over the document
+    g.Option = function (text, value, defaultSelected, selected) {
+      var o = d.createElement("option");
+      if (text !== undefined) o.textContent = String(text);
+      if (value !== undefined) o.setAttribute("value", String(value));
+      if (defaultSelected) o.setAttribute("selected", "");
+      if (selected) o.selected = true;
+      return o;
+    };
+    g.Option.prototype = Object.getPrototypeOf(d.createElement("option"));
+    g.Audio = function (src) {
+      var a = d.createElement("audio");
+      if (src !== undefined) a.setAttribute("src", String(src));
+      return a;
+    };
+    g.Audio.prototype = Object.getPrototypeOf(d.createElement("audio"));
     d.fonts = d.fonts || { ready: Promise.resolve(), check: function () { return true; }, load: function () { return Promise.resolve([]); }, add: function () {}, forEach: function () {}, addEventListener: function () {}, removeEventListener: function () {} };
     var state = "loading";
     Object.defineProperty(d, "readyState", { configurable: true, get: function () { return state; } });
@@ -450,6 +545,15 @@
         }
       };
     }
+    // the XHR family's parent interface joins the real EventTarget chain (shims.js loads before it exists)
+    if (g.XMLHttpRequestEventTarget && g.EventTarget) {
+      Object.setPrototypeOf(g.XMLHttpRequestEventTarget.prototype, g.EventTarget.prototype);
+      Object.setPrototypeOf(g.XMLHttpRequestEventTarget, g.EventTarget);
+      Object.setPrototypeOf(g.XMLHttpRequestUpload.prototype, g.XMLHttpRequestEventTarget.prototype);
+      Object.setPrototypeOf(g.XMLHttpRequestUpload, g.XMLHttpRequestEventTarget);
+    }
+    if (!g.Performance) g.Performance = function Performance() { throw new TypeError("Illegal constructor"); };
+    if (g.performance) Object.setPrototypeOf(g.performance, g.Performance.prototype);
     if (g.performance && !g.performance.timing) {
       g.performance.timing = { navigationStart: g.performance.timeOrigin, fetchStart: g.performance.timeOrigin, responseStart: g.performance.timeOrigin, domLoading: g.performance.timeOrigin, domInteractive: g.performance.timeOrigin, domContentLoadedEventStart: g.performance.timeOrigin, domContentLoadedEventEnd: g.performance.timeOrigin, loadEventStart: 0, loadEventEnd: 0 };
       g.performance.navigation = { type: 0, redirectCount: 0 };

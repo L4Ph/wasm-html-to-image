@@ -482,7 +482,7 @@ describe("native DOM: style, forms and shadow roots", () => {
         var $ = function (id) { return doc.getElementById(id); };
         $("i").value = "b"; $("t").value = "bye"; $("s").value = "x"; $("c").checked = false; $("i").disabled = true;
         return [$("i").value, $("i").getAttribute("value"), $("t").value, $("t").textContent, $("s").value, $("c").checked, $("i").disabled, $("i").form === $("f")];`),
-    ).toEqual(["b", "b", "bye", "bye", "x", false, true, true]);
+    ).toEqual(["b", "a", "bye", "hi", "x", false, true, true]);
   });
 
   it("attachShadow: the root belongs to the host, not to the tree, and events go through the host", async () => {
@@ -492,7 +492,8 @@ describe("native DOM: style, forms and shadow roots", () => {
         var root = host.attachShadow({ mode: "open" }), inner = d.createElement("span");
         root.appendChild(inner);
         host.addEventListener("x", function () { got.push("host"); });
-        inner.dispatchEvent(new E("x", { bubbles: true }));
+        inner.dispatchEvent(new E("x", { bubbles: true })); // not composed: it stays in the shadow tree
+        inner.dispatchEvent(new E("x", { bubbles: true, composed: true })); // composed: it goes through the host
         var twice; try { host.attachShadow({ mode: "open" }); twice = "no error"; } catch (e) { twice = e.name; }
         var closed = d.createElement("p"); closed.attachShadow({ mode: "closed" });
         return [host.shadowRoot === root, root.host === host, host.childNodes.length, host.innerHTML, got, twice, closed.shadowRoot];`),
