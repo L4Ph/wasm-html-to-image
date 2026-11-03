@@ -45,6 +45,29 @@ describe("bridge: objects of the page from the host", () => {
     expect(() => new w.DOMTokenList()).toThrow(TypeError);
   });
 
+  it("clones a range's partial ancestors, and refuses cross-tree comparisons", async () => {
+    const out = await dom.eval(`(() => {
+      const d = document.implementation.createHTMLDocument("");
+      d.body.innerHTML = '<div id="r"><p>hello <b>bold</b> tail</p><p>second para</p></div>';
+      const nodes = [];
+      const walk = (n) => { nodes.push(n); for (const c of n.childNodes) walk(c); };
+      walk(d.getElementById("r"));
+      const r = d.createRange();
+      r.setStart(nodes[2], 2); // inside "hello " text, after "he"
+      r.setEnd(nodes[7], 3); // inside "second para", after "sec"
+      const div = d.createElement("div");
+      div.appendChild(r.cloneContents());
+      let cmp = "no throw";
+      const detached = d.createElement("div");
+      detached.textContent = "x";
+      const r2 = d.createRange();
+      r2.setStart(detached.firstChild, 0); r2.setEnd(detached.firstChild, 1);
+      try { r.compareBoundaryPoints(Range.START_TO_START, r2); } catch (e) { cmp = e.name; }
+      return JSON.stringify([div.innerHTML, cmp]);
+    })()`);
+    expect(out).toBe(JSON.stringify(['<p>llo <b>bold</b> tail</p><p>sec</p>', "WrongDocumentError"]));
+  });
+
   it("orders handlers the way jsdom does: capture first at the target, the on* slot kept", async () => {
     const out = await dom.eval(`(() => {
       const d = document.implementation.createHTMLDocument("");

@@ -2520,6 +2520,8 @@
     return comparePoints(p, i, this._ec, this._eo) < 0 && comparePoints(p, i + 1, this._sc, this._so) > 0;
   });
   def(rangeProto, "compareBoundaryPoints", function (how, source) {
+    // the spec (and jsdom, and comparePoint above): different roots are an error, not a number
+    if (rootOf(this._sc) !== rootOf(source._sc)) throw domError("WrongDocumentError", "The source range is in another tree.");
     var a, ao, b, bo;
     if (how === 0) { a = this._sc; ao = this._so; b = source._sc; bo = source._so; }
     else if (how === 1) { a = this._ec; ao = this._eo; b = source._sc; bo = source._so; }
@@ -2573,13 +2575,32 @@
   def(rangeProto, "cloneContents", function () {
     var frag = this.commonAncestorContainer.ownerDocument ? this.commonAncestorContainer.ownerDocument.createDocumentFragment() : document.createDocumentFragment();
     if (this.collapsed) return frag;
-    var s = this._sc, e = this._ec;
+    var s = this._sc, e = this._ec, range = this;
     if (s === e && (s.nodeType === 3 || s.nodeType === 8)) {
       var one = s.cloneNode(false); one.data = s.data.slice(this._so, this._eo); frag.appendChild(one); return frag;
     }
-    if (s.nodeType === 3) { var head = s.cloneNode(false); head.data = s.data.slice(this._so); frag.appendChild(head); }
-    contained(this).forEach(function (n) { frag.appendChild(n.cloneNode(true)); });
-    if (e.nodeType === 3 && s !== e) { var tail = e.cloneNode(false); tail.data = e.data.slice(0, this._eo); frag.appendChild(tail); }
+    // the spec's clone: a node the range cuts into is cloned shallowly and filled with the part
+    // that lies inside, so partial ancestors appear in the fragment (the old code took only the
+    // wholly-contained nodes and the two cut texts, and lost every wrapper around them)
+    var cloneInto = function (container, out) {
+      for (var c = container.firstChild; c; c = c.nextSibling) {
+        var p = c.parentNode, i = indexOf(c);
+        if (comparePoints(p, i + 1, range._sc, range._so) <= 0) continue; // ends at or before the start
+        if (comparePoints(p, i, range._ec, range._eo) >= 0) continue; // begins at or after the end
+        var whole = comparePoints(p, i, range._sc, range._so) >= 0 && comparePoints(p, i + 1, range._ec, range._eo) <= 0;
+        if (whole) { out.appendChild(c.cloneNode(true)); continue; }
+        if (c.nodeType === 3 || c.nodeType === 8) {
+          var t = c.cloneNode(false);
+          t.data = c.data.slice(c === range._sc ? range._so : 0, c === range._ec ? range._eo : c.data.length);
+          out.appendChild(t);
+          continue;
+        }
+        var shallow = c.cloneNode(false);
+        cloneInto(c, shallow);
+        out.appendChild(shallow);
+      }
+    };
+    cloneInto(this.commonAncestorContainer, frag);
     return frag;
   });
   def(rangeProto, "extractContents", function () {
