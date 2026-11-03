@@ -34,6 +34,9 @@ static JSClassID nd_class_id;
 static long nd_version; /* bumped by every change to a tree or an attribute: live collections re-read when it moves */
 static long nd_live; /* nodes alive: tests check that dropped trees are really freed */
 static JSValue nd_protos[NP_COUNT];
+/* prototypes of the elements with a class of their own (HTMLInputElement for input, ...), registered by nativedom.js */
+static struct { char tag[16]; int len; JSValue proto; } nd_tag_protos[96];
+static int nd_ntag_protos;
 
 static ND *nd_of(JSValueConst v) { return (ND *)JS_GetOpaque(v, nd_class_id); }
 
@@ -97,6 +100,14 @@ static JSValue nd_new(JSContext *c, JSValueConst owner, int type, const char *ta
         if (lower) for (int i = 0; i < n->taglen; i++) if (n->tag[i] >= 'A' && n->tag[i] <= 'Z') n->tag[i] += 32;
     }
     JS_SetOpaque(obj, n);
+    if (type == 1 && n->tag) {
+        for (int i = 0; i < nd_ntag_protos; i++) {
+            if (nd_tag_protos[i].len == n->taglen && memcmp(nd_tag_protos[i].tag, n->tag, (size_t)n->taglen) == 0) {
+                JS_SetPrototype(c, obj, nd_tag_protos[i].proto);
+                break;
+            }
+        }
+    }
     return obj;
 }
 

@@ -769,6 +769,51 @@
       },
     });
   };
+  // The element interfaces pages test with instanceof or take prototypes from (HTMLInputElement for input, ...):
+  // each is a class between HTMLElement and the element, and the C side gives new elements of its tags that prototype.
+  var illegal = function () { throw new TypeError("Illegal constructor"); };
+  var classes = [
+    ["HTMLInputElement", "input"], ["HTMLAnchorElement", "a"], ["HTMLImageElement", "img"], ["HTMLButtonElement", "button"],
+    ["HTMLSelectElement", "select"], ["HTMLOptionElement", "option"], ["HTMLTextAreaElement", "textarea"], ["HTMLFormElement", "form"],
+    ["HTMLDivElement", "div"], ["HTMLSpanElement", "span"], ["HTMLParagraphElement", "p"], ["HTMLScriptElement", "script"],
+    ["HTMLStyleElement", "style"], ["HTMLLinkElement", "link"], ["HTMLMetaElement", "meta"], ["HTMLTemplateElement", "template"],
+    ["HTMLBodyElement", "body"], ["HTMLHeadElement", "head"], ["HTMLHtmlElement", "html"], ["HTMLCanvasElement", "canvas"],
+    ["HTMLIFrameElement", "iframe"], ["HTMLTableElement", "table"], ["HTMLLabelElement", "label"], ["HTMLUListElement", "ul"],
+    ["HTMLOListElement", "ol"], ["HTMLLIElement", "li"], ["HTMLBRElement", "br"], ["HTMLTitleElement", "title"],
+    ["HTMLHeadingElement", "h1", "h2", "h3", "h4", "h5", "h6"], ["HTMLTableRowElement", "tr"], ["HTMLTableCellElement", "td", "th"],
+    ["HTMLVideoElement", "video"], ["HTMLAudioElement", "audio"], ["HTMLSourceElement", "source"], ["HTMLPreElement", "pre"],
+    ["HTMLHRElement", "hr"], ["HTMLDialogElement", "dialog"], ["HTMLDetailsElement", "details"], ["HTMLFieldSetElement", "fieldset"],
+  ];
+  classes.forEach(function (spec) {
+    var C = { [spec[0]]: function () { illegal(); } }[spec[0]];
+    C.prototype = Object.create(P.HTMLElement, { constructor: { value: C, writable: true, configurable: true } });
+    Object.setPrototypeOf(C, D.ctors.HTMLElement);
+    D.ctors[spec[0]] = C;
+    P[spec[0]] = C.prototype;
+    for (var i = 1; i < spec.length; i++) D.setTagProto(spec[i], C.prototype);
+  });
+  // frameworks read these descriptors from the control's own prototype (React wraps input.value that way)
+  ["HTMLInputElement", "HTMLTextAreaElement", "HTMLSelectElement", "HTMLOptionElement"].forEach(function (name) {
+    ["value", "checked", "disabled"].forEach(function (prop) {
+      if (prop === "checked" && name !== "HTMLInputElement") return;
+      var d = Object.getOwnPropertyDescriptor(P.HTMLElement, prop);
+      if (d) Object.defineProperty(P[name], prop, d);
+    });
+  });
+  // SVG is told by the namespace, not by tag, so these answer instanceof by it
+  ["SVGElement", "SVGSVGElement", "SVGGraphicsElement"].forEach(function (name) {
+    var C = { [name]: function () { illegal(); } }[name];
+    C.prototype = Object.create(P.Element, { constructor: { value: C, writable: true, configurable: true } });
+    Object.setPrototypeOf(C, D.ctors.Element);
+    Object.defineProperty(C, Symbol.hasInstance, {
+      value: function (x) {
+        if (!x || x.nodeType !== 1 || x.namespaceURI !== "http://www.w3.org/2000/svg") return false;
+        return name === "SVGSVGElement" ? x.localName === "svg" : true;
+      },
+    });
+    D.ctors[name] = C;
+  });
+
   // Namespaces, as far as pages need them: an element is SVG or MathML by the root it sits in (or was made with
   // createElementNS), and the *NS attribute methods work on qualified names.
   var NS = { html: "http://www.w3.org/1999/xhtml", svg: "http://www.w3.org/2000/svg", math: "http://www.w3.org/1998/Math/MathML" };

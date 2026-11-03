@@ -25,7 +25,7 @@ describe("native DOM: interfaces", () => {
           c instanceof C.Comment, c instanceof C.CharacterData,
           d instanceof C.Document, d instanceof C.Node, f instanceof C.DocumentFragment,
           C.Node.ELEMENT_NODE, C.Node.TEXT_NODE, C.Node.DOCUMENT_POSITION_FOLLOWING,
-          el.constructor === C.HTMLElement, Object.getPrototypeOf(C.HTMLElement) === C.Element,
+          el.constructor === C.HTMLDivElement, Object.getPrototypeOf(C.HTMLElement) === C.Element,
         ];`),
     ).toEqual([true, true, true, false, true, true, true, false, true, true, true, true, true, 1, 3, 4, true, true]);
   });
@@ -478,5 +478,20 @@ describe("native DOM: namespaces", () => {
         el.setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", "#x");
         return [$("a").namespaceURI, $("s").namespaceURI, $("p").namespaceURI, $("sp").namespaceURI, el.namespaceURI, el.getAttribute("xlink:href"), el.getAttributeNS("http://www.w3.org/1999/xlink", "href"), el.hasAttributeNS(null, "xlink:href")];`),
     ).toEqual(["http://www.w3.org/1999/xhtml", "http://www.w3.org/2000/svg", "http://www.w3.org/2000/svg", "http://www.w3.org/1999/xhtml", "http://www.w3.org/2000/svg", "#x", "#x", true]);
+  });
+});
+
+describe("native DOM: element interfaces", () => {
+  it("elements are instances of the interface of their tag, parsed or made", async () => {
+    expect(
+      await run(`
+        var C = N.ctors, doc = N.parse('<form><input id=i><a href=x id=a>l</a><svg id=s><circle id="c"></circle></svg><h3 id=h></h3><b id=b></b></form>');
+        var $ = function (id) { return doc.getElementById(id); };
+        var made = doc.createElement("input"), clone = $("i").cloneNode();
+        return [$("i") instanceof C.HTMLInputElement, made instanceof C.HTMLInputElement, clone instanceof C.HTMLInputElement, $("i") instanceof C.HTMLAnchorElement,
+                $("a") instanceof C.HTMLAnchorElement, $("h") instanceof C.HTMLHeadingElement, $("b").constructor === C.HTMLElement, $("i") instanceof C.HTMLElement,
+                $("s") instanceof C.SVGElement, $("c") instanceof C.SVGElement, $("s") instanceof C.SVGSVGElement, $("c") instanceof C.SVGSVGElement, $("b") instanceof C.SVGElement,
+                typeof Object.getOwnPropertyDescriptor(C.HTMLInputElement.prototype, "value").set, $("i").constructor.name];`),
+    ).toEqual([true, true, true, false, true, true, true, true, true, true, true, false, false, "function", "HTMLInputElement"]);
   });
 });

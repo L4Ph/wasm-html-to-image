@@ -664,6 +664,18 @@ static JSValue js_dom_serialize(JSContext *ctx, JSValueConst this_val, int argc,
 
 /* for tests: how many nodes are alive, and a garbage collection to free the unreachable ones */
 static JSValue js_dom_version(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { return JS_NewInt64(ctx, nd_version); }
+static JSValue js_dom_set_tag_proto(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    size_t len;
+    const char *tag = JS_ToCStringLen(ctx, &len, argv[0]);
+    if (!tag) return JS_EXCEPTION;
+    if (len < 16 && nd_ntag_protos < 96) {
+        memcpy(nd_tag_protos[nd_ntag_protos].tag, tag, len);
+        nd_tag_protos[nd_ntag_protos].len = (int)len;
+        nd_tag_protos[nd_ntag_protos++].proto = JS_DupValue(ctx, argv[1]);
+    }
+    JS_FreeCString(ctx, tag);
+    return JS_UNDEFINED;
+}
 static JSValue js_dom_live(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;
     (void)argc;
@@ -838,6 +850,7 @@ static void nd_register(JSContext *c, JSValueConst native) {
     JS_SetPropertyStr(c, dom, "ctors", ctors);
     JS_SetPropertyStr(c, dom, "protos", protos);
     JS_SetPropertyStr(c, dom, "serialize", JS_NewCFunction(c, js_dom_serialize, "serialize", 1));
+    JS_SetPropertyStr(c, dom, "setTagProto", JS_NewCFunction(c, js_dom_set_tag_proto, "setTagProto", 2));
     JS_SetPropertyStr(c, dom, "version", JS_NewCFunction(c, js_dom_version, "version", 0));
     JS_SetPropertyStr(c, dom, "liveNodes", JS_NewCFunction(c, js_dom_live, "liveNodes", 0));
     JS_SetPropertyStr(c, dom, "gc", JS_NewCFunction(c, js_dom_gc, "gc", 0));
