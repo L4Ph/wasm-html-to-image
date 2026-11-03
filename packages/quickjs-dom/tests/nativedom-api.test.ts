@@ -410,3 +410,46 @@ describe("native DOM: style, forms and shadow roots", () => {
     ).toEqual([true, true, 0, "", ["host"], "NotSupportedError", null]);
   });
 });
+
+describe("native DOM: selectors against linkedom", () => {
+  const html =
+    '<div id=root class="a b"><ul id=list><li id=l1 class=x>1</li><li id=l2 data-k="foo-bar" lang=en>2</li><li id=l3 class="x y">3</li><li id=l4 hidden>4</li></ul>' +
+    '<p id=p1>t</p><p id=p2></p><span id=s1 title="Hello World">s</span><a id=lnk href="/x">l</a><a id=nolnk>n</a>' +
+    '<form id=f><input id=i1 type=checkbox checked><input id=i2 disabled required><select id=sel><option id=o1>a<option id=o2 selected>b</select></form>' +
+    '<section id=sec><h1 id=h1>x</h1><h2 id=h2>y</h2><h2 id=h3>z</h2></section><div class="md:flex" id=esc></div></div>';
+  const selectors = [
+    "li", "ul > li", "div li", "li.x", "li.x.y", "#l2", "li[data-k]", "li[data-k=foo-bar]", "[data-k^=foo]", "[data-k$=bar]", "[data-k*=o-b]",
+    "[data-k~=foo]", "[lang|=en]", "[title='Hello World' i]", "[TITLE]", "li:first-child", "li:last-child", "li:nth-child(2)", "li:nth-child(odd)",
+    "li:nth-child(even)", "li:nth-child(2n+1)", "li:nth-child(-n+2)", "li:nth-last-child(1)", "h2:first-of-type", "h2:last-of-type", "h2:nth-of-type(2)",
+    "p:empty", "li:not(.x)", "li:not(.x):not([hidden])", "div :not(li):not(ul)",":is(h1, h2)", ":where(p, span)", "div:has(> p)", "ul:has(li.y)", "li + li",
+    "li ~ li", "h1 + h2", "p + span", "li:first-child + li", "#root > ul > li:nth-child(3)", "a:link", "a:any-link", "input:checked", "option:checked",
+    "input:disabled", "input:enabled", "input:required", "input:optional", "li, p", "div.a.b", "* > p", ".md\\:flex", "#sec h2:not(:first-of-type)",
+    "li:hover", "ul li:only-child", "section :only-of-type", ":root", "html", "ul:not(:has(.y))",
+  ];
+  it("gives linkedom's answers", async () => {
+    const out = (await dom.eval(`(function () {
+      var native = __native.dom.parse(${JSON.stringify(html)}), ref = __linkedom.parseHTML(${JSON.stringify(`<html><body>${html}</body></html>`)}).document;
+      var ids = function (list) { return Array.prototype.map.call(list, function (e) { return e.localName + "#" + e.getAttribute("id"); }).join(","); };
+      var bad = [];
+      ${JSON.stringify(selectors)}.forEach(function (sel) {
+        var a, b;
+        try { a = ids(native.querySelectorAll(sel)); } catch (e) { a = "ERR " + e.name; }
+        try { b = ids(ref.querySelectorAll(sel)); } catch (e) { b = "ERR " + e.name; }
+        if (sel === ":root" || sel === "html") return;
+        if (a !== b) bad.push(sel + " native=[" + a + "] linkedom=[" + b + "]");
+      });
+      return bad;
+    })()`)) as string[];
+    expect(out).toEqual([]);
+  });
+
+  it("matches, closest and :scope; invalid selectors throw SyntaxError", async () => {
+    expect(
+      await run(`
+        var doc = N.parse(${JSON.stringify(html)}), l2 = doc.getElementById("l2"), bad;
+        try { doc.querySelector("li:bogus"); bad = "no error"; } catch (e) { bad = e.name; }
+        return [l2.matches("ul > li:nth-child(2)"), l2.closest("div.a") === doc.getElementById("root"), l2.closest(":scope") === l2,
+                doc.getElementById("list").querySelectorAll(":scope > li").length, doc.querySelectorAll(":root").length, bad];`),
+    ).toEqual([true, true, true, 4, 1, "SyntaxError"]);
+  });
+});

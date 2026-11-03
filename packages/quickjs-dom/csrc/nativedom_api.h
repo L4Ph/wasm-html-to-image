@@ -498,7 +498,9 @@ static JSValue js_nd_matches(JSContext *ctx, JSValueConst this_val, int argc, JS
     SList list;
     char *keep;
     if (nd_parse_selector_arg(ctx, argv[0], &list, &keep) != 0) return JS_EXCEPTION;
+    sel_scope = n;
     int m = n->type == 1 && sel_match(n, &list);
+    sel_free(&list);
     free(keep);
     return JS_NewBool(ctx, m);
 }
@@ -510,10 +512,12 @@ static JSValue js_nd_closest(JSContext *ctx, JSValueConst this_val, int argc, JS
     char *keep;
     if (nd_parse_selector_arg(ctx, argv[0], &list, &keep) != 0) return JS_EXCEPTION;
     JSValue found = JS_NULL;
+    sel_scope = n;
     for (JSValue p = this_val; !JS_IsNull(p); p = nd_of(p)->parent) {
         ND *pn = nd_of(p);
         if (pn->type == 1 && sel_match(pn, &list)) { found = JS_DupValue(ctx, p); break; }
     }
+    sel_free(&list);
     free(keep);
     return found;
 }

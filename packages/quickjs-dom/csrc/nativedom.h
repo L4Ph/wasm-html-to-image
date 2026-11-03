@@ -382,192 +382,7 @@ static JSValue nd_serialize_children_str(JSContext *c, JSValueConst obj) {
     return s;
 }
 
-/* ---- selectors: type, #id, .class, [attr], [attr=v] [attr^=v] [attr$=v] [attr*=v], descendant and child combinators, commas ---- */
-
-typedef struct {
-    char op;
-    const char *name;
-    int nlen;
-    const char *val;
-    int vlen;
-} SAttr;
-
-typedef struct {
-    const char *tag;
-    int taglen;
-    const char *id;
-    int idlen;
-    const char *cls[4];
-    int clslen[4];
-    int ncls;
-    SAttr attrs[4];
-    int nattrs;
-    char comb; /* how this compound relates to the previous one: ' ' or '>' */
-} SComp;
-
-typedef struct {
-    SComp comps[8];
-    int n;
-} SComplex;
-
-typedef struct {
-    SComplex c[8];
-    int n;
-} SList;
-
-static int sel_ident_char(int ch) { return h_alnum(ch) || ch == '-' || ch == '_' || ch >= 0x80; }
-
-static int sel_parse(const char *s, size_t len, SList *out) {
-    size_t i = 0;
-    out->n = 0;
-    while (i < len) {
-        while (i < len && s[i] == ' ') i++;
-        if (out->n == 8) return -1;
-        SComplex *cx = &out->c[out->n++];
-        cx->n = 0;
-        char comb = 0;
-        for (;;) {
-            if (cx->n == 8) return -1;
-            SComp *k = &cx->comps[cx->n++];
-            memset(k, 0, sizeof(*k));
-            k->comb = comb;
-            int any = 0;
-            if (i < len && s[i] == '*') { i++; any = 1; }
-            else if (i < len && sel_ident_char((uint8_t)s[i])) {
-                size_t st = i;
-                while (i < len && sel_ident_char((uint8_t)s[i])) i++;
-                k->tag = s + st;
-                k->taglen = (int)(i - st);
-                any = 1;
-            }
-            for (;;) {
-                if (i < len && (s[i] == '#' || s[i] == '.')) {
-                    char kind = s[i++];
-                    size_t st = i;
-                    while (i < len && sel_ident_char((uint8_t)s[i])) i++;
-                    if (i == st) return -1;
-                    if (kind == '#') { k->id = s + st; k->idlen = (int)(i - st); }
-                    else {
-                        if (k->ncls == 4) return -1;
-                        k->cls[k->ncls] = s + st;
-                        k->clslen[k->ncls++] = (int)(i - st);
-                    }
-                    any = 1;
-                } else if (i < len && s[i] == '[') {
-                    if (k->nattrs == 4) return -1;
-                    SAttr *a = &k->attrs[k->nattrs++];
-                    i++;
-                    size_t st = i;
-                    while (i < len && sel_ident_char((uint8_t)s[i])) i++;
-                    a->name = s + st;
-                    a->nlen = (int)(i - st);
-                    if (a->nlen == 0 || i >= len) return -1;
-                    if (s[i] == ']') { a->op = 0; i++; }
-                    else {
-                        char op = s[i];
-                        if (op == '=') i++;
-                        else if ((op == '^' || op == '$' || op == '*') && i + 1 < len && s[i + 1] == '=') i += 2;
-                        else return -1;
-                        a->op = op;
-                        if (i < len && (s[i] == '"' || s[i] == '\'')) {
-                            char q = s[i++];
-                            size_t vs = i;
-                            while (i < len && s[i] != q) i++;
-                            if (i >= len) return -1;
-                            a->val = s + vs;
-                            a->vlen = (int)(i - vs);
-                            i++;
-                        } else {
-                            size_t vs = i;
-                            while (i < len && s[i] != ']') i++;
-                            a->val = s + vs;
-                            a->vlen = (int)(i - vs);
-                        }
-                        if (i >= len || s[i] != ']') return -1;
-                        i++;
-                    }
-                    any = 1;
-                } else break;
-            }
-            if (!any) return -1;
-            size_t j = i;
-            while (j < len && s[j] == ' ') j++;
-            if (j < len && s[j] == '>') {
-                comb = '>';
-                i = j + 1;
-                while (i < len && s[i] == ' ') i++;
-            } else if (j < len && s[j] != ',' && j > i) {
-                comb = ' ';
-                i = j;
-            } else {
-                i = j;
-                break;
-            }
-        }
-        if (i < len) {
-            if (s[i] != ',') return -1;
-            i++;
-        }
-    }
-    return out->n > 0 ? 0 : -1;
-}
-
-static int sel_class_has(ND *n, const char *cls, int clen) {
-    NAttr *a = nd_find_attr(n, "class", 5);
-    if (!a) return 0;
-    int i = 0;
-    while (i < a->vlen) {
-        while (i < a->vlen && h_ws((uint8_t)a->val[i])) i++;
-        int st = i;
-        while (i < a->vlen && !h_ws((uint8_t)a->val[i])) i++;
-        if (i - st == clen && memcmp(a->val + st, cls, (size_t)clen) == 0) return 1;
-    }
-    return 0;
-}
-
-static int sel_compound(ND *n, const SComp *k) {
-    if (n->type != 1) return 0;
-    if (k->taglen && !(n->taglen == k->taglen && memcmp(n->tag, k->tag, (size_t)k->taglen) == 0)) return 0;
-    if (k->idlen) {
-        NAttr *a = nd_find_attr(n, "id", 2);
-        if (!a || a->vlen != k->idlen || memcmp(a->val, k->id, (size_t)k->idlen) != 0) return 0;
-    }
-    for (int i = 0; i < k->ncls; i++) if (!sel_class_has(n, k->cls[i], k->clslen[i])) return 0;
-    for (int i = 0; i < k->nattrs; i++) {
-        const SAttr *sa = &k->attrs[i];
-        NAttr *a = nd_find_attr(n, sa->name, (size_t)sa->nlen);
-        if (!a) return 0;
-        if (sa->op == 0) continue;
-        if (sa->op == '=' && !(a->vlen == sa->vlen && memcmp(a->val, sa->val, (size_t)sa->vlen) == 0)) return 0;
-        if (sa->op == '^' && !(a->vlen >= sa->vlen && memcmp(a->val, sa->val, (size_t)sa->vlen) == 0)) return 0;
-        if (sa->op == '$' && !(a->vlen >= sa->vlen && memcmp(a->val + a->vlen - sa->vlen, sa->val, (size_t)sa->vlen) == 0)) return 0;
-        if (sa->op == '*') {
-            int found = 0;
-            for (int j = 0; j + sa->vlen <= a->vlen && !found; j++) found = memcmp(a->val + j, sa->val, (size_t)sa->vlen) == 0;
-            if (!found) return 0;
-        }
-    }
-    return 1;
-}
-
-static int sel_match_from(ND *n, const SComplex *cx, int idx) {
-    if (!sel_compound(n, &cx->comps[idx])) return 0;
-    if (idx == 0) return 1;
-    char comb = cx->comps[idx].comb;
-    JSValue p = n->parent;
-    while (!JS_IsNull(p)) {
-        ND *pn = nd_of(p);
-        if (sel_match_from(pn, cx, idx - 1)) return 1;
-        if (comb == '>') return 0;
-        p = pn->parent;
-    }
-    return 0;
-}
-
-static int sel_match(ND *n, const SList *l) {
-    for (int i = 0; i < l->n; i++) if (sel_match_from(n, &l->c[i], l->c[i].n - 1)) return 1;
-    return 0;
-}
+#include "nativesel.h"
 
 /* document-order walk below `root`; `all` collects every match into an array, otherwise the first is returned */
 static JSValue sel_query(JSContext *c, JSValueConst root, JSValueConst selector, int all) {
@@ -581,6 +396,7 @@ static JSValue sel_query(JSContext *c, JSValueConst root, JSValueConst selector,
         return e;
     }
     JSValue result = all ? JS_NewArray(c) : JS_NULL;
+    sel_scope = nd_of(root)->type == 1 ? nd_of(root) : NULL;
     uint32_t count = 0;
     JSValue cur = nd_of(root)->first;
     while (!JS_IsNull(cur)) {
@@ -598,6 +414,7 @@ static JSValue sel_query(JSContext *c, JSValueConst root, JSValueConst selector,
             if (!JS_IsNull(cur)) cur = nd_of(cur)->next;
         }
     }
+    sel_free(&list);
     JS_FreeCString(c, s);
     return result;
 }
