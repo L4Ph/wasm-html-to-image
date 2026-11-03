@@ -45,6 +45,25 @@ describe("bridge: objects of the page from the host", () => {
     expect(() => new w.DOMTokenList()).toThrow(TypeError);
   });
 
+  it("exposes BarProp, External and the window's scalar properties", async () => {
+    const out = await dom.eval(`JSON.stringify([
+      typeof BarProp, typeof External,
+      locationbar instanceof BarProp, menubar instanceof BarProp, toolbar.visible, scrollbars.visible,
+      external instanceof External, external.constructor.name,
+      pageXOffset, scrollX, pageYOffset, scrollY, screenX, screenLeft, screenY, screenTop,
+      name, status, origin === location.origin, frameElement, length, "event" in window,
+    ])`);
+    expect(out).toBe(
+      JSON.stringify([
+        "function", "function",
+        true, true, true, true,
+        true, "External",
+        0, 0, 0, 0, 0, 0, 0, 0,
+        "", "", true, null, 0, true,
+      ]),
+    );
+  });
+
   it("exposes DOMImplementation and HTMLDocument", async () => {
     const out = await dom.eval(`(() => {
       const impl = document.implementation;

@@ -88,6 +88,24 @@
     g.Screen = function Screen() { illegal(); };
     g.screen = Object.create(g.Screen.prototype);
     Object.assign(g.screen, { width: width, height: Math.round(width * 0.75) });
+    // the browser chrome bars, all visible as far as a page can tell, and the legacy external object
+    g.BarProp = function BarProp() { illegal(); };
+    ["locationbar", "menubar", "personalbar", "scrollbars", "statusbar", "toolbar"].forEach(function (k) {
+      var bar = Object.create(g.BarProp.prototype);
+      Object.defineProperty(bar, "visible", { value: true, enumerable: true });
+      g[k] = bar;
+    });
+    g.External = function External() { illegal(); };
+    g.external = Object.create(g.External.prototype);
+    // the window's scalar properties a page reads: no scrolling, no frames, not framed itself
+    g.pageXOffset = g.scrollX = g.pageYOffset = g.scrollY = 0;
+    g.screenX = g.screenLeft = g.screenY = g.screenTop = 0;
+    g.name = "";
+    g.status = "";
+    g.origin = loc.origin;
+    g.frameElement = null;
+    g.length = 0;
+    g.event = undefined;
     g.innerWidth = g.outerWidth = width;
     g.innerHeight = g.outerHeight = Math.round(width * 0.75);
     g.devicePixelRatio = 1;
