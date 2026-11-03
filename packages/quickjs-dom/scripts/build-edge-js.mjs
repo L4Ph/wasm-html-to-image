@@ -57,6 +57,7 @@ const parts = [
   read(streamsPath),
   `(function () {\n${linkedomNative}\n})();`,
   read(join(here, "edge-js", "boot.js")),
+  read(join(here, "edge-js", "nativedom.js")),
 ];
 const source = parts.join("\n;\n");
 

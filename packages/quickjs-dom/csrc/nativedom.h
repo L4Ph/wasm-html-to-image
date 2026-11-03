@@ -16,17 +16,23 @@ typedef struct {
 } NAttr;
 
 typedef struct {
-    uint8_t type; /* 1 element, 3 text, 8 comment, 9 document, 10 doctype */
+    uint8_t type; /* 1 element, 3 text, 8 comment, 9 document, 10 doctype, 11 document fragment */
     /* links are strong references: parent <-> child cycles are found by gc_mark below */
     JSValue parent, first, last, prev, next;
+    JSValue owner;   /* the document that made the node (null for a document) */
+    JSValue content; /* a template element's document fragment (made on first use) */
     char *tag; /* element: lower-case name; text, comment, doctype: the data */
     int taglen;
     NAttr *attrs;
     int nattrs, capAttrs;
 } ND;
 
+/* prototypes by kind of node, see nd_register() */
+enum { NP_ELEMENT, NP_TEXT, NP_COMMENT, NP_DOCUMENT, NP_FRAGMENT, NP_DOCTYPE, NP_COUNT };
+
 static JSClassID nd_class_id;
-static JSValue nd_proto;
+static long nd_live; /* nodes alive: tests check that dropped trees are really freed */
+static JSValue nd_protos[NP_COUNT];
 
 static ND *nd_of(JSValueConst v) { return (ND *)JS_GetOpaque(v, nd_class_id); }
 
@@ -38,12 +44,15 @@ static void nd_finalizer(JSRuntime *rt, JSValueConst val) {
     JS_FreeValueRT(rt, n->last);
     JS_FreeValueRT(rt, n->prev);
     JS_FreeValueRT(rt, n->next);
+    JS_FreeValueRT(rt, n->owner);
+    JS_FreeValueRT(rt, n->content);
     free(n->tag);
     for (int i = 0; i < n->nattrs; i++) {
         free(n->attrs[i].name);
         free(n->attrs[i].val);
     }
     free(n->attrs);
+    nd_live--;
     free(n);
 }
 
@@ -55,6 +64,8 @@ static void nd_mark(JSRuntime *rt, JSValueConst val, JS_MarkFunc *mark_func) {
     JS_MarkValue(rt, n->last, mark_func);
     JS_MarkValue(rt, n->prev, mark_func);
     JS_MarkValue(rt, n->next, mark_func);
+    JS_MarkValue(rt, n->owner, mark_func);
+    JS_MarkValue(rt, n->content, mark_func);
 }
 
 static char *nd_dup(const char *s, size_t len) {
@@ -65,8 +76,10 @@ static char *nd_dup(const char *s, size_t len) {
     return p;
 }
 
-static JSValue nd_new(JSContext *c, int type, const char *tag, size_t taglen, int lower) {
-    JSValue obj = JS_NewObjectProtoClass(c, nd_proto, nd_class_id);
+/* a node of `owner`'s document (a document passes null for itself) */
+static JSValue nd_new(JSContext *c, JSValueConst owner, int type, const char *tag, size_t taglen, int lower) {
+    int kind = type == 3 ? NP_TEXT : type == 8 ? NP_COMMENT : type == 9 ? NP_DOCUMENT : type == 10 ? NP_DOCTYPE : type == 11 ? NP_FRAGMENT : NP_ELEMENT;
+    JSValue obj = JS_NewObjectProtoClass(c, nd_protos[kind], nd_class_id);
     if (JS_IsException(obj)) return obj;
     ND *n = calloc(1, sizeof(ND));
     if (!n) {
@@ -74,7 +87,9 @@ static JSValue nd_new(JSContext *c, int type, const char *tag, size_t taglen, in
         return JS_ThrowOutOfMemory(c);
     }
     n->type = (uint8_t)type;
-    n->parent = n->first = n->last = n->prev = n->next = JS_NULL;
+    nd_live++;
+    n->parent = n->first = n->last = n->prev = n->next = n->content = JS_NULL;
+    n->owner = type == 9 ? JS_NULL : JS_DupValue(c, owner);
     if (tag) {
         n->tag = nd_dup(tag, taglen);
         n->taglen = (int)taglen;
@@ -175,7 +190,20 @@ static void nd_insert(JSContext *c, JSValueConst parent, JSValueConst child, JSV
 
 /* ---- building a tree from the parser's events ---- */
 
-static JSValue nd_build(JSContext *c, HP *p, JSValueConst root) {
+static int nd_is_tag(ND *n, const char *tag, int len) { return n->type == 1 && n->taglen == len && memcmp(n->tag, tag, (size_t)len) == 0; }
+
+/* a template's content: a fragment, made on first use */
+static JSValue nd_content(JSContext *c, JSValueConst tmpl) {
+    ND *t = nd_of(tmpl);
+    if (JS_IsNull(t->content)) {
+        JSValue f = nd_new(c, t->owner, 11, NULL, 0, 0);
+        if (JS_IsException(f)) return f;
+        t->content = f;
+    }
+    return t->content; /* borrowed: the template holds it */
+}
+
+static JSValue nd_build(JSContext *c, HP *p, JSValueConst root, JSValueConst owner) {
     size_t cap = 64, depth = 0;
     JSValue *stack = malloc(sizeof(JSValue) * cap);
     if (!stack) return JS_ThrowOutOfMemory(c);
@@ -187,7 +215,7 @@ static JSValue nd_build(JSContext *c, HP *p, JSValueConst root) {
         case EV_TEXT:
         case EV_COMMENT: {
             const uint8_t *s = (ev[i + 1] ? p->extra.p : p->s) + ev[i + 2];
-            JSValue node = nd_new(c, ev[i] == EV_TEXT ? 3 : 8, (const char *)s, (size_t)ev[i + 3], 0);
+            JSValue node = nd_new(c, owner, ev[i] == EV_TEXT ? 3 : 8, (const char *)s, (size_t)ev[i + 3], 0);
             if (JS_IsException(node)) { free(stack); return node; }
             nd_insert(c, stack[depth - 1], node, JS_NULL);
             JS_FreeValue(c, node);
@@ -196,7 +224,7 @@ static JSValue nd_build(JSContext *c, HP *p, JSValueConst root) {
         }
         case EV_OPEN: {
             int nattrs = ev[i + 3];
-            JSValue node = nd_new(c, 1, (const char *)p->extra.p + ev[i + 1], (size_t)ev[i + 2], 0);
+            JSValue node = nd_new(c, owner, 1, (const char *)p->extra.p + ev[i + 1], (size_t)ev[i + 2], 0);
             if (JS_IsException(node)) { free(stack); return node; }
             ND *nn = nd_of(node);
             for (int k = 0; k < nattrs; k++) {
@@ -211,7 +239,8 @@ static JSValue nd_build(JSContext *c, HP *p, JSValueConst root) {
                 if (!s) { JS_FreeValue(c, node); free(stack); return JS_ThrowOutOfMemory(c); }
                 stack = s;
             }
-            stack[depth++] = node;
+            /* the children of a template go into its content */
+            stack[depth++] = nd_is_tag(nn, "template", 8) ? nd_content(c, node) : node;
             JS_FreeValue(c, node); /* the parent holds it */
             i += 4 + (size_t)nattrs * 5;
             break;
@@ -226,7 +255,7 @@ static JSValue nd_build(JSContext *c, HP *p, JSValueConst root) {
                 const char *data = (const char *)p->extra.p + ev[i + 3];
                 int dl = ev[i + 4];
                 /* "!DOCTYPE html" -> data "DOCTYPE html" */
-                JSValue node = nd_new(c, 10, data + 1, (size_t)(dl - 1), 0);
+                JSValue node = nd_new(c, owner, 10, data + 1, (size_t)(dl - 1), 0);
                 if (JS_IsException(node)) { free(stack); return node; }
                 nd_insert(c, stack[depth - 1], node, JS_NULL);
                 JS_FreeValue(c, node);
@@ -263,7 +292,10 @@ static JSValue nd_parse_into(JSContext *c, JSValueConst root, JSValueConst marku
     h_run(&p);
     JSValue r;
     if (p.fail || p.bail) r = p.fail ? JS_ThrowOutOfMemory(c) : JS_ThrowTypeError(c, "native DOM: input declined by the parser");
-    else r = nd_build(c, &p, root);
+    else {
+        ND *rn = nd_of(root);
+        r = nd_build(c, &p, root, rn->type == 9 ? root : rn->owner);
+    }
     hp_free(&p);
     JS_FreeCString(c, src);
     return r;
@@ -285,6 +317,12 @@ static void nd_escape(HBuf *b, const char *s, int len, int attr) {
             i++;
         } else hbuf_add(b, &ch, 1);
     }
+}
+
+/* the first child as serialization and innerHTML see it: a template shows its content */
+static JSValue nd_children_of(ND *n) {
+    if (nd_is_tag(n, "template", 8) && !JS_IsNull(n->content)) return nd_of(n->content)->first;
+    return n->first;
 }
 
 static int nd_is_void(ND *n) { return h_in((const uint8_t *)n->tag, n->taglen, VOIDS, SETN(VOIDS)); }
@@ -323,7 +361,7 @@ static void nd_serialize(HBuf *b, JSValueConst obj, int raw) {
         hbuf_add(b, (const uint8_t *)">", 1);
         if (nd_is_void(n)) return;
         int childRaw = nd_is_raw(n);
-        for (JSValue ch = n->first; !JS_IsNull(ch); ch = nd_of(ch)->next) nd_serialize(b, ch, childRaw);
+        for (JSValue ch = nd_children_of(n); !JS_IsNull(ch); ch = nd_of(ch)->next) nd_serialize(b, ch, childRaw);
         hbuf_add(b, (const uint8_t *)"</", 2);
         hbuf_add(b, (const uint8_t *)n->tag, (size_t)n->taglen);
         hbuf_add(b, (const uint8_t *)">", 1);
@@ -338,7 +376,7 @@ static JSValue nd_serialize_children_str(JSContext *c, JSValueConst obj) {
     ND *n = nd_of(obj);
     HBuf b = {0};
     int raw = nd_is_raw(n);
-    for (JSValue ch = n->first; !JS_IsNull(ch); ch = nd_of(ch)->next) nd_serialize(&b, ch, raw);
+    for (JSValue ch = nd_children_of(n); !JS_IsNull(ch); ch = nd_of(ch)->next) nd_serialize(&b, ch, raw);
     JSValue s = JS_NewStringLen(c, (const char *)b.p, b.n);
     free(b.p);
     return s;
@@ -564,243 +602,5 @@ static JSValue sel_query(JSContext *c, JSValueConst root, JSValueConst selector,
     return result;
 }
 
-/* ---- the JS surface ---- */
-
-#define ND_THIS(var) ND *var = nd_of(this_val); if (!var) return JS_ThrowTypeError(ctx, "not a node")
-
-static JSValue js_nd_type(JSContext *ctx, JSValueConst this_val) { ND_THIS(n); return JS_NewInt32(ctx, n->type == 10 ? 10 : n->type); }
-static JSValue js_nd_name(JSContext *ctx, JSValueConst this_val, int magic) {
-    ND_THIS(n);
-    if (n->type == 1) {
-        char *t = nd_dup(n->tag, (size_t)n->taglen);
-        if (magic) for (int i = 0; i < n->taglen; i++) if (t[i] >= 'a' && t[i] <= 'z') t[i] -= 32;
-        JSValue r = JS_NewStringLen(ctx, t, (size_t)n->taglen);
-        free(t);
-        return r;
-    }
-    return JS_NewString(ctx, n->type == 3 ? "#text" : n->type == 8 ? "#comment" : "#document");
-}
-static JSValue js_nd_link(JSContext *ctx, JSValueConst this_val, int magic) {
-    ND_THIS(n);
-    JSValue v = magic == 0 ? n->parent : magic == 1 ? n->first : magic == 2 ? n->last : magic == 3 ? n->next : n->prev;
-    return JS_DupValue(ctx, v);
-}
-static JSValue js_nd_child_nodes(JSContext *ctx, JSValueConst this_val, int magic) {
-    ND_THIS(n);
-    JSValue arr = JS_NewArray(ctx);
-    uint32_t i = 0;
-    for (JSValue ch = n->first; !JS_IsNull(ch); ch = nd_of(ch)->next)
-        if (!magic || nd_of(ch)->type == 1) JS_SetPropertyUint32(ctx, arr, i++, JS_DupValue(ctx, ch));
-    return arr;
-}
-
-static void nd_text(HBuf *b, ND *n) {
-    if (n->type == 3) hbuf_add(b, (const uint8_t *)n->tag, (size_t)n->taglen);
-    else if (n->type == 1 || n->type == 9) for (JSValue ch = n->first; !JS_IsNull(ch); ch = nd_of(ch)->next) nd_text(b, nd_of(ch));
-}
-static JSValue js_nd_get_text(JSContext *ctx, JSValueConst this_val) {
-    ND_THIS(n);
-    if (n->type == 8 || n->type == 10) return JS_NewStringLen(ctx, n->tag, (size_t)n->taglen);
-    HBuf b = {0};
-    nd_text(&b, n);
-    JSValue s = JS_NewStringLen(ctx, (const char *)b.p, b.n);
-    free(b.p);
-    return s;
-}
-static void nd_clear(JSContext *ctx, JSValueConst obj) {
-    ND *n = nd_of(obj);
-    while (!JS_IsNull(n->first)) {
-        JSValue ch = JS_DupValue(ctx, n->first);
-        nd_unlink(ctx, ch);
-        JS_FreeValue(ctx, ch);
-    }
-}
-static JSValue js_nd_set_text(JSContext *ctx, JSValueConst this_val, JSValueConst val) {
-    ND_THIS(n);
-    size_t len;
-    const char *s = JS_ToCStringLen(ctx, &len, val);
-    if (!s) return JS_EXCEPTION;
-    if (n->type == 3 || n->type == 8) {
-        free(n->tag);
-        n->tag = nd_dup(s, len);
-        n->taglen = (int)len;
-    } else {
-        nd_clear(ctx, this_val);
-        if (len) {
-            JSValue t = nd_new(ctx, 3, s, len, 0);
-            if (!JS_IsException(t)) {
-                nd_insert(ctx, this_val, t, JS_NULL);
-                JS_FreeValue(ctx, t);
-            }
-        }
-    }
-    JS_FreeCString(ctx, s);
-    return JS_UNDEFINED;
-}
-static JSValue js_nd_get_inner(JSContext *ctx, JSValueConst this_val) { ND_THIS(n); (void)n; return nd_serialize_children_str(ctx, this_val); }
-static JSValue js_nd_set_inner(JSContext *ctx, JSValueConst this_val, JSValueConst val) {
-    ND_THIS(n);
-    (void)n;
-    nd_clear(ctx, this_val);
-    JSValue r = nd_parse_into(ctx, this_val, val);
-    return JS_IsException(r) ? r : JS_UNDEFINED;
-}
-static JSValue js_nd_get_outer(JSContext *ctx, JSValueConst this_val) {
-    ND_THIS(n);
-    (void)n;
-    HBuf b = {0};
-    nd_serialize(&b, this_val, 0);
-    JSValue s = JS_NewStringLen(ctx, (const char *)b.p, b.n);
-    free(b.p);
-    return s;
-}
-static JSValue js_nd_get_attr_prop(JSContext *ctx, JSValueConst this_val, int magic) {
-    ND_THIS(n);
-    NAttr *a = magic ? nd_find_attr(n, "class", 5) : nd_find_attr(n, "id", 2);
-    return a ? JS_NewStringLen(ctx, a->val, (size_t)a->vlen) : JS_NewString(ctx, "");
-}
-
-static JSValue js_nd_append(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    ND_THIS(n);
-    (void)n;
-    if (argc < 1 || !nd_of(argv[0])) return JS_ThrowTypeError(ctx, "appendChild: not a node");
-    nd_insert(ctx, this_val, argv[0], JS_NULL);
-    return JS_DupValue(ctx, argv[0]);
-}
-static JSValue js_nd_insert_before(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    ND_THIS(n);
-    (void)n;
-    if (argc < 1 || !nd_of(argv[0])) return JS_ThrowTypeError(ctx, "insertBefore: not a node");
-    nd_insert(ctx, this_val, argv[0], argc > 1 ? argv[1] : JS_NULL);
-    return JS_DupValue(ctx, argv[0]);
-}
-static JSValue js_nd_remove_child(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    ND_THIS(n);
-    (void)n;
-    if (argc < 1 || !nd_of(argv[0])) return JS_ThrowTypeError(ctx, "removeChild: not a node");
-    nd_unlink(ctx, argv[0]);
-    return JS_DupValue(ctx, argv[0]);
-}
-static JSValue js_nd_get_attribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    ND_THIS(n);
-    if (argc < 1) return JS_NULL;
-    size_t len;
-    const char *name = JS_ToCStringLen(ctx, &len, argv[0]);
-    if (!name) return JS_EXCEPTION;
-    NAttr *a = nd_find_attr(n, name, len);
-    JSValue r = a ? JS_NewStringLen(ctx, a->val, (size_t)a->vlen) : JS_NULL;
-    JS_FreeCString(ctx, name);
-    return r;
-}
-static JSValue js_nd_has_attribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    JSValue r = js_nd_get_attribute(ctx, this_val, argc, argv);
-    if (JS_IsException(r)) return r;
-    int has = !JS_IsNull(r);
-    JS_FreeValue(ctx, r);
-    return JS_NewBool(ctx, has);
-}
-static JSValue js_nd_set_attribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    ND_THIS(n);
-    if (argc < 2) return JS_ThrowTypeError(ctx, "setAttribute needs a name and a value");
-    size_t nl, vl;
-    const char *name = JS_ToCStringLen(ctx, &nl, argv[0]);
-    const char *val = JS_ToCStringLen(ctx, &vl, argv[1]);
-    if (name && val) nd_set_attr(n, name, nl, val, vl);
-    if (name) JS_FreeCString(ctx, name);
-    if (val) JS_FreeCString(ctx, val);
-    return JS_UNDEFINED;
-}
-static JSValue js_nd_query(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv, int magic) {
-    ND_THIS(n);
-    (void)n;
-    if (argc < 1) return JS_ThrowTypeError(ctx, "a selector is required");
-    return sel_query(ctx, this_val, argv[0], magic);
-}
-static JSValue js_nd_matches(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    ND_THIS(n);
-    if (argc < 1) return JS_ThrowTypeError(ctx, "a selector is required");
-    size_t len;
-    const char *s = JS_ToCStringLen(ctx, &len, argv[0]);
-    if (!s) return JS_EXCEPTION;
-    SList list;
-    int ok = sel_parse(s, len, &list) == 0;
-    JS_FreeCString(ctx, s);
-    if (!ok) return JS_ThrowSyntaxError(ctx, "native DOM: unsupported selector");
-    return JS_NewBool(ctx, n->type == 1 && sel_match(n, &list));
-}
-
-static JSValue js_dom_create_element(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    (void)this_val;
-    if (argc < 1) return JS_ThrowTypeError(ctx, "a tag name is required");
-    size_t len;
-    const char *tag = JS_ToCStringLen(ctx, &len, argv[0]);
-    if (!tag) return JS_EXCEPTION;
-    JSValue r = nd_new(ctx, 1, tag, len, 1);
-    JS_FreeCString(ctx, tag);
-    return r;
-}
-static JSValue js_dom_create_text(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    (void)this_val;
-    if (argc < 1) return JS_ThrowTypeError(ctx, "data is required");
-    size_t len;
-    const char *s = JS_ToCStringLen(ctx, &len, argv[0]);
-    if (!s) return JS_EXCEPTION;
-    JSValue r = nd_new(ctx, 3, s, len, 0);
-    JS_FreeCString(ctx, s);
-    return r;
-}
-static JSValue js_dom_parse(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    (void)this_val;
-    if (argc < 1) return JS_ThrowTypeError(ctx, "markup is required");
-    JSValue doc = nd_new(ctx, 9, NULL, 0, 0);
-    if (JS_IsException(doc)) return doc;
-    JSValue r = nd_parse_into(ctx, doc, argv[0]);
-    if (JS_IsException(r)) {
-        JS_FreeValue(ctx, doc);
-        return r;
-    }
-    return doc;
-}
-
-static const JSCFunctionListEntry nd_proto_funcs[] = {
-    JS_CGETSET_DEF("nodeType", js_nd_type, NULL),
-    JS_CGETSET_MAGIC_DEF("nodeName", js_nd_name, NULL, 0),
-    JS_CGETSET_MAGIC_DEF("tagName", js_nd_name, NULL, 1),
-    JS_CGETSET_MAGIC_DEF("localName", js_nd_name, NULL, 0),
-    JS_CGETSET_MAGIC_DEF("parentNode", js_nd_link, NULL, 0),
-    JS_CGETSET_MAGIC_DEF("firstChild", js_nd_link, NULL, 1),
-    JS_CGETSET_MAGIC_DEF("lastChild", js_nd_link, NULL, 2),
-    JS_CGETSET_MAGIC_DEF("nextSibling", js_nd_link, NULL, 3),
-    JS_CGETSET_MAGIC_DEF("previousSibling", js_nd_link, NULL, 4),
-    JS_CGETSET_MAGIC_DEF("childNodes", js_nd_child_nodes, NULL, 0),
-    JS_CGETSET_MAGIC_DEF("children", js_nd_child_nodes, NULL, 1),
-    JS_CGETSET_DEF("textContent", js_nd_get_text, js_nd_set_text),
-    JS_CGETSET_DEF("data", js_nd_get_text, js_nd_set_text),
-    JS_CGETSET_DEF("innerHTML", js_nd_get_inner, js_nd_set_inner),
-    JS_CGETSET_DEF("outerHTML", js_nd_get_outer, NULL),
-    JS_CGETSET_MAGIC_DEF("id", js_nd_get_attr_prop, NULL, 0),
-    JS_CGETSET_MAGIC_DEF("className", js_nd_get_attr_prop, NULL, 1),
-    JS_CFUNC_DEF("appendChild", 1, js_nd_append),
-    JS_CFUNC_DEF("insertBefore", 2, js_nd_insert_before),
-    JS_CFUNC_DEF("removeChild", 1, js_nd_remove_child),
-    JS_CFUNC_DEF("getAttribute", 1, js_nd_get_attribute),
-    JS_CFUNC_DEF("hasAttribute", 1, js_nd_has_attribute),
-    JS_CFUNC_DEF("setAttribute", 2, js_nd_set_attribute),
-    JS_CFUNC_DEF("matches", 1, js_nd_matches),
-    JS_CFUNC_MAGIC_DEF("querySelector", 1, js_nd_query, 0),
-    JS_CFUNC_MAGIC_DEF("querySelectorAll", 1, js_nd_query, 1),
-};
-
-static void nd_register(JSContext *c, JSValueConst native) {
-    JSRuntime *rt = JS_GetRuntime(c);
-    JS_NewClassID(rt, &nd_class_id);
-    JSClassDef def = {"NativeNode", nd_finalizer, nd_mark, NULL, NULL};
-    JS_NewClass(rt, nd_class_id, &def);
-    nd_proto = JS_NewObject(c);
-    JS_SetPropertyFunctionList(c, nd_proto, nd_proto_funcs, sizeof(nd_proto_funcs) / sizeof(nd_proto_funcs[0]));
-    JSValue dom = JS_NewObject(c);
-    JS_SetPropertyStr(c, dom, "parse", JS_NewCFunction(c, js_dom_parse, "parse", 1));
-    JS_SetPropertyStr(c, dom, "createElement", JS_NewCFunction(c, js_dom_create_element, "createElement", 1));
-    JS_SetPropertyStr(c, dom, "createTextNode", JS_NewCFunction(c, js_dom_create_text, "createTextNode", 1));
-    JS_SetPropertyStr(c, native, "dom", dom);
-}
+/* the JS surface of the nodes: csrc/nativedom_api.h */
+#include "nativedom_api.h"
