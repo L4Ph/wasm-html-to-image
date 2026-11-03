@@ -45,6 +45,38 @@ describe("bridge: objects of the page from the host", () => {
     expect(() => new w.DOMTokenList()).toThrow(TypeError);
   });
 
+  it("gives the table, legacy and SVG elements their interfaces, and iterators theirs", async () => {
+    const out = await dom.eval(`(() => {
+      const d = document.implementation.createHTMLDocument("");
+      d.body.innerHTML = "<table><caption>c</caption><colgroup><col></colgroup><thead><tr><td>x</td></tr></thead></table><frameset></frameset><marquee>m</marquee><dir></dir>";
+      const q = (s) => d.querySelector(s);
+      const it = d.createNodeIterator(d.body, 0xFFFFFFFF);
+      const tw = d.createTreeWalker(d.body, 0xFFFFFFFF);
+      const svg = d.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.innerHTML = "<title>t</title><switch></switch>";
+      return JSON.stringify([
+        q("caption") instanceof HTMLTableCaptionElement, q("col") instanceof HTMLTableColElement, q("colgroup") instanceof HTMLTableColElement,
+        q("thead") instanceof HTMLTableSectionElement, q("frameset") instanceof HTMLFrameSetElement, q("marquee") instanceof HTMLMarqueeElement, q("dir") instanceof HTMLDirectoryElement,
+        typeof HTMLFrameElement, it instanceof NodeIterator, tw instanceof TreeWalker, it.nextNode() === d.body,
+        svg.firstChild instanceof SVGTitleElement, svg.lastChild instanceof SVGSwitchElement,
+        d.createElement("title") instanceof SVGTitleElement,
+        q("thead").rows.length, q("thead").rows[0].tagName, typeof q("caption").webkitMatchesSelector, q("caption").translate,
+        q("col").span, it.pointerBeforeReferenceNode,
+      ]);
+    })()`);
+    expect(out).toBe(
+      JSON.stringify([
+        true, true, true,
+        true, true, true, true,
+        "function", true, true, true,
+        true, true,
+        false,
+        1, "TR", "function", false,
+        1, false,
+      ]),
+    );
+  });
+
   it("constructs the remaining event classes and the XHR family", async () => {
     const out = await dom.eval(`(() => {
       const ce = new CloseEvent("close", { wasClean: true, code: 1000, reason: "bye" });

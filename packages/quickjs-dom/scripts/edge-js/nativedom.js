@@ -866,6 +866,8 @@
     ["HTMLHeadingElement", "h1", "h2", "h3", "h4", "h5", "h6"], ["HTMLTableRowElement", "tr"], ["HTMLTableCellElement", "td", "th"],
     ["HTMLVideoElement", "video"], ["HTMLAudioElement", "audio"], ["HTMLSourceElement", "source"], ["HTMLPreElement", "pre"],
     ["HTMLHRElement", "hr"], ["HTMLDialogElement", "dialog"], ["HTMLDetailsElement", "details"], ["HTMLFieldSetElement", "fieldset"],
+    ["HTMLTableCaptionElement", "caption"], ["HTMLTableColElement", "col", "colgroup"], ["HTMLTableSectionElement", "thead", "tbody", "tfoot"],
+    ["HTMLDirectoryElement", "dir"], ["HTMLFrameElement", "frame"], ["HTMLFrameSetElement", "frameset"], ["HTMLMarqueeElement", "marquee"],
   ];
   classes.forEach(function (spec) {
     var C = { [spec[0]]: function () { illegal(); } }[spec[0]];
@@ -1052,6 +1054,13 @@
     value: function (x) { return !!x && x.nodeType === 1 && x.namespaceURI === SVG_URI && x.localName === "svg"; },
   });
   svgClass("SVGGElement", "SVGGraphicsElement", ["g"]);
+  svgClass("SVGSwitchElement", "SVGGraphicsElement", ["switch"]);
+  // <title> stays an HTML tag for the tag mapping (see above), so SVGTitleElement is recognised
+  // by namespace and name instead, the way SVGSVGElement is
+  svgClass("SVGTitleElement", "SVGElement");
+  Object.defineProperty(D.ctors.SVGTitleElement, Symbol.hasInstance, {
+    value: function (x) { return !!x && x.nodeType === 1 && x.namespaceURI === SVG_URI && x.localName === "title"; },
+  });
   svgClass("SVGUseElement", "SVGGraphicsElement", ["use"]);
   svgClass("SVGImageElement", "SVGGraphicsElement", ["image"]);
   svgClass("SVGForeignObjectElement", "SVGGraphicsElement", ["foreignobject"]);
@@ -1544,13 +1553,17 @@
     while (sib.lastChild) sib = sib.lastChild;
     return sib;
   };
+  var NodeIterator = function NodeIterator() { illegal(); };
+  W.NodeIterator = NodeIterator;
+  var TreeWalker = function TreeWalker() { illegal(); };
+  W.TreeWalker = TreeWalker;
   def(P.Document, "createNodeIterator", function (root, what, filter) {
     what = what === undefined ? 0xFFFFFFFF : what >>> 0;
     var cur = null;
-    return {
+    return Object.setPrototypeOf({
       root: root, whatToShow: what, filter: filter || null,
       get referenceNode() { return cur || root; },
-      pointerBeforeReference: false,
+      pointerBeforeReferenceNode: false,
       nextNode: function () {
         // without a filter the mask in C decides, in one call
         if (!filter && cur !== null) { var m = following(cur, root, false, what); if (m) cur = m; return m; }
@@ -1562,11 +1575,11 @@
         return null;
       },
       detach: function () {},
-    };
+    }, NodeIterator.prototype);
   });
   def(P.Document, "createTreeWalker", function (root, what, filter) {
     what = what === undefined ? 0xFFFFFFFF : what >>> 0;
-    var w = { root: root, whatToShow: what, filter: filter || null, currentNode: root };
+    var w = Object.setPrototypeOf({ root: root, whatToShow: what, filter: filter || null, currentNode: root }, TreeWalker.prototype);
     var ok = function (n) { return verdict(n, what, filter); };
     var walkNext = function () {
       if (!filter) { var m = following(w.currentNode, root, false, what); if (m) w.currentNode = m; return m; }
@@ -1923,6 +1936,45 @@
   });
   // the Document's own extra handler properties (the window list's document half)
   defHandlers(P.Document, ["beforematch", "beforetoggle", "contextlost", "contextrestored", "cuechange", "pointerrawupdate", "readystatechange", "visibilitychange", "webkitanimationend", "webkitanimationiteration", "webkitanimationstart", "webkittransitionend"]);
+  // ---- member gaps the surface walk shows on elements generally, and on the table/legacy
+  // interfaces exposed alongside: the element handler extras, the NS attribute-node pair,
+  // webkitMatchesSelector, translate, and the legacy elements' own reflections.
+  defHandlers(P.HTMLElement, ["beforematch", "beforetoggle", "contextlost", "contextrestored", "cuechange", "pointerrawupdate", "webkitanimationend", "webkitanimationiteration", "webkitanimationstart", "webkittransitionend"]);
+  // a frameset carries the window's handlers (the spec puts them on the frameset element)
+  defHandlers(P.HTMLFrameSetElement, ["afterprint", "beforeprint", "beforeunload", "hashchange", "languagechange", "message", "messageerror", "offline", "online", "pagehide", "pageshow", "popstate", "rejectionhandled", "storage", "unhandledrejection", "unload", "beforematch", "beforetoggle", "contextlost", "contextrestored", "cuechange", "pointerrawupdate", "webkitanimationend", "webkitanimationiteration", "webkitanimationstart", "webkittransitionend"]);
+  def(P.Element, "webkitMatchesSelector", function (s) { return this.matches(s); });
+  def(P.Element, "getAttributeNodeNS", function (ns, local) {
+    var list = this.attributes;
+    for (var i = 0; i < list.length; i++) { var at = list[i]; if (at.localName === String(local) && (at.namespaceURI || null) === (ns || null)) return at; }
+    return null;
+  });
+  def(P.Element, "setAttributeNodeNS", function (at) {
+    var old = this.getAttributeNodeNS(at.namespaceURI, at.localName);
+    this.setAttribute(at.name, at.value);
+    return old;
+  });
+  reflectBool(P.HTMLElement, "translate", "translate");
+  reflectString(P.HTMLTableCaptionElement, "align", "align");
+  [["align", "align"], ["ch", "char"], ["chOff", "charoff"], ["vAlign", "valign"]].forEach(function (pair) {
+    reflectString(P.HTMLTableSectionElement, pair[0], pair[1]);
+    reflectString(P.HTMLTableColElement, pair[0], pair[1]);
+  });
+  reflectString(P.HTMLTableColElement, "width", "width");
+  getter(P.HTMLTableColElement, "span", function () { var n = parseInt(this.getAttribute("span"), 10); return isNaN(n) || n < 1 ? 1 : n; }, function (v) { this.setAttribute("span", String(v)); });
+  reflectBool(P.HTMLDirectoryElement, "compact", "compact");
+  ["frameBorder", "longDesc", "marginHeight", "marginWidth", "scrolling"].forEach(function (k) { reflectString(P.HTMLFrameElement, k, k.toLowerCase()); });
+  reflectBool(P.HTMLFrameElement, "noResize", "noresize");
+  getter(P.HTMLFrameElement, "contentDocument", function () { return null; });
+  getter(P.HTMLFrameElement, "contentWindow", function () { return null; });
+  reflectString(P.HTMLFrameSetElement, "cols", "cols");
+  reflectString(P.HTMLFrameSetElement, "rows", "rows");
+  ["behavior", "bgColor", "direction", "width", "height"].forEach(function (k) { reflectString(P.HTMLMarqueeElement, k, k.toLowerCase()); });
+  ["hspace", "vspace", "scrollAmount", "scrollDelay"].forEach(function (k) {
+    getter(P.HTMLMarqueeElement, k, function () { var n = parseInt(this.getAttribute(k.toLowerCase()), 10); return isNaN(n) ? 0 : n; }, function (v) { this.setAttribute(k.toLowerCase(), String(v)); });
+  });
+  reflectBool(P.HTMLMarqueeElement, "trueSpeed", "truespeed");
+  def(P.HTMLMarqueeElement, "start", function () {});
+  def(P.HTMLMarqueeElement, "stop", function () {});
   // small legacy members the surface inventory found missing, each a line or two over what exists:
   // the six Node constants for node kinds this engine never creates (on the constructor and, as in
   // jsdom, on the prototype, so instances answer them too)
@@ -3095,6 +3147,24 @@
     });
     def(P.HTMLTableElement, "deleteRow", function (index) {
       var rows = rowsOf(this);
+      index = +index;
+      if (index === -1) index = rows.length - 1;
+      if (index < -1 || index >= rows.length) throw domError("IndexSizeError", "The provided index (" + index + ") is outside the range [-1, " + (rows.length - 1) + "].");
+      if (rows[index]) rows[index].remove();
+    });
+    // a section's own rows and row editing (the table's work over all of them)
+    var sectionRows = function (s) { return Array.prototype.filter.call(s.children, function (c) { return c.localName === "tr"; }); };
+    getter(P.HTMLTableSectionElement, "rows", function () { var s = this; return liveCollection(function () { return sectionRows(s); }, false, "HTMLCollection"); });
+    def(P.HTMLTableSectionElement, "insertRow", function (index) {
+      index = index === undefined ? -1 : +index;
+      var rows = sectionRows(this);
+      if (index < -1 || index > rows.length) throw domError("IndexSizeError", "The provided index (" + index + ") is outside the range [-1, " + rows.length + "].");
+      var tr = this.ownerDocument.createElement("tr");
+      this.insertBefore(tr, index === -1 || index === rows.length ? null : rows[index]);
+      return tr;
+    });
+    def(P.HTMLTableSectionElement, "deleteRow", function (index) {
+      var rows = sectionRows(this);
       index = +index;
       if (index === -1) index = rows.length - 1;
       if (index < -1 || index >= rows.length) throw domError("IndexSizeError", "The provided index (" + index + ") is outside the range [-1, " + (rows.length - 1) + "].");
