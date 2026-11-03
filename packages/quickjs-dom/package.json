@@ -43,7 +43,7 @@
   "scripts": {
     "build": "node scripts/build-quickjs.mjs && tsc -b && node scripts/build-edge-js.mjs",
     "prepublishOnly": "npm run build",
-    "test": "vitest run"
+    "test": "vitest run && jest --config tests/jest/jest.config.cjs"
   },
   "exports": {
     ".": {
@@ -61,6 +61,7 @@
       "import": "./dist/vitest.js",
       "default": "./dist/vitest.js"
     },
+    "./jest": "./jest.cjs",
     "./quickjs.wasm": {
       "types": "./dist/quickjs-wasm.d.ts",
       "default": "./dist/quickjs.wasm"
@@ -68,6 +69,7 @@
   },
   "files": [
     "dist",
+    "jest.cjs",
     "vendor/quickjs/LICENSE",
     "THIRD-PARTY-NOTICES.md",
     "README.md",
@@ -84,6 +86,8 @@
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "htmlparser2": "10.1.0",
+    "jest": "^29.7.0",
+    "jest-environment-node": "^29.7.0",
     "jsdom": "^26.1.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
