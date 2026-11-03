@@ -1,83 +1,193 @@
 # wasm-quickjs-dom
 
-Run a web page's JavaScript **without a browser and without `eval`** — and read the resulting DOM.
+[![npm version](https://img.shields.io/npm/v/wasm-quickjs-dom.svg)](https://www.npmjs.com/package/wasm-quickjs-dom)
+[![npm downloads](https://img.shields.io/npm/dw/wasm-quickjs-dom.svg)](https://www.npmjs.com/package/wasm-quickjs-dom)
+[![license](https://img.shields.io/npm/l/wasm-quickjs-dom.svg)](https://github.com/SoraKumo001/wasm-html-to-image/blob/master/LICENSE)
+[![Documentation](https://img.shields.io/badge/Docs-Docusaurus-blue)](https://sorakumo001.github.io/wasm-html-to-image/master/docs/)
 
-It is a small JSDOM for places where JSDOM cannot go: Cloudflare Workers, Vercel / Next.js Edge, Deno, Bun, browsers, and plain Node.js. The page's scripts run in [QuickJS-ng](https://github.com/quickjs-ng/quickjs) compiled to WebAssembly, on a DOM written in C inside the same WebAssembly module, so nothing needs `eval`, native modules or a headless browser.
+Run a web page's JavaScript **without a browser and without `eval`** — and read or serialize the resulting DOM.
+
+`wasm-quickjs-dom` is a lightweight JSDOM alternative built for environments where `jsdom` cannot run: **Cloudflare Workers**, **Vercel / Next.js Edge**, **Deno**, **Bun**, **browsers**, and **Node.js**. Page scripts execute inside [QuickJS-ng](https://github.com/quickjs-ng/quickjs) compiled to WebAssembly, backed by a fast native DOM written in C inside the same WebAssembly module. No `eval`, no native addons, and no headless browser required.
 
 ```ts
 import { createDOM } from "wasm-quickjs-dom";
 
 const dom = await createDOM({ url: "https://example.com/" });
 console.log(await dom.eval("document.title"));
-console.log(dom.serialize()); // the HTML after the page's scripts ran
+console.log(dom.serialize()); // HTML after the page's scripts ran
 dom.close();
 ```
 
-**Good for:** pre-rendering single-page apps to HTML (SEO, OGP, link previews), reading data that a page builds with JavaScript, running DOM code in tests on edge runtimes, and handing a scripted page to an image renderer such as [wasm-html-to-image](https://www.npmjs.com/package/wasm-html-to-image).
+---
 
-**Not a browser:** there is no layout of its own, no canvas, no working `WebSocket` or `Worker`, and QuickJS is an interpreter, so very heavy pages are slow. See [What works](#what-works-and-what-does-not).
+## ✨ Key Features & Use Cases
 
-## Install
+| Feature | Description |
+| :--- | :--- |
+| 🌐 **Runs Everywhere** | Zero-config WebAssembly loading for Cloudflare Workers, Vercel Edge, Node.js, Bun, Deno, and browsers. |
+| 🔒 **Sandboxed Execution** | Scripts run inside a WebAssembly instance with no filesystem or `process` access, bounded memory/stack, and configurable `fetch` limits. |
+| ⚡ **Fast Cold Starts (~3 ms)** | Pre-initialized QuickJS bytecode snapshot + C-based DOM parser and selector engine (~1.3 MB/s HTML parsing). |
+| 🧩 **Two API Styles** | Async sandboxed API (`createDOM`) for edge/serverless + synchronous `new JSDOM()` drop-in (`wasm-quickjs-dom/jsdom`) for Node.js & Bun. |
+| 🧪 **Vitest & Jest Environments** | Built-in test environments compatible with `@testing-library/dom`, `@testing-library/react`, `user-event`, and `jest-dom`. |
+| 🎨 **CSS Cascade & SVG Geometry** | `getComputedStyle` cascades `<style>`, inline styles, and optional `<link rel="stylesheet">`; computes SVG `getBBox` / `getTotalLength`. |
+
+**Good for:**
+- Pre-rendering single-page apps (React, Next.js, Vue, etc.) to static HTML for SEO, OGP, and link previews.
+- Scraping or extracting data from pages that build their DOM with client-side JavaScript.
+- Running DOM unit tests on Node.js, Bun, or edge-compatible setups.
+- Pre-processing scripted pages before passing them to an image renderer like [`wasm-html-to-image`](https://www.npmjs.com/package/wasm-html-to-image).
+
+**Not a full browser:**
+- No built-in visual layout engine (unless boxes are supplied via [`setLayout`](#layout-integration)), no `<canvas>` rendering, no live `WebSocket` / `Worker`, and QuickJS runs as an interpreter so very heavy bundles take longer than V8. See [Compatibility & Limitations](#compatibility--limitations).
+
+---
+
+## ⚖️ Comparison with JSDOM
+
+`wasm-quickjs-dom` is designed specifically to run in environments where `jsdom` cannot (Cloudflare Workers, Vercel Edge, Deno, browsers), while offering a drop-in synchronous API (`wasm-quickjs-dom/jsdom`) for Node.js and Bun.
+
+### Feature & Architecture Comparison
+
+| Feature / Aspect | `jsdom` | `wasm-quickjs-dom` |
+| :--- | :--- | :--- |
+| **Runtime Support** | Node.js only (requires `vm` module and `eval`) | **Anywhere WebAssembly runs** (Node.js, Workers, Edge, Bun, Deno, browsers) |
+| **Script Sandbox** | None (`runScripts: "dangerously"` runs in host process) | **Strict WebAssembly sandbox** (no filesystem, capped memory/stack, fetch limits) |
+| **DOM Implementation** | Pure JavaScript on V8 objects | **High-speed C DOM & selector engine** (`csrc/nativedom*.h`) |
+| **HTML Parser** | `parse5` (JavaScript) | **C port of `htmlparser2`** (~8.6× faster) |
+| **CSS Cascade** | `getComputedStyle` with CSS cascade | `getComputedStyle` with CSS cascade (`<style>`, inline, `@media`, `var()`, `calc()`) |
+| **SVG Geometry** | Minimal | **Exact SVG calculation** (`getBBox`, `getTotalLength`, `getPointAtLength`) |
+| **Testing Support** | Jest, Vitest, Testing Library | **Vitest & Jest environments included**, Testing Library compatible |
+
+### Performance Benchmark (Node.js)
+
+*Measured on Node.js v24 against `jsdom` v26.1.0:*
+
+| Scenario | `jsdom` | `wasm-quickjs-dom` | Comparison |
+| :--- | :--- | :--- | :--- |
+| **HTML Parsing** (~100 KB, 1,000 table rows, ~4,000 nodes) | 126 ms | **14.6 ms** | **~8.6× faster** ⚡ |
+| **HTML Serialization** (`dom.serialize()`) | 10.7 ms | **1.9 ms** | **~5.6× faster** ⚡ |
+| **Selector Query** (`querySelectorAll("td a")` × 1,000 matches) | 19.7 ms | **6.2 ms** | **~3.2× faster** ⚡ |
+| **Deep Selector Traversal** (`querySelector("tr:nth-child(500) td.name")` × 500) | 1,651 ms | **5.5 ms** | **~300× faster** ⚡ |
+| **In-Page Script DOM Creation** (2,000 elements created in `<script>`) | 43.2 ms | **5.0 ms** | **~8.6× faster** ⚡ |
+| **Warm Instance Creation** (`new JSDOM()` avg over 50 runs) | **3.4 ms** | 8.4 ms | `jsdom` is ~2.5× faster |
+| **Host DOM Mutation** (1,000 `createElement` + `appendChild` from Node host) | **23.5 ms** | 78.0 ms | `jsdom` is ~3.3× faster |
+
+> [!TIP]
+> **When `wasm-quickjs-dom` is faster:** Parsing HTML, serializing, executing CSS selector queries, and running client scripts that generate DOM inside the page (all execute natively in C / WebAssembly without host overhead).
+>
+> **When `jsdom` is faster:** High-frequency, granular DOM mutations issued directly from the Node.js test host (e.g., repeatedly calling `appendChild` thousands of times in a loop), because each call across the Node ↔ WebAssembly bridge incurs a ~3 µs boundary transition.
+
+---
+
+## 📦 Installation
 
 ```sh
 npm install wasm-quickjs-dom
 ```
 
-ESM only. Node.js 20 or later; the other runtimes below need nothing extra.
+- **ESM only**
+- **Node.js 20+** (or Cloudflare Workers, Vercel Edge, Deno, Bun, modern browsers)
 
-## Quick start
+### Subpath Exports
 
-### Get the HTML a page has after its scripts ran
+| Import Path | Purpose |
+| :--- | :--- |
+| `wasm-quickjs-dom` | Core async API (`createDOM`, `runPageScriptsQuickJS`, `isPrivateHost`) |
+| `wasm-quickjs-dom/jsdom` | Synchronous `JSDOM` & `VirtualConsole` compatible API (Node.js & Bun) |
+| `wasm-quickjs-dom/vitest` | Vitest test environment |
+| `wasm-quickjs-dom/jest` | Jest test environment |
+| `wasm-quickjs-dom/quickjs.wasm` | Raw WebAssembly binary (when custom loading is needed) |
+
+---
+
+## 🚀 Quick Start
+
+### 1. Get the HTML of a Page After Its Scripts Run
 
 ```ts
 import { createDOM } from "wasm-quickjs-dom";
 
 const dom = await createDOM(
-  { url: "https://example.com/" },          // or { html: "<p>…</p>", baseUrl: "https://example.com/" }
-  { waitFor: "#app" },                      // wait until this selector matches (default: let timers and requests settle)
+  { url: "https://example.com/" }, // or { html: "<div id='app'></div><script>...</script>", baseUrl: "https://example.com/" }
+  { waitFor: "#app" },             // wait until this selector matches (default: let timers & requests settle)
 );
+
 try {
   const html = dom.serialize();
+  console.log(html);
 } finally {
-  dom.close();                              // always close: it frees the page
+  dom.close(); // always close to free the WebAssembly instance
 }
 ```
 
-### Read values out of the page
-
-`eval` runs code in the page and gives you the result as JSON. It takes a string, or a function and JSON arguments:
+If you only need the final HTML and don't need to interact with the page further, use `runPageScriptsQuickJS` (which closes the instance automatically):
 
 ```ts
-const title = await dom.eval("document.title");
-const count = await dom.eval((selector: string) => document.querySelectorAll(selector).length, "a.item");
-const rows = await dom.eval(() => [...document.querySelectorAll("tr")].map((tr) => tr.textContent));
+import { runPageScriptsQuickJS } from "wasm-quickjs-dom";
+
+const { html, baseUrl } = await runPageScriptsQuickJS(
+  { url: "https://example.com/" },
+  { waitFor: "#app" },
+);
 ```
 
-A DOM node cannot cross the boundary: return what you read from it. A function is sent as source text, so it cannot use variables from your own scope.
+### 2. Read Values from the Page (`dom.eval`)
 
-### Drive the page
+`dom.eval()` executes code inside the page's global scope and returns the result serialized as JSON. You can pass either a code string or a function with JSON-serializable arguments:
 
 ```ts
-await dom.type("#search", "wasm");           // sets the value, fires input and change
-await dom.click("button[type=submit]");      // dispatches a bubbling click
-await dom.waitForSelector(".results");       // resolves true, or false if it never appears
-dom.expose("saveRow", (row) => db.save(row)); // the page can call: await window.saveRow({...})
+const title = await dom.eval<string>("document.title");
+
+const count = await dom.eval(
+  (selector: string) => document.querySelectorAll(selector).length,
+  "a.item",
+);
+
+const rows = await dom.eval(() =>
+  [...document.querySelectorAll("tr")].map((tr) => tr.textContent),
+);
 ```
 
-### Inside a Worker
+> [!NOTE]
+> - DOM nodes cannot be returned directly across `eval` — return the data you read from them (or use `dom.bridge().window` for live object access).
+> - Functions passed to `eval` are serialized via `.toString()`, so they cannot reference variables from the outer host scope.
+
+### 3. Interact with the Page
+
+```ts
+await dom.type("#search", "wasm");            // sets value, dispatches input + change events
+await dom.click("button[type=submit]");       // dispatches a bubbling click event
+await dom.waitForSelector(".results");        // resolves true when matched, or false on timeout
+
+// Expose a host function to the page as `await window.saveRow(...)`
+dom.expose("saveRow", (row) => db.save(row));
+```
+
+### 4. Use Inside Cloudflare Workers / Edge Runtimes
+
+WebAssembly loading is completely automatic (`workerd` and `edge-light` export conditions are configured out of the box):
 
 ```ts
 import { createDOM } from "wasm-quickjs-dom";
 
 export default {
-  async fetch(request: Request) {
+  async fetch(request: Request): Promise<Response> {
     const target = new URL(request.url).searchParams.get("url")!;
     const dom = await createDOM(
       { url: target },
-      { limits: { allowedProtocols: ["https:"], blockPrivateHosts: true, maxResourceBytes: 5_000_000 } },
+      {
+        limits: {
+          allowedProtocols: ["https:"],
+          blockPrivateHosts: true,
+          maxResourceBytes: 5_000_000,
+        },
+      },
     );
+
     try {
-      return new Response(dom.serialize(), { headers: { "content-type": "text/html; charset=utf-8" } });
+      return new Response(dom.serialize(), {
+        headers: { "content-type": "text/html; charset=utf-8" },
+      });
     } finally {
       dom.close();
     }
@@ -85,172 +195,323 @@ export default {
 };
 ```
 
-There is nothing to configure for the WebAssembly: the right way to load it is picked for the runtime. A complete Worker is in the repository: [`packages/cloudflare-prerender`](../cloudflare-prerender).
+> See [`packages/cloudflare-prerender`](../cloudflare-prerender) in the repository for a complete Cloudflare Worker example.
 
-### From the command line
+---
 
-```sh
-npx wasm-quickjs-dom https://example.com/ --wait "#app" > rendered.html
-npx wasm-quickjs-dom https://example.com/ -e "document.title"
-npx wasm-quickjs-dom page.html --base-url https://example.com/      # a file; "-" reads standard input
-```
+## 🧩 JSDOM-Compatible API (`wasm-quickjs-dom/jsdom`)
 
-See [Command line](#command-line) below.
-
-## As a jsdom (Node.js and Bun)
-
-`wasm-quickjs-dom/jsdom` has the shape of jsdom's API. The constructor is synchronous, and `dom.window` is the page's `window`: the host's own code reads and writes its objects directly (every property read or method call is a synchronous call into the page, about 3 µs).
+For Node.js and Bun, `wasm-quickjs-dom/jsdom` provides a drop-in replacement for `jsdom`'s synchronous constructor. `dom.window` exposes live proxy objects bridged directly to the QuickJS instance (each property read or method call is a synchronous call into WebAssembly taking ~3 µs).
 
 ```ts
 import { JSDOM } from "wasm-quickjs-dom/jsdom";
 
-const dom = new JSDOM("<p class=a>Hello</p><script>document.title = 'x'</script>", { runScripts: "dangerously" });
+const dom = new JSDOM(
+  "<p class='a'>Hello</p><script>document.title = 'Updated'</script>",
+  { runScripts: "dangerously" },
+);
+
 const { document } = dom.window;
-document.querySelector("p.a").textContent; // "Hello"
-document.title; // "x"
-document.addEventListener("click", (e) => console.log(e.target.nodeName)); // a function of yours, called by the page
-dom.serialize();
+console.log(document.querySelector("p.a")?.textContent); // "Hello"
+console.log(document.title);                             // "Updated"
+
+// Host functions can be registered directly as DOM event listeners
+document.addEventListener("click", (e: Event) => {
+  console.log((e.target as Node).nodeName);
+});
+
+console.log(dom.serialize());
 dom.window.close();
 ```
 
-Supported: `url`, `referrer`, `runScripts` (`"dangerously"`, `"outside-only"`), `resources: "usable"` (scripts with a `src`), `virtualConsole`, `beforeParse`, `JSDOM.fromURL`, `JSDOM.fromFile`, `serialize()`, `window.close()`. The page's timers and `load` run behind the constructor and do not keep the process alive; `await dom.ready` waits for the scripts and the `load` event. Not supported: `getInternalVMContext()` (the page is not in a Node `vm` context; use `window.eval`), `nodeLocation()`, `cookieJar`, `reconfigure()`. The same objects are available from `createDOM` as `dom.bridge().window`.
+> 💡 **Tip:** You can also access the same synchronous live window from an async `createDOM()` instance via `dom.bridge().window`.
 
-### In tests (Vitest)
+### JSDOM Feature Support
 
-The package is a Vitest environment: the test file's `document`, `window`, `HTMLElement`, `Event` and the rest are the page's. `@testing-library/dom`, `@testing-library/react` (React 18), `@testing-library/user-event` and `@testing-library/jest-dom` run on it (the package's own tests do).
+| Supported | Not Supported |
+| :--- | :--- |
+| `new JSDOM(html, options)` (synchronous parse & inline scripts) | `getInternalVMContext()` (runs in QuickJS WASM, not Node `vm`; use `window.eval`) |
+| `url`, `referrer`, `contentType`, `pretendToBeVisual` | `nodeLocation()` (parser does not retain source offsets) |
+| `runScripts: "dangerously"` \| `"outside-only"` | `cookieJar` |
+| `resources: "usable"` (fetches `<script src>` and `<link rel="stylesheet">`) | `reconfigure()` |
+| `virtualConsole` (`new VirtualConsole().sendTo(console)`) | |
+| `beforeParse(window)` | |
+| `JSDOM.fromURL(url, options)` & `JSDOM.fromFile(path, options)` | |
+| `dom.serialize()`, `dom.close()`, `dom.window.close()` | |
+| `await dom.ready` (waits for external scripts and the `load` event) | |
+
+---
+
+## 🧪 Test Runner Environments (Vitest & Jest)
+
+`wasm-quickjs-dom` includes ready-to-use environments for **Vitest** and **Jest**, exposing `window`, `document`, `HTMLElement`, `Event`, and other browser globals to your test files.
+
+Compatible with:
+- `@testing-library/dom`
+- `@testing-library/react` (React 18+)
+- `@testing-library/user-event`
+- `@testing-library/jest-dom`
+
+### Vitest Configuration
 
 ```ts
 // vitest.config.ts
-export default { test: { environment: "./node_modules/wasm-quickjs-dom/dist/vitest.js" } };
-```
+import { defineConfig } from "vitest/config";
 
-For Jest: `module.exports = { testEnvironment: "wasm-quickjs-dom/jest" }` (options in `testEnvironmentOptions`; the errors the page throws are those of the realm the environment runs in, not the test's). Options of `JSDOMOptions` (`url`, `html`, ...) go in `test.environmentOptions.wasmQuickjsDom`. Every DOM call a test makes is a call into the page (about 3 µs), so tests that do little DOM work run as fast as with jsdom or faster, and tests that walk a large DOM many times from the host (`getByRole` over thousands of nodes) can be slower. Ranges and selections follow the tree as it changes. Layout is not computed (`getBoundingClientRect` is all zeros; `getBBox`, `getTotalLength` and `getPointAtLength` of SVG shapes are worked out from their attributes), and `getComputedStyle` cascades the page's `<style>` elements and style attributes (specificity, `!important`, inheritance, `@media`, the browser's default `display`, colours as `rgb()`, `var()` custom properties, lengths in px with `em`/`rem`/absolute units and `calc()`/`min()`/`max()`/`clamp()` evaluated when they hold no percentage). `<link rel=stylesheet>` sheets count when they are fetched: `new JSDOM(html, { resources: "usable" })`, or `stylesheets: true` in the options of `createDOM`. Media elements have no decoder: `play()` is refused as a browser refuses a source it cannot play.
-
-## Pages you do not control
-
-A page's scripts can `fetch`, and so can the scripts and modules it loads. **Without `limits`, a page can reach every host your runtime can reach, internal ones included.** For anything you did not write, set them:
-
-```ts
-const dom = await createDOM({ url }, {
-  limits: {
-    allowedProtocols: ["https:"],
-    allowedHosts: ["example.com", "cdn.example.com"], // exact hostnames
-    blockPrivateHosts: true,                          // localhost, private, loopback, link-local
-    maxResourceCount: 50,
-    maxResourceBytes: 5_000_000,
-    maxTotalResourceBytes: 20_000_000,
+export default defineConfig({
+  test: {
+    environment: "./node_modules/wasm-quickjs-dom/dist/vitest.js",
+    environmentOptions: {
+      wasmQuickjsDom: {
+        url: "http://localhost:3000",
+        // Any JSDOMOptions (html, resources: "usable", etc.)
+      },
+    },
   },
 });
 ```
 
-- The limits cover the page itself (`url`), the page's own `fetch` / `XMLHttpRequest`, and every script and module it loads. With host or protocol limits, each redirect is checked before it is followed.
-- `blockPrivateHosts` looks at hostnames and IP literals. It cannot see where a hostname resolves through DNS, so use `allowedHosts` as well when the target is not trusted.
-- The scripts run inside the WebAssembly sandbox: they have no file system, no `process`, and reach the outside only through `fetch` (the limits above) and the functions you `expose`.
-- Also bounded for you: each call is limited by `timeout`, and memory and stack by fixed caps.
+### Jest Configuration
 
-## API
+```js
+// jest.config.cjs
+module.exports = {
+  testEnvironment: "wasm-quickjs-dom/jest",
+  testEnvironmentOptions: {
+    url: "http://localhost:3000",
+  },
+};
+```
+
+> [!TIP]
+> **Performance in Tests:** Every DOM call from the host crosses the WebAssembly bridge (~3 µs). Typical component tests run as fast as `jsdom` or faster, while tests that traverse thousands of nodes repeatedly from the host (such as broad `getByRole` queries on huge trees) may take slightly longer.
+
+---
+
+## 🔒 Security: Handling Untrusted Pages
+
+A page's scripts (and any external scripts or ES modules it imports) can call `fetch` and `XMLHttpRequest`. **Without `limits`, a page can request any URL your host runtime can reach, including internal/private networks.**
+
+Always configure `limits` when loading pages you do not control:
+
+```ts
+const dom = await createDOM(
+  { url },
+  {
+    limits: {
+      allowedProtocols: ["https:"],
+      allowedHosts: ["example.com", "cdn.example.com"], // exact hostname allowlist
+      blockedHosts: ["internal.example.com"],           // exact hostname blocklist
+      blockPrivateHosts: true,                          // blocks localhost, 127.0.0.1, 10.x, 192.168.x, 169.254.x, IPv6 loopback/unique-local
+      maxResourceCount: 50,                             // max total requests per page
+      maxResourceBytes: 5_000_000,                      // max bytes per single response
+      maxTotalResourceBytes: 20_000_000,                // max cumulative bytes across all responses
+    },
+    skip: (reqUrl) => reqUrl.includes("analytics"),     // abort matching requests before hitting the network
+  },
+);
+```
+
+### Security Guarantees
+
+- **Every request is checked:** `limits` apply to the initial `source.url`, `fetch`, `XMLHttpRequest`, `<script src>`, `<link rel="stylesheet">`, and ES module imports.
+- **Redirect validation:** When host or protocol limits are active, every HTTP redirect hop is inspected manually before following (up to 10 hops).
+- **DNS rebinding note:** `blockPrivateHosts` inspects hostnames and IP literals before calling `fetch`. Because standard `fetch` resolves DNS internally, pair `blockPrivateHosts: true` with `allowedHosts` when full SSRF protection against custom domains is required.
+- **WebAssembly isolation:** Page scripts run inside a dedicated WASM sandbox with no access to the filesystem, environment variables, or `process`. Memory is capped at 256 MB, stack at 192 KB, and execution time per call is bounded by `timeout`.
+
+---
+
+## 📖 API Reference
 
 ### `createDOM(source, options?)` → `Promise<QuickJSDOM>`
 
-`source` is `{ url }`, or `{ html, baseUrl? }` for markup you already have (`baseUrl` is where relative URLs resolve and what `location` says).
+Creates a new isolated QuickJS + C DOM instance, loads the HTML, executes scripts, and keeps the page open.
 
-| Option | Default | |
-| ------ | ------- | --- |
-| `timeout` | `10000` | Upper limit in ms for **each call** into the page (the initial run, each `eval`, `settle`, …). |
-| `settleMs` | `1000` | After load, run timers and requests for at most this long. It is an upper bound: the page finishes as soon as nothing is pending. |
-| `waitFor` | | A CSS selector to wait for after load instead of `settleMs`. |
-| `width` | `800` | `window.innerWidth`; also what `matchMedia` answers for. |
-| `limits` | none | What the page may fetch (see above). |
-| `beforeScripts` | | A string or an array of strings of script to run before the page's own scripts (the document is parsed, no `<script>` has run): patch a global, put a probe on `setTimeout`, set a flag. An error it throws is logged (source `before-scripts-N.js`) and the page goes on. |
-| `skip` | | `(url) => boolean`: return `true` for a URL the page should not get. The request fails without going to the network (a `<script>` gets its `error` event, a `fetch` rejects). Analytics and ads are most of a real site's script time, and a render rarely needs them. The page itself is never skipped. |
-| `onLog` | | Called with each log entry as it happens (see `logs`). |
-| `quickjsWasm` | | A compiled `WebAssembly.Module` of your own, instead of the packaged one. |
+#### `source`
 
-### The page: `QuickJSDOM`
+- `{ url: string }` — Fetches the document from `url`.
+- `{ html: string, baseUrl?: string }` — Parses an existing HTML string (`baseUrl` defaults to `"about:blank"` and sets `location` + relative URL resolution).
 
-| Member | |
-| ------ | --- |
-| `baseUrl` | The document's URL (after redirects, when it was fetched). |
-| `eval(code)` / `eval(fn, ...args)` | Run code in the page's global scope; get the result as JSON. Promises are awaited. A throw becomes a rejected promise. Calls run one after another. |
-| `waitForSelector(selector)` | Wait up to `timeout` for a match; `false` if there is none (or can no longer be). |
-| `click(selector)` | Dispatch a bubbling `click` on the first match; `false` if nothing matched. |
-| `type(selector, text)` | Set the first match's `value` (or text), then fire `input` and `change`; `false` if nothing matched. |
-| `expose(name, fn)` | Make a function of yours callable from the page as `await window[name](...args)`. Arguments and result are JSON; a throw rejects with the same message. |
-| `settle(ms?)` | Let timers and requests run for up to `ms` (default `settleMs`). |
-| `serialize()` | The document as HTML, as it is now. |
-| `logs` | What happened so far (the last 1000): `console` output, script errors, unhandled promise rejections, and requests with their status or failure. The first place to look when a page comes back empty. |
-| `close()` | Free the page. It cannot be used afterwards. |
-| `toOptions(options)` | Fill `value` (the serialized DOM) and `baseUrl` of an options object — for example the render options of wasm-html-to-image. |
-| `markForLayout()` / `setLayout(boxes)` | Give the page a layout (see below). |
+#### `options` (`CreateDOMOptions`)
 
-**The page's clock runs only while one of these calls is waiting.** Timers and requests progress during `eval`, `settle`, `waitForSelector` and so on, and stand still in between.
+| Option | Type | Default | Description |
+| :--- | :--- | :--- | :--- |
+| `timeout` | `number` | `10000` | Maximum time in ms allowed for **each call** into the page (initial load, `eval`, `settle`, etc.). |
+| `settleMs` | `number` | `1000` | Maximum time in ms after `load` to let pending timers and network requests finish. Returns early as soon as the queue is idle. |
+| `waitFor` | `string` | — | CSS selector to wait for after `load` instead of `settleMs`. |
+| `width` | `number` | `800` | Viewport width (`window.innerWidth` and `@media` / `matchMedia` width queries). |
+| `stylesheets` | `boolean` | `false` | When `true`, fetches external `<link rel="stylesheet">` files so `getComputedStyle()` includes their rules. |
+| `beforeScripts` | `string \| string[]` | — | Classic script(s) to execute after HTML parsing but before any page `<script>` runs (useful for polyfills, globals, or probes). |
+| `limits` | `FetchLimits` | — | Network and resource restrictions (see [Security](#security-handling-untrusted-pages)). |
+| `skip` | `(url: string) => boolean` | — | Return `true` to reject a subresource request immediately without network access (great for skipping ads/analytics). |
+| `onLog` | `(entry: PageLogEntry) => void` | — | Callback invoked in real time for every console log, script error, unhandled rejection, or network request. |
+| `quickjsWasm` | `WebAssembly.Module` | auto | Custom pre-compiled QuickJS `WebAssembly.Module` (loaded automatically by default). |
 
-Log entries look like `{ type: "console", level, message }`, `{ type: "error", message, source }`, `{ type: "rejection", message }` and `{ type: "request", method, url, status?, error? }`.
+---
 
-### `runPageScriptsQuickJS(source, options?)` → `Promise<{ html, baseUrl }>`
+### `QuickJSDOM` Instance
 
-For when you only want the HTML: runs the page with the same options as `createDOM` and closes it for you.
+> [!IMPORTANT]
+> **How the Page Clock Works:** The page's virtual clock and event loop advance **only** while an async method (`eval`, `settle`, `waitForSelector`, `click`, `type`) is awaiting. Between calls, timers and in-flight requests remain paused.
 
-### Layout
+| Property / Method | Signature | Description |
+| :--- | :--- | :--- |
+| `baseUrl` | `readonly string` | Final document URL (after redirects if fetched). |
+| `logs` | `readonly PageLogEntry[]` | Last 1,000 log entries (`console`, `error`, `rejection`, `request`). Check this first when a page fails to render as expected. |
+| `eval` | `eval<T>(code: string): Promise<T>`<br>`eval<T>(fn, ...args): Promise<T>` | Evaluates code or a function in the page's global scope and awaits any returned Promise. Returns JSON-serializable values. |
+| `waitForSelector` | `(selector: string) => Promise<boolean>` | Waits up to `timeout` ms for a CSS selector to match. Returns `false` if timed out or no more work is pending. |
+| `click` | `(selector: string) => Promise<boolean>` | Dispatches a bubbling `click` event on the first matching element (`false` if not found). |
+| `type` | `(selector: string, text: string) => Promise<boolean>` | Sets `value` (or `textContent`) on the first matching element and fires `input` and `change` events. |
+| `expose` | `(name: string, fn: Function) => void` | Exposes a host function on `window[name]`. Callable from the page as `await window[name](...args)`. |
+| `settle` | `(ms?: number) => Promise<void>` | Advances timers and network requests for up to `ms` (defaults to `settleMs`) or until idle. |
+| `serialize` | `() => string` | Serializes the current DOM tree back to an HTML string. |
+| `bridge` | `(options?: BridgeOptions) => Bridge` | Returns `{ window }`, giving the host synchronous proxy access to page DOM objects. |
+| `toOptions` | `<T>(options: T) => T` | Populates `value` (serialized HTML) and `baseUrl` on a renderer options object (e.g., for `wasm-html-to-image`). |
+| `markForLayout` | `() => string` | Returns serialized HTML with `qjsl-<n>` classes injected on elements for layout measurement. |
+| `setLayout` | `(boxes: Record<number, [x, y, w, h]>) => void` | Injects measured `[x, y, width, height]` bounding boxes back into the DOM. |
+| `close` | `() => void` | Frees the QuickJS WebAssembly instance. Must be called when done. |
 
-There is no layout inside QuickJS, so `getBoundingClientRect()`, `offsetWidth` and the like return 0 — until you give the page boxes with `setLayout({ [elementNumber]: [x, y, width, height] })`. With `wasm-html-to-image` this is one call, `measureLayout(dom, render)`, which lays the page out with its engine and fills the boxes in (inline elements included). Use it for pages whose scripts size things from the real layout.
+#### `PageLogEntry` Types
 
-## What works, and what does not
+```ts
+type PageLogEntry =
+  | { type: "console"; level: "log" | "warn" | "error"; message: string }
+  | { type: "error"; message: string; source: string }
+  | { type: "rejection"; message: string }
+  | { type: "request"; method: string; url: string; status?: number; error?: string };
+```
 
-**Works:** inline, external, dynamically added and `type="module"` scripts (static `import`s and `import("literal")` are fetched up front); `fetch` and `XMLHttpRequest` (binary safe); timers, `requestAnimationFrame`, promises; `history.pushState`, `localStorage` / `sessionStorage` (in memory), `customElements`, `MutationObserver`, `crypto.getRandomValues` / `randomUUID`; `matchMedia` for the viewport width; `getComputedStyle` (the element's own style plus initial values); `IntersectionObserver` and `ResizeObserver` (each reports once on `observe()`, so lazy content loads). React and Next.js clients hydrate and run their effects.
+---
 
-**Does not:** layout (see above), `canvas`, `iframe` content, working `WebSocket`, `EventSource` and `Worker` (they exist and fail like a dead connection: an `error` event, then closed, with a warning in `dom.logs`, so code that handles failure carries on), CSS cascade computation, and anything that needs a real browser engine. A DOM smaller than JSDOM's. If a script throws, the page carries on with what it had; `dom.logs` tells you what went wrong.
+### Layout Integration
 
-**Speed:** a page starts in about 3 ms (the first in a process pays about 120 ms). A typical page, including its network, takes a few hundred ms. HTML is parsed natively and building the DOM from it runs at roughly 1.3 MB/s (a 250 KB page in about 190 ms), so very large pages still take seconds.
+By default, QuickJS has no visual layout engine, so `getBoundingClientRect()`, `offsetWidth`, and `clientHeight` return `0` (except SVG shapes, where `getBBox()`, `getTotalLength()`, and `getPointAtLength()` are calculated directly from path/shape attributes).
 
-## Where it runs
+If a page's scripts depend on real layout measurements:
+1. Call `dom.markForLayout()` to get HTML tagged with element IDs (`qjsl-<n>`).
+2. Measure element bounding boxes in a layout engine.
+3. Pass the results to `dom.setLayout({ [elementId]: [x, y, width, height] })`.
 
-| Runtime | How the WebAssembly is loaded |
-| ------- | ----------------------------- |
-| Cloudflare Workers | imported as a pre-compiled module (`workerd` condition) |
-| Vercel / Next.js Edge | imported with `?module` (`edge-light` condition) |
-| Node.js, Bun | read from the package and compiled once |
-| Deno, browsers | fetched from beside the module and compiled once |
+When paired with [`wasm-html-to-image`](https://www.npmjs.com/package/wasm-html-to-image), `measureLayout(dom, render)` performs all three steps in a single call.
 
-All of that is automatic. If your setup differs, pass your own module: `createDOM(source, { quickjsWasm })` (`wasm-quickjs-dom/quickjs.wasm` is the file).
+---
 
-## Command line
+## 💻 Command Line (CLI)
 
 ```sh
 wasm-quickjs-dom [options] <url | file | ->
 ```
 
-Prints the HTML after the page's scripts ran.
+Runs a page's scripts and writes the resulting HTML (or evaluated expression) to standard output.
 
-| Option | |
-| ------ | --- |
-| `-o, --output <file>` | Write to a file instead of standard output. |
-| `-e, --eval <code>` | Print the value of this code instead (a string as it is, anything else as JSON). |
-| `--json` | Print `{ baseUrl, html, logs }` as JSON. |
-| `--logs` | Also write the page's log (console, errors, rejections, requests) to standard error. |
-| `--wait <selector>`, `--settle <ms>`, `--timeout <ms>`, `--width <px>` | Shape the run (same as the options above). |
-| `--base-url <url>` | The page's URL, for a file or standard input. |
-| `--protocol <p>`, `--allow-host <h>`, `--block-host <h>`, `--block-private`, `--max-bytes <n>`, `--max-requests <n>` | The limits (repeat `--protocol`, `--allow-host` and `--block-host`). Set them for pages you do not control. |
-| `--skip <text>` | Do not fetch URLs containing this text (repeatable). |
-| `--before <file>` | Run this script file before the page's own scripts (repeatable). |
+### Examples
 
-Exit code `0` is done, `1` the page could not be loaded (or `-e` threw), `2` wrong usage. `--help` lists everything.
+```sh
+# Pre-render a URL and wait for #app to appear
+npx wasm-quickjs-dom https://example.com/ --wait "#app" > rendered.html
 
-## How it works
+# Evaluate an expression in the page and print the result
+npx wasm-quickjs-dom https://example.com/ -e "document.title"
 
-Each page gets its own WebAssembly instance of QuickJS-ng. The browser APIs a bare QuickJS lacks, and the JavaScript half of the DOM (events, `MutationObserver`, custom elements, ...), are compiled to QuickJS bytecode when the package is built; the first page of a process starts that program, and every later page is a copy of that started instance, which is why a page starts in about 3 ms. Nothing is shared between pages. Each gets its own clock origin and `Math.random` seed.
+# Render a local HTML file (or "-" for stdin) with a base URL
+npx wasm-quickjs-dom page.html --base-url https://example.com/
 
-The native DOM (`csrc/nativedom*.h`) keeps nodes as C structures: tree operations, a CSS selector engine (combinators, `:not` / `:is` / `:has`, `:nth-*`, attribute operators), serialization and a C port of htmlparser2 for parsing, with events, `MutationObserver`, custom elements, shadow roots, `style`, form controls and live collections layered on top in JavaScript. It is tested against jsdom operation by operation (random programs of tree edits, with every node and selector compared after each step). SVG is recognised by its root (`namespaceURI`, `createElementNS`), not modelled as a separate set of classes. Parsing is about 2.5 times faster than htmlparser2 in the interpreter was. Input the port does not reproduce exactly (for example non-ASCII tag names) falls back to htmlparser2 by itself.
+# Run safely on an untrusted URL with network limits and request logs
+npx wasm-quickjs-dom https://example.com/ --protocol https: --block-private --logs
+```
 
-## For contributors
+### CLI Options
 
-The package builds its own QuickJS: `vendor/quickjs` (QuickJS-ng, unmodified) and `csrc/qjsdom.c` are compiled to a standalone `dist/quickjs.wasm` with Emscripten (`emcc` on `PATH`), and the guest program is compiled to bytecode with that very wasm.
+| Option | Description |
+| :--- | :--- |
+| `-o, --output <file>` | Write output to `<file>` instead of stdout. |
+| `-e, --eval <code>` | Evaluate `<code>` after load and print its result (strings raw, other values as JSON). |
+| `--json` | Output `{ baseUrl, html, logs }` formatted as JSON. |
+| `--logs` | Print page logs (console, errors, rejections, requests) to stderr. |
+| `--wait <selector>` | Wait for `<selector>` to match after load. |
+| `--settle <ms>` | Settle duration in ms after load (default: `1000`). |
+| `--timeout <ms>` | Timeout per operation in ms (default: `10000`). |
+| `--width <px>` | Viewport width in pixels (default: `800`). |
+| `--base-url <url>` | Base URL when reading from a local file or stdin (`-`). |
+| `--protocol <proto>` | Allowed URL protocol, e.g., `https:` (repeatable). |
+| `--allow-host <host>` | Allowed hostname (repeatable). |
+| `--block-host <host>` | Blocked hostname (repeatable). |
+| `--block-private` | Block localhost and private/loopback/link-local IP ranges. |
+| `--max-bytes <n>` | Maximum bytes per response (and 4× total). |
+| `--max-requests <n>` | Maximum total network requests. |
+| `--skip <substring>` | Skip requests whose URL contains `<substring>` (repeatable). |
+| `--before <file>` | Run `<file>` in the page before any page scripts execute (repeatable). |
+
+**Exit codes:** `0` on success, `1` if loading or `--eval` failed, `2` on invalid CLI arguments.
+
+---
+
+## 📊 Compatibility & Limitations
+
+### What Works
+
+- **Scripts & Modules:** Inline `<script>`, external `<script src>`, dynamically inserted scripts, and `<script type="module">` (static `import` and `import("literal")` are pre-fetched and linked).
+- **Frameworks:** React 18+, Next.js client hydration, Preact, Vue, and standard SPA routers (`history.pushState` / `replaceState`).
+- **Network:** `fetch` and `XMLHttpRequest` (binary-safe via base64 bridge), `Headers`, `Request`, `Response`, `AbortController`, `TextEncoder` / `TextDecoder`, `URL` / `URLSearchParams`, `Blob`, `FormData`, Web Streams.
+- **DOM & Selectors:** Full C-backed DOM tree manipulation, live HTMLCollections, `<template>`, Shadow DOM (`attachShadow`), Custom Elements (`customElements.define`), `DOMParser`, `Range` & `Selection` (live-updated on tree mutations), and a native CSS selector engine (`:not`, `:is`, `:has`, `:nth-child`, attribute operators).
+- **CSS & `getComputedStyle`:** Cascades `<style>` tags, inline `style` attributes, and external `<link rel="stylesheet">` (when `stylesheets: true` or `resources: "usable"`). Supports selector specificity, `!important`, inheritance, `@media` width queries, `var()` custom properties, color normalization to `rgb()`, unit conversion (`em`, `rem`, `pt`, `cm`, `in`, etc. to `px`), and `calc()` / `min()` / `max()` / `clamp()`.
+- **Observers & Timers:** `MutationObserver`, `setTimeout` / `setInterval`, `requestAnimationFrame`, `queueMicrotask`. `IntersectionObserver` and `ResizeObserver` fire once immediately upon `.observe()` so lazy-loaded components render automatically.
+- **SVG Geometry:** `getBBox()`, `getTotalLength()`, and `getPointAtLength()` are computed accurately from SVG shape and path attributes.
+- **Storage & Crypto:** In-memory `localStorage`, `sessionStorage`, `document.cookie`, and `crypto.getRandomValues` / `crypto.randomUUID`.
+
+### What Does Not Work
+
+- **Visual Layout:** `getBoundingClientRect()` and `offsetWidth` return `0` unless bounding boxes are provided via [`setLayout`](#layout-integration).
+- **Canvas & Media:** `<canvas>` 2D/WebGL contexts are not rendered; `<audio>` / `<video>` have no media decoders (`play()` rejects just like an unsupported media source in a browser).
+- **Live Persistent Connections & Threads:** `WebSocket`, `EventSource`, and `Worker` exist as classes that emit an `error` event and close (logging a warning to `dom.logs`), allowing pages with fallback logic to continue gracefully.
+- **Iframe Documents:** `<iframe>` elements exist in the DOM, but nested browsing contexts are not loaded.
+
+### Performance Characteristics
+
+| Metric | Typical Value |
+| :--- | :--- |
+| **First page in process** | ~120 ms (compiles WASM & initializes snapshot) |
+| **Subsequent pages** | **~3 ms** (cloned from pre-initialized snapshot) |
+| **HTML parsing & DOM build** | **~1.3 MB/s** (~190 ms for a 250 KB HTML document, ~2.5× faster than JS `htmlparser2`) |
+| **Host ↔ WASM bridge call** | **~3 µs** per synchronous property read or method call |
+
+---
+
+## 🌐 Runtime Support & WASM Loading
+
+WebAssembly loading is handled automatically via `package.json` conditional imports (`#quickjs-wasm`):
+
+| Runtime | How `quickjs.wasm` is Loaded |
+| :--- | :--- |
+| **Cloudflare Workers** | Imported as a pre-compiled `WebAssembly.Module` (`workerd` condition) |
+| **Vercel / Next.js Edge** | Imported with `?module` (`edge-light` condition) |
+| **Node.js & Bun** | Read from disk once and compiled (`node` / `bun` conditions) |
+| **Deno & Browsers** | Fetched relative to `import.meta.url` once and compiled (`default` condition) |
+
+If your bundler or environment requires manual WASM handling, import `wasm-quickjs-dom/quickjs.wasm` and pass the compiled `WebAssembly.Module` as `{ quickjsWasm }` to `createDOM()`.
+
+---
+
+## 🔧 How It Works (Architecture)
+
+1. **Snapshot-based Instant Startup:** Browser globals and the JavaScript layer of the DOM (Events, `MutationObserver`, Custom Elements, Shadow DOM, form controls) are pre-compiled into QuickJS bytecode at build time. The first page boots this bytecode once; every subsequent page clones the initialized state in ~3 ms with isolated memory, clock origin, and `Math.random` seed.
+2. **Native C DOM & CSS Engine (`csrc/nativedom*.h`):** DOM nodes live as C structs inside the same WebAssembly module. Tree traversal, HTML parsing (a C port of `htmlparser2` with automatic fallback for edge-case syntax), HTML serialization, and CSS selector matching all run natively in C without crossing the JS/C boundary.
+3. **Differential Fuzzing:** The native C DOM is continuously verified against `jsdom` using randomized sequences of tree mutations and selector queries after every step.
+
+---
+
+## 🛠️ Development
+
+Building from source requires Node.js >= 20, pnpm, and Emscripten (`emcc` in `PATH`) to compile `vendor/quickjs` (unmodified QuickJS-ng) and `csrc/qjsdom.c` into `dist/quickjs.wasm`.
 
 ```sh
 pnpm --filter wasm-quickjs-dom build
 pnpm --filter wasm-quickjs-dom test
 ```
 
-## License
+---
 
-MIT. QuickJS-ng and web-streams-polyfill are included under their own licenses: see `THIRD-PARTY-NOTICES.md`.
+## 📄 License
+
+MIT © [SoraKumo](https://github.com/SoraKumo001).  
+QuickJS-ng and `web-streams-polyfill` are included under their respective licenses — see [`THIRD-PARTY-NOTICES.md`](./THIRD-PARTY-NOTICES.md).
