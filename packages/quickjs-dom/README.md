@@ -115,6 +115,17 @@ dom.window.close();
 
 Supported: `url`, `referrer`, `runScripts` (`"dangerously"`, `"outside-only"`), `resources: "usable"` (scripts with a `src`), `virtualConsole`, `beforeParse`, `JSDOM.fromURL`, `JSDOM.fromFile`, `serialize()`, `window.close()`. The page's timers and `load` run behind the constructor and do not keep the process alive; `await dom.ready` waits for the scripts and the `load` event. Not supported: `getInternalVMContext()` (the page is not in a Node `vm` context; use `window.eval`), `nodeLocation()`, `cookieJar`, `reconfigure()`. The same objects are available from `createDOM` as `dom.bridge().window`.
 
+### In tests (Vitest)
+
+The package is a Vitest environment: the test file's `document`, `window`, `HTMLElement`, `Event` and the rest are the page's. `@testing-library/dom`, `@testing-library/react` (React 18), `@testing-library/user-event` and `@testing-library/jest-dom` run on it (the package's own tests do).
+
+```ts
+// vitest.config.ts
+export default { test: { environment: "./node_modules/wasm-quickjs-dom/dist/vitest.js" } };
+```
+
+Options of `JSDOMOptions` (`url`, `html`, ...) go in `test.environmentOptions.wasmQuickjsDom`. Every DOM call a test makes is a call into the page (about 3 µs), so tests that do little DOM work run as fast as with jsdom or faster, and tests that walk a large DOM many times from the host (`getByRole` over thousands of nodes) can be slower. Not done: a Jest environment; ranges are not adjusted when the tree changes under them; layout and `getComputedStyle` are not computed.
+
 ## Pages you do not control
 
 A page's scripts can `fetch`, and so can the scripts and modules it loads. **Without `limits`, a page can reach every host your runtime can reach, internal ones included.** For anything you did not write, set them:

@@ -819,6 +819,60 @@
     P[spec[0]] = C.prototype;
     for (var i = 1; i < spec.length; i++) D.setTagProto(spec[i], C.prototype);
   });
+  // type: an input without a known one is a text field, a button without one submits
+  var INPUT_TYPES = ["hidden", "text", "search", "tel", "url", "email", "password", "date", "month", "week", "time", "datetime-local", "number", "range", "color", "checkbox", "radio", "file", "submit", "image", "reset", "button"];
+  getter(P.HTMLInputElement, "type", function () {
+    var t = (this.getAttribute("type") || "").toLowerCase();
+    return INPUT_TYPES.indexOf(t) >= 0 ? t : "text";
+  }, function (v) { this.setAttribute("type", String(v)); });
+  getter(P.HTMLButtonElement, "type", function () {
+    var t = (this.getAttribute("type") || "").toLowerCase();
+    return t === "button" || t === "reset" ? t : "submit";
+  }, function (v) { this.setAttribute("type", String(v)); });
+  getter(P.HTMLSelectElement, "type", function () { return this.hasAttribute("multiple") ? "select-multiple" : "select-one"; });
+  getter(P.HTMLTextAreaElement, "type", function () { return "textarea"; });
+
+  // an option that is selected deselects the others of a single select
+  getter(P.HTMLOptionElement, "selected", function () { return this.hasAttribute("selected"); }, function (v) {
+    if (v) {
+      var select = this.closest("select");
+      if (select && !select.hasAttribute("multiple")) {
+        var all = select.querySelectorAll("option");
+        for (var i = 0; i < all.length; i++) if (all[i] !== this) all[i].removeAttribute("selected");
+      }
+      this.setAttribute("selected", "");
+    } else this.removeAttribute("selected");
+  });
+  getter(P.HTMLOptionElement, "defaultSelected", function () { return this.hasAttribute("selected"); });
+
+  // on<event> properties (onclick, oninput, ...): a handler you set, or the one the on<event> attribute holds. Code asks
+  // "'oninput' in document" to find out which events exist (React does), so every event is listed.
+  var HANDLER_EVENTS = ("abort animationcancel animationend animationiteration animationstart auxclick beforeinput blur cancel canplay canplaythrough change " +
+    "click close contextmenu copy cut dblclick drag dragend dragenter dragleave dragover dragstart drop durationchange emptied ended error focus focusin focusout " +
+    "formdata gotpointercapture input invalid keydown keypress keyup load loadeddata loadedmetadata loadstart lostpointercapture mousedown mouseenter mouseleave " +
+    "mousemove mouseout mouseover mouseup paste pause play playing pointercancel pointerdown pointerenter pointerleave pointermove pointerout pointerover pointerup " +
+    "progress ratechange reset resize scroll scrollend securitypolicyviolation seeked seeking select selectionchange selectstart slotchange stalled submit suspend " +
+    "timeupdate toggle touchcancel touchend touchmove touchstart transitioncancel transitionend transitionrun transitionstart volumechange waiting wheel").split(" ");
+  var HANDLER = Symbol("handlers");
+  [P.HTMLElement, P.Document].forEach(function (proto) {
+    HANDLER_EVENTS.forEach(function (type) {
+      var name = "on" + type;
+      if (Object.getOwnPropertyDescriptor(proto, name)) return;
+      getter(proto, name, function () {
+        var h = this[HANDLER] && this[HANDLER][type];
+        if (h !== undefined) return h;
+        var code = this.nodeType === 1 ? this.getAttribute(name) : null;
+        if (code === null) return null;
+        var fn;
+        try { fn = new Function("event", code); } catch (e) { return null; }
+        (this[HANDLER] || (this[HANDLER] = {}))[type] = fn;
+        return fn;
+      }, function (v) {
+        (this[HANDLER] || Object.defineProperty(this, HANDLER, { value: {}, configurable: true })[HANDLER])[type] = typeof v === "function" ? v : null;
+      });
+    });
+  });
+
   // a form's controls (by name too, as in form.elements.email) and a select's options
   var CONTROLS = "input, select, textarea, button, fieldset, object, output";
   getter(P.HTMLFormElement, "elements", function () {
@@ -1288,6 +1342,467 @@
   W.NodeList = NodeList;
   W.HTMLCollection = function HTMLCollection() { illegal(); };
   W.NodeFilter = { FILTER_ACCEPT: 1, FILTER_REJECT: 2, FILTER_SKIP: 3, SHOW_ALL: 0xFFFFFFFF, SHOW_ELEMENT: 1, SHOW_ATTRIBUTE: 2, SHOW_TEXT: 4, SHOW_CDATA_SECTION: 8, SHOW_COMMENT: 128, SHOW_DOCUMENT: 256 };
+  // ---- what user interaction needs: focus, the activation behaviour of a click, the selection of a text control, labels,
+  // Range and Selection. (Ranges are not adjusted when the tree changes under them.)
+  var domError = function (name, message) {
+    var e = new Error(message);
+    e.name = name;
+    e.code = { IndexSizeError: 1, HierarchyRequestError: 3, InvalidStateError: 11, InvalidNodeTypeError: 24, WrongDocumentError: 4 }[name] || 0;
+    return e;
+  };
+
+  // focus
+  var focused = null;
+  var FOCUS_TAGS = { input: 1, select: 1, textarea: 1, button: 1, summary: 1, iframe: 1 };
+  var focusable = function (el) {
+    if (!el || el.nodeType !== 1 || !el.isConnected) return false;
+    if (el.hasAttribute("disabled") && (el.localName in FOCUS_TAGS)) return false;
+    if (el.localName === "input" && el.getAttribute("type") === "hidden") return false;
+    if (el.hasAttribute("tabindex")) return true;
+    if (el.localName in FOCUS_TAGS) return true;
+    if (el.localName === "a" && el.hasAttribute("href")) return true;
+    var ce = el.getAttribute("contenteditable");
+    return ce !== null && ce !== "false";
+  };
+  var focusEvent = function (type, bubbles, related) {
+    var E = W.FocusEvent || W.Event;
+    return new E(type, { bubbles: bubbles, cancelable: false, relatedTarget: related || null });
+  };
+  var activeOf = function (doc) { return focused && focused.isConnected && focused.ownerDocument === doc ? focused : doc.body; };
+  getter(P.Document, "activeElement", function () { return activeOf(this); });
+  def(P.HTMLElement, "focus", function () {
+    if (!focusable(this) || focused === this) return;
+    var prev = focused && focused.isConnected ? focused : null;
+    focused = this;
+    if (prev) { prev.dispatchEvent(focusEvent("blur", false, this)); prev.dispatchEvent(focusEvent("focusout", true, this)); }
+    this.dispatchEvent(focusEvent("focus", false, prev));
+    this.dispatchEvent(focusEvent("focusin", true, prev));
+  });
+  def(P.HTMLElement, "blur", function () {
+    if (focused !== this) return;
+    focused = null;
+    this.dispatchEvent(focusEvent("blur", false, null));
+    this.dispatchEvent(focusEvent("focusout", true, null));
+  });
+
+  // labels and the control of a label
+  var labelsOf = function (el) {
+    var id = el.getAttribute("id"), all = [], root = el.getRootNode();
+    var labels = root.querySelectorAll("label");
+    for (var i = 0; i < labels.length; i++) {
+      var l = labels[i], f = l.getAttribute("for");
+      if (f !== null ? (id !== null && f === id) : l.contains(el) && controlOf(l) === el) all.push(l);
+    }
+    return all;
+  };
+  var LABELABLE = "input, select, textarea, button, meter, output, progress";
+  var controlOf = function (label) {
+    var f = label.getAttribute("for");
+    if (f !== null) {
+      var byId = label.getRootNode().getElementById ? label.getRootNode().getElementById(f) : label.getRootNode().querySelector("[id=\"" + f + "\"]");
+      return byId && byId.matches(LABELABLE) && !(byId.localName === "input" && byId.getAttribute("type") === "hidden") ? byId : null;
+    }
+    var inner = label.querySelector(LABELABLE);
+    return inner && !(inner.localName === "input" && inner.getAttribute("type") === "hidden") ? inner : null;
+  };
+  ["HTMLInputElement", "HTMLSelectElement", "HTMLTextAreaElement", "HTMLButtonElement"].forEach(function (name) {
+    getter(P[name], "labels", function () {
+      var el = this;
+      return liveCollection(function () { return labelsOf(el); });
+    });
+  });
+  getter(P.HTMLLabelElement, "control", function () { return controlOf(this); });
+  getter(P.HTMLLabelElement, "htmlFor", function () { return this.getAttribute("for") || ""; }, function (v) { this.setAttribute("for", String(v)); });
+
+  // the selection of a text control
+  var SEL = Symbol("selection");
+  var textValue = function (el) { return String(el.value); };
+  var selOf = function (el) {
+    var len = textValue(el).length, s = el[SEL];
+    if (!s) return { start: len, end: len, dir: "none" };
+    return { start: Math.min(s.start, len), end: Math.min(s.end, len), dir: s.dir };
+  };
+  var TEXTY = ["text", "search", "url", "tel", "password", ""];
+  var selectable = function (el) { return el.localName === "textarea" || (el.localName === "input" && TEXTY.indexOf((el.getAttribute("type") || "").toLowerCase()) >= 0); };
+  ["HTMLInputElement", "HTMLTextAreaElement"].forEach(function (name) {
+    var proto = P[name];
+    getter(proto, "selectionStart", function () { return selectable(this) ? selOf(this).start : null; }, function (v) {
+      var s = selOf(this); v = Math.max(0, Math.min(Number(v) || 0, textValue(this).length));
+      this[SEL] = { start: v, end: Math.max(v, s.end), dir: s.dir };
+    });
+    getter(proto, "selectionEnd", function () { return selectable(this) ? selOf(this).end : null; }, function (v) {
+      var s = selOf(this); v = Math.max(0, Math.min(Number(v) || 0, textValue(this).length));
+      this[SEL] = { start: Math.min(s.start, v), end: v, dir: s.dir };
+    });
+    getter(proto, "selectionDirection", function () { return selectable(this) ? selOf(this).dir : null; }, function (v) {
+      var s = selOf(this); this[SEL] = { start: s.start, end: s.end, dir: String(v) };
+    });
+    def(proto, "setSelectionRange", function (start, end, dir) {
+      var len = textValue(this).length;
+      start = Math.max(0, Math.min(Number(start) || 0, len)); end = Math.max(0, Math.min(Number(end) || 0, len));
+      if (end < start) start = end;
+      this[SEL] = { start: start, end: end, dir: dir || "none" };
+      this.dispatchEvent(new W.Event("select", { bubbles: true }));
+    });
+    def(proto, "select", function () {
+      this[SEL] = { start: 0, end: textValue(this).length, dir: "none" };
+      this.dispatchEvent(new W.Event("select", { bubbles: true }));
+    });
+    def(proto, "setRangeText", function (text, start, end, mode) {
+      var s = selOf(this), v = textValue(this);
+      if (start === undefined) { start = s.start; end = s.end; }
+      start = Math.max(0, Math.min(start, v.length)); end = Math.max(start, Math.min(end, v.length));
+      var before = v.slice(0, start), after = v.slice(end);
+      this.value = before + text + after;
+      var at = start + String(text).length;
+      mode = mode || "preserve";
+      if (mode === "select") this[SEL] = { start: start, end: at, dir: "none" };
+      else if (mode === "start") this[SEL] = { start: start, end: start, dir: "none" };
+      else if (mode === "end") this[SEL] = { start: at, end: at, dir: "none" };
+      else this[SEL] = { start: s.start >= end ? s.start + (at - end) : Math.min(s.start, at), end: s.end >= end ? s.end + (at - end) : Math.min(s.end, at), dir: "none" };
+    });
+  });
+  // setting the value puts the caret at its end
+  ["HTMLInputElement", "HTMLTextAreaElement"].forEach(function (name) {
+    var d = Object.getOwnPropertyDescriptor(P[name], "value");
+    if (!d || !d.set) return;
+    Object.defineProperty(P[name], "value", { configurable: true, enumerable: true, get: d.get, set: function (v) { d.set.call(this, v); this[SEL] = undefined; } });
+  });
+
+  // the activation behaviour of a click: a checkbox toggles, a radio is chosen, a label clicks its control, a submit button
+  // submits the form (nothing navigates), a summary opens its details
+  var activatable = function (el) {
+    if (el.nodeType !== 1) return false;
+    var tag = el.localName, type = (el.getAttribute("type") || "").toLowerCase();
+    if (tag === "input") return !el.hasAttribute("disabled") && (type === "checkbox" || type === "radio" || type === "submit" || type === "reset");
+    if (tag === "button") return !el.hasAttribute("disabled");
+    if (tag === "label") return true;
+    if (tag === "summary") return !!el.parentNode && el.parentNode.localName === "details";
+    return false;
+  };
+  var radiosOf = function (el) {
+    var name = el.getAttribute("name");
+    if (!name) return [el];
+    var scope = el.form || el.getRootNode();
+    return Array.prototype.filter.call(scope.querySelectorAll("input[type=radio]"), function (r) { return r.getAttribute("name") === name && r.form === el.form; });
+  };
+  var preActivate = function (el, ev) {
+    var type = (el.getAttribute("type") || "").toLowerCase();
+    if (el.localName === "input" && type === "checkbox") { var was = el.checked; el.checked = !was; return { restore: function () { el.checked = was; } }; }
+    if (el.localName === "input" && type === "radio") {
+      var group = radiosOf(el), before = group.map(function (r) { return r.checked; });
+      group.forEach(function (r) { r.checked = r === el; });
+      return { restore: function () { group.forEach(function (r, i) { r.checked = before[i]; }); } };
+    }
+    return null;
+  };
+  var activate = function (el, ev) {
+    var type = (el.getAttribute("type") || "").toLowerCase(), tag = el.localName;
+    if (tag === "input" && (type === "checkbox" || type === "radio")) {
+      if (el.isConnected) {
+        el.dispatchEvent(new W.Event("input", { bubbles: true }));
+        el.dispatchEvent(new W.Event("change", { bubbles: true }));
+      }
+    } else if ((tag === "input" && (type === "submit" || type === "reset")) || tag === "button") {
+      var kind = tag === "button" ? (type || "submit") : type, form = el.form;
+      if (form && kind === "submit") form.requestSubmit(el);
+      else if (form && kind === "reset") form.reset();
+    } else if (tag === "label") {
+      var control = controlOf(el);
+      if (control && !control.contains(ev.target)) {
+        control.focus();
+        control.dispatchEvent(new (W.MouseEvent || W.Event)("click", { bubbles: true, cancelable: true }));
+      }
+    } else if (tag === "summary") {
+      el.parentNode.open = !el.parentNode.open;
+      el.parentNode.dispatchEvent(new W.Event("toggle"));
+    }
+  };
+  var rawDispatch = dispatch;
+  var activating = function (ev) {
+    var target = null;
+    if (ev && ev.type === "click" && this.nodeType === 1 && (!W.MouseEvent || ev instanceof W.MouseEvent)) {
+      for (var n = this; n; n = n.parentNode) {
+        if (activatable(n)) { target = n; break; }
+        if (!ev.bubbles) break;
+      }
+    }
+    var pre = target ? preActivate(target, ev) : null;
+    var result = rawDispatch.call(this, ev);
+    if (target) {
+      if (ev.defaultPrevented) { if (pre) pre.restore(); }
+      else activate(target, ev);
+    }
+    return result;
+  };
+  dispatch = activating;
+  [P.Node].forEach(function (proto) { def(proto, "dispatchEvent", activating); });
+  def(P.HTMLElement, "click", function () {
+    if (this.hasAttribute("disabled") && (this.localName in FOCUS_TAGS)) return;
+    this.dispatchEvent(new (W.MouseEvent || W.Event)("click", { bubbles: true, cancelable: true }));
+  });
+
+  // Range
+  var nodeLength = function (n) { return n.nodeType === 3 || n.nodeType === 8 ? n.data.length : n.childNodes.length; };
+  var indexOf = function (n) { var i = 0; for (var c = n.previousSibling; c; c = c.previousSibling) i++; return i; };
+  var rootOf = function (n) { while (n.parentNode) n = n.parentNode; return n; };
+  var isInclusiveAncestor = function (a, n) { for (; n; n = n.parentNode) if (n === a) return true; return false; };
+  // -1, 0, 1: where boundary point (a, ao) is against (b, bo)
+  var comparePoints = function (a, ao, b, bo) {
+    if (a === b) return ao < bo ? -1 : ao > bo ? 1 : 0;
+    if (isInclusiveAncestor(a, b)) {
+      var c = b; while (c.parentNode !== a) c = c.parentNode;
+      return indexOf(c) < ao ? 1 : -1;
+    }
+    if (isInclusiveAncestor(b, a)) return -comparePoints(b, bo, a, ao);
+    return a.compareDocumentPosition(b) & 4 ? -1 : 1;
+  };
+  var checkNode = function (n) {
+    if (!n || typeof n.nodeType !== "number") throw new TypeError("The node provided is not a Node.");
+    if (n.nodeType === 10) throw domError("InvalidNodeTypeError", "The node is a doctype.");
+  };
+  var checkOffset = function (n, o) { if (o > nodeLength(n) || o < 0) throw domError("IndexSizeError", "The offset " + o + " is larger than the node's length (" + nodeLength(n) + ")."); };
+  var Range = function Range() {
+    var doc = globalThis.document;
+    this._sc = this._ec = doc; this._so = this._eo = 0;
+  };
+  var rangeProto = Range.prototype;
+  var setBoundary = function (range, isStart, node, offset) {
+    checkNode(node); offset = offset >>> 0; checkOffset(node, offset);
+    if (isStart) {
+      if (rootOf(node) !== rootOf(range._ec) || comparePoints(node, offset, range._ec, range._eo) > 0) { range._ec = node; range._eo = offset; }
+      range._sc = node; range._so = offset;
+    } else {
+      if (rootOf(node) !== rootOf(range._sc) || comparePoints(node, offset, range._sc, range._so) < 0) { range._sc = node; range._so = offset; }
+      range._ec = node; range._eo = offset;
+    }
+    if (range._selection) range._selection._changed();
+  };
+  [["startContainer", "_sc"], ["startOffset", "_so"], ["endContainer", "_ec"], ["endOffset", "_eo"]].forEach(function (p) {
+    getter(rangeProto, p[0], function () { return this[p[1]]; });
+  });
+  getter(rangeProto, "collapsed", function () { return this._sc === this._ec && this._so === this._eo; });
+  getter(rangeProto, "commonAncestorContainer", function () { var c = this._sc; while (!isInclusiveAncestor(c, this._ec)) c = c.parentNode; return c; });
+  def(rangeProto, "setStart", function (n, o) { setBoundary(this, true, n, o); });
+  def(rangeProto, "setEnd", function (n, o) { setBoundary(this, false, n, o); });
+  def(rangeProto, "setStartBefore", function (n) { if (!n.parentNode) throw domError("InvalidNodeTypeError", "No parent."); setBoundary(this, true, n.parentNode, indexOf(n)); });
+  def(rangeProto, "setStartAfter", function (n) { if (!n.parentNode) throw domError("InvalidNodeTypeError", "No parent."); setBoundary(this, true, n.parentNode, indexOf(n) + 1); });
+  def(rangeProto, "setEndBefore", function (n) { if (!n.parentNode) throw domError("InvalidNodeTypeError", "No parent."); setBoundary(this, false, n.parentNode, indexOf(n)); });
+  def(rangeProto, "setEndAfter", function (n) { if (!n.parentNode) throw domError("InvalidNodeTypeError", "No parent."); setBoundary(this, false, n.parentNode, indexOf(n) + 1); });
+  def(rangeProto, "collapse", function (toStart) {
+    if (toStart) { this._ec = this._sc; this._eo = this._so; } else { this._sc = this._ec; this._so = this._eo; }
+    if (this._selection) this._selection._changed();
+  });
+  def(rangeProto, "selectNode", function (n) {
+    var p = n.parentNode;
+    if (!p) throw domError("InvalidNodeTypeError", "The node has no parent.");
+    var i = indexOf(n);
+    this._sc = this._ec = p; this._so = i; this._eo = i + 1;
+    if (this._selection) this._selection._changed();
+  });
+  def(rangeProto, "selectNodeContents", function (n) {
+    checkNode(n);
+    this._sc = this._ec = n; this._so = 0; this._eo = nodeLength(n);
+    if (this._selection) this._selection._changed();
+  });
+  def(rangeProto, "cloneRange", function () {
+    var r = new Range();
+    r._sc = this._sc; r._so = this._so; r._ec = this._ec; r._eo = this._eo;
+    return r;
+  });
+  def(rangeProto, "detach", function () {});
+  def(rangeProto, "isPointInRange", function (n, o) {
+    checkNode(n);
+    if (rootOf(n) !== rootOf(this._sc)) return false;
+    checkOffset(n, o);
+    return comparePoints(n, o, this._sc, this._so) >= 0 && comparePoints(n, o, this._ec, this._eo) <= 0;
+  });
+  def(rangeProto, "comparePoint", function (n, o) {
+    checkNode(n);
+    if (rootOf(n) !== rootOf(this._sc)) throw domError("WrongDocumentError", "The node is in another tree.");
+    checkOffset(n, o);
+    if (comparePoints(n, o, this._sc, this._so) < 0) return -1;
+    return comparePoints(n, o, this._ec, this._eo) > 0 ? 1 : 0;
+  });
+  def(rangeProto, "intersectsNode", function (n) {
+    if (rootOf(n) !== rootOf(this._sc)) return false;
+    var p = n.parentNode;
+    if (!p) return true;
+    var i = indexOf(n);
+    return comparePoints(p, i, this._ec, this._eo) < 0 && comparePoints(p, i + 1, this._sc, this._so) > 0;
+  });
+  def(rangeProto, "compareBoundaryPoints", function (how, source) {
+    var a, ao, b, bo;
+    if (how === 0) { a = this._sc; ao = this._so; b = source._sc; bo = source._so; }
+    else if (how === 1) { a = this._ec; ao = this._eo; b = source._sc; bo = source._so; }
+    else if (how === 2) { a = this._ec; ao = this._eo; b = source._ec; bo = source._eo; }
+    else if (how === 3) { a = this._sc; ao = this._so; b = source._ec; bo = source._eo; }
+    else throw domError("NotSupportedError", "The comparison method provided must be one of START_TO_START, START_TO_END, END_TO_END, END_TO_START.");
+    return comparePoints(a, ao, b, bo);
+  });
+  ["START_TO_START", "START_TO_END", "END_TO_END", "END_TO_START"].forEach(function (k, i) { Range[k] = i; rangeProto[k] = i; });
+  // the nodes the range takes whole, in order, and the text nodes it cuts into
+  var contained = function (range) {
+    var out = [], root = range.commonAncestorContainer;
+    var walk = function (n) {
+      for (var c = n.firstChild; c; c = c.nextSibling) {
+        var whole = comparePoints(c.parentNode, indexOf(c), range._sc, range._so) >= 0 && comparePoints(c.parentNode, indexOf(c) + 1, range._ec, range._eo) <= 0;
+        if (whole) out.push(c); else walk(c);
+      }
+    };
+    walk(root);
+    return out;
+  };
+  def(rangeProto, "toString", function () {
+    var s = this._sc, e = this._ec;
+    if (s === e && s.nodeType === 3) return s.data.slice(this._so, this._eo);
+    var out = "";
+    if (s.nodeType === 3) out += s.data.slice(this._so);
+    var text = function (n) {
+      if (n.nodeType === 3) out += n.data;
+      else for (var c = n.firstChild; c; c = c.nextSibling) text(c);
+    };
+    contained(this).forEach(function (n) { if (n.nodeType === 3 || n.nodeType === 1) text(n); });
+    if (e.nodeType === 3 && s !== e) out += e.data.slice(0, this._eo);
+    return out;
+  });
+  def(rangeProto, "deleteContents", function () {
+    if (this.collapsed) return;
+    var s = this._sc, e = this._ec, so = this._so, eo = this._eo;
+    if (s === e && (s.nodeType === 3 || s.nodeType === 8)) { s.data = s.data.slice(0, so) + s.data.slice(eo); this._eo = so; return; }
+    var nodes = contained(this), newNode, newOffset;
+    if (isInclusiveAncestor(s, e)) { newNode = s; newOffset = so; }
+    else {
+      var ref = s; while (ref.parentNode && !isInclusiveAncestor(ref.parentNode, e)) ref = ref.parentNode;
+      newNode = ref.parentNode; newOffset = indexOf(ref) + 1;
+    }
+    if (s.nodeType === 3 || s.nodeType === 8) s.data = s.data.slice(0, so);
+    nodes.forEach(function (n) { if (n.parentNode) n.parentNode.removeChild(n); });
+    if (e.nodeType === 3 || e.nodeType === 8) e.data = e.data.slice(eo);
+    this._sc = this._ec = newNode; this._so = this._eo = newOffset;
+    if (this._selection) this._selection._changed();
+  });
+  def(rangeProto, "cloneContents", function () {
+    var frag = this.commonAncestorContainer.ownerDocument ? this.commonAncestorContainer.ownerDocument.createDocumentFragment() : document.createDocumentFragment();
+    if (this.collapsed) return frag;
+    var s = this._sc, e = this._ec;
+    if (s === e && (s.nodeType === 3 || s.nodeType === 8)) {
+      var one = s.cloneNode(false); one.data = s.data.slice(this._so, this._eo); frag.appendChild(one); return frag;
+    }
+    if (s.nodeType === 3) { var head = s.cloneNode(false); head.data = s.data.slice(this._so); frag.appendChild(head); }
+    contained(this).forEach(function (n) { frag.appendChild(n.cloneNode(true)); });
+    if (e.nodeType === 3 && s !== e) { var tail = e.cloneNode(false); tail.data = e.data.slice(0, this._eo); frag.appendChild(tail); }
+    return frag;
+  });
+  def(rangeProto, "extractContents", function () {
+    var frag = this.cloneContents();
+    this.deleteContents();
+    return frag;
+  });
+  def(rangeProto, "insertNode", function (node) {
+    var s = this._sc, o = this._so;
+    if (s.nodeType === 3) {
+      var rest = s.splitText ? s.splitText(o) : null;
+      if (rest) { s.parentNode.insertBefore(node, rest); return; }
+    }
+    var before = s.nodeType === 3 ? s.nextSibling : s.childNodes[o] || null;
+    var parent = s.nodeType === 3 ? s.parentNode : s;
+    parent.insertBefore(node, before);
+    if (this.collapsed) { this._ec = parent; this._eo = indexOf(node) + 1; }
+  });
+  def(rangeProto, "surroundContents", function (wrapper) {
+    var contents = this.extractContents();
+    wrapper.appendChild(contents);
+    this.insertNode(wrapper);
+    this.selectNode(wrapper);
+  });
+  def(rangeProto, "createContextualFragment", function (html) { return D.parseFragment(String(html), this._sc.ownerDocument || this._sc); });
+  def(rangeProto, "getBoundingClientRect", function () { return { x: 0, y: 0, width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0 }; });
+  def(rangeProto, "getClientRects", function () { return []; });
+  W.Range = Range;
+  def(P.Document, "createRange", function () {
+    var r = new Range();
+    r._sc = r._ec = this;
+    return r;
+  });
+
+  // Selection (one range at most, as in Chrome)
+  var Selection = function Selection() { illegal(); };
+  var selections = new WeakMap();
+  var makeSelection = function (doc) {
+    var s = Object.create(Selection.prototype);
+    Object.defineProperty(s, "_doc", { value: doc });
+    Object.defineProperty(s, "_range", { value: null, writable: true });
+    Object.defineProperty(s, "_backward", { value: false, writable: true });
+    Object.defineProperty(s, "_changed", { value: function () {}, writable: true });
+    return s;
+  };
+  var selProto = Selection.prototype;
+  var setRange = function (sel, range, backward) {
+    if (sel._range) sel._range._selection = null;
+    sel._range = range;
+    sel._backward = !!backward;
+    if (range) Object.defineProperty(range, "_selection", { value: sel, configurable: true, writable: true });
+    sel._doc.dispatchEvent(new W.Event("selectionchange"));
+  };
+  getter(selProto, "rangeCount", function () { return this._range ? 1 : 0; });
+  getter(selProto, "isCollapsed", function () { return !this._range || this._range.collapsed; });
+  getter(selProto, "type", function () { return !this._range ? "None" : this._range.collapsed ? "Caret" : "Range"; });
+  getter(selProto, "direction", function () { return !this._range || this._range.collapsed ? "none" : this._backward ? "backward" : "forward"; });
+  getter(selProto, "anchorNode", function () { return this._range ? (this._backward ? this._range._ec : this._range._sc) : null; });
+  getter(selProto, "anchorOffset", function () { return this._range ? (this._backward ? this._range._eo : this._range._so) : 0; });
+  getter(selProto, "focusNode", function () { return this._range ? (this._backward ? this._range._sc : this._range._ec) : null; });
+  getter(selProto, "focusOffset", function () { return this._range ? (this._backward ? this._range._so : this._range._eo) : 0; });
+  def(selProto, "getRangeAt", function (i) {
+    if (i !== 0 || !this._range) throw domError("IndexSizeError", "This selection has no range at index " + i + ".");
+    return this._range;
+  });
+  def(selProto, "addRange", function (range) { if (!this._range && rootOf(range._sc) === this._doc) setRange(this, range, false); });
+  def(selProto, "removeRange", function (range) {
+    if (this._range !== range) throw domError("NotFoundError", "The range is not in the selection.");
+    setRange(this, null, false);
+  });
+  def(selProto, "removeAllRanges", function () { if (this._range) setRange(this, null, false); });
+  def(selProto, "empty", function () { if (this._range) setRange(this, null, false); });
+  var pointRange = function (sel, an, ao, fn, fo) {
+    checkNode(an); checkNode(fn); checkOffset(an, ao); checkOffset(fn, fo);
+    var r = new Range(), backward = comparePoints(fn, fo, an, ao) < 0;
+    r._sc = backward ? fn : an; r._so = backward ? fo : ao; r._ec = backward ? an : fn; r._eo = backward ? ao : fo;
+    setRange(sel, r, backward);
+  };
+  def(selProto, "setBaseAndExtent", function (an, ao, fn, fo) { pointRange(this, an, ao >>> 0, fn, fo >>> 0); });
+  def(selProto, "collapse", function (node, offset) {
+    if (node === null || node === undefined) { this.removeAllRanges(); return; }
+    pointRange(this, node, (offset || 0) >>> 0, node, (offset || 0) >>> 0);
+  });
+  def(selProto, "setPosition", selProto.collapse);
+  def(selProto, "collapseToStart", function () { if (!this._range) throw domError("InvalidStateError", "There is no selection."); this._range.collapse(true); });
+  def(selProto, "collapseToEnd", function () { if (!this._range) throw domError("InvalidStateError", "There is no selection."); this._range.collapse(false); });
+  def(selProto, "extend", function (node, offset) {
+    if (!this._range) throw domError("InvalidStateError", "There is no selection.");
+    var an = this.anchorNode, ao = this.anchorOffset;
+    pointRange(this, an, ao, node, (offset || 0) >>> 0);
+  });
+  def(selProto, "selectAllChildren", function (node) { pointRange(this, node, 0, node, nodeLength(node)); });
+  def(selProto, "deleteFromDocument", function () { if (this._range) this._range.deleteContents(); });
+  def(selProto, "containsNode", function (node, partial) {
+    if (!this._range) return false;
+    var r = this._range, p = node.parentNode;
+    if (!p || rootOf(node) !== rootOf(r._sc)) return false;
+    var i = indexOf(node), startsBefore = comparePoints(p, i, r._sc, r._so) < 0, endsAfter = comparePoints(p, i + 1, r._ec, r._eo) > 0;
+    return partial ? comparePoints(p, i, r._ec, r._eo) < 0 && comparePoints(p, i + 1, r._sc, r._so) > 0 : !startsBefore && !endsAfter;
+  });
+  def(selProto, "modify", function () {});
+  def(selProto, "toString", function () { return this._range ? this._range.toString() : ""; });
+  W.Selection = Selection;
+  var selectionOfDoc = function (doc) {
+    var s = selections.get(doc);
+    if (!s) selections.set(doc, (s = makeSelection(doc)));
+    return s;
+  };
+  def(P.Document, "getSelection", function () { return selectionOfDoc(this); });
+  W.getSelection = function getSelection() { return selectionOfDoc(globalThis.document); };
+
   // ---- XPath 1.0: document.evaluate, XPathEvaluator, XPathResult (the axes, predicates and the core functions)
   var XPathResult = function XPathResult() { illegal(); };
   var XPR = { ANY_TYPE: 0, NUMBER_TYPE: 1, STRING_TYPE: 2, BOOLEAN_TYPE: 3, UNORDERED_NODE_ITERATOR_TYPE: 4, ORDERED_NODE_ITERATOR_TYPE: 5, UNORDERED_NODE_SNAPSHOT_TYPE: 6, ORDERED_NODE_SNAPSHOT_TYPE: 7, ANY_UNORDERED_NODE_TYPE: 8, FIRST_ORDERED_NODE_TYPE: 9 };

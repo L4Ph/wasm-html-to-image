@@ -56,6 +56,11 @@
       "import": "./dist/jsdom.js",
       "default": "./dist/jsdom.js"
     },
+    "./vitest": {
+      "types": "./dist/vitest.d.ts",
+      "import": "./dist/vitest.js",
+      "default": "./dist/vitest.js"
+    },
     "./quickjs.wasm": {
       "types": "./dist/quickjs-wasm.d.ts",
       "default": "./dist/quickjs.wasm"
@@ -70,10 +75,18 @@
   ],
   "license": "MIT",
   "devDependencies": {
+    "@testing-library/dom": "^10.4.2",
+    "@testing-library/jest-dom": "^7.0.1",
+    "@testing-library/react": "^16.3.3",
+    "@testing-library/user-event": "^14.6.8",
     "@types/jsdom": "^30.0.0",
     "@types/node": "26.6.5",
+    "@types/react": "^19.3.0",
+    "@types/react-dom": "^19.3.0",
     "htmlparser2": "10.1.0",
     "jsdom": "^26.1.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
     "typescript": "^7.0.2",
     "vitest": "^5.0.5",
     "web-streams-polyfill": "4.3.0"
