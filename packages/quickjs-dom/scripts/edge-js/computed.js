@@ -678,11 +678,41 @@
 
   // ---- document.styleSheets: the <style> elements, with their rules
   var CSSStyleRule = function CSSStyleRule() {};
+  // The sheet interfaces. They are globals but stay off the bridge's window table, like DOMStringMap:
+  // their objects are all named/indexed properties, which the bridge's dynamic wrappers forward correctly.
+  var StyleSheet = function StyleSheet() { throw new TypeError("Illegal constructor"); };
+  var StyleSheetList = function StyleSheetList() { throw new TypeError("Illegal constructor"); };
+  StyleSheetList.prototype.item = function (i) { return i >= 0 && i < this.length ? this[i] : null; };
+  StyleSheetList.prototype[Symbol.iterator] = Array.prototype[Symbol.iterator];
+  var MediaList = function MediaList() { throw new TypeError("Illegal constructor"); };
+  var mediaQueries = function (text) { return String(text || "").split(",").map(function (q) { return q.trim(); }).filter(Boolean); };
+  var makeMediaList = function (text) {
+    var ml = Object.create(MediaList.prototype);
+    Object.defineProperty(ml, "_q", { value: mediaQueries(text), writable: true, configurable: true });
+    return syncMedia(ml);
+  };
+  var syncMedia = function (ml) {
+    for (var i = 0; i < ml._q.length; i++) (function (i) { Object.defineProperty(ml, i, { configurable: true, enumerable: true, get: function () { return ml._q[i]; } }); })(i);
+    return ml;
+  };
+  Object.defineProperties(MediaList.prototype, {
+    mediaText: { configurable: true, get: function () { return this._q.join(", "); }, set: function (v) { this._q = mediaQueries(v); syncMedia(this); } },
+    length: { configurable: true, get: function () { return this._q.length; } },
+  });
+  MediaList.prototype.item = function (i) { return i >= 0 && i < this._q.length ? this._q[i] : null; };
+  MediaList.prototype.appendMedium = function (m) { m = String(m).trim(); if (m && this._q.indexOf(m) < 0) { this._q.push(m); syncMedia(this); } };
+  MediaList.prototype.deleteMedium = function (m) { var i = this._q.indexOf(String(m).trim()); if (i >= 0) this._q.splice(i, 1); };
+  MediaList.prototype.toString = function () { return this.mediaText; };
+  if (!g.StyleSheet) g.StyleSheet = StyleSheet;
+  if (!g.StyleSheetList) g.StyleSheetList = StyleSheetList;
+  if (!g.MediaList) g.MediaList = MediaList;
   var sheetsOf = function (doc) {
     var out = [], styles = doc.querySelectorAll("style");
     for (var i = 0; i < styles.length; i++) {
       (function (owner) {
-        var sheet = owner.__sheet || (owner.__sheet = null);
+        // one sheet object per element, kept: styleSheets and el.sheet must answer the same object,
+        // and its closures read the element's text live, so keeping it does not stale the rules
+        if (owner.__sheet) { out.push(owner.__sheet); return; }
         // the rules of the sheet as text, and as objects, are kept for as long as the text is what was last seen: a page
         // that inserts thousands of rules (CSS-in-JS) must not parse the whole sheet each time
         var listOf = function () {
@@ -696,7 +726,7 @@
           return owner.__fr || (owner.__fr = parseSheetFlat(owner.__rt));
         };
         var obj = {
-          type: "text/css", href: null, ownerNode: owner, parentStyleSheet: null, title: owner.getAttribute("title"), media: owner.getAttribute("media") || "",
+          type: "text/css", href: null, ownerNode: owner, parentStyleSheet: null, title: owner.getAttribute("title"), media: makeMediaList(owner.getAttribute("media") || ""),
           get disabled() { return owner.hasAttribute("disabled"); },
           set disabled(v) { if (v) owner.setAttribute("disabled", ""); else owner.removeAttribute("disabled"); },
           get cssRules() { return cssRules(); },
@@ -720,11 +750,15 @@
             store(list, fr);
           },
         };
-        void sheet;
+        if (g.CSSStyleSheet) Object.setPrototypeOf(obj, g.CSSStyleSheet.prototype);
+        owner.__sheet = obj;
         out.push(obj);
       })(styles[i]);
     }
-    return out;
+    var list = Object.create(StyleSheetList.prototype);
+    out.forEach(function (s, i) { list[i] = s; });
+    list.length = out.length;
+    return list;
   };
   // the top-level rules of a sheet as text (an at-rule with its block is one)
   var splitRules = function (s) {
@@ -766,7 +800,7 @@
   if (!g.CSSStyleSheet) {
     g.CSSStyleRule = CSSStyleRule;
     g.CSSStyleSheet = class CSSStyleSheet {
-      constructor(opts) { this._text = ""; this.media = (opts && opts.media) || ""; this.disabled = !!(opts && opts.disabled); this.ownerNode = null; this.parentStyleSheet = null; this.href = null; this.type = "text/css"; this.title = null; }
+      constructor(opts) { this._text = ""; this.media = makeMediaList((opts && opts.media) || ""); this.disabled = !!(opts && opts.disabled); this.ownerNode = null; this.parentStyleSheet = null; this.href = null; this.type = "text/css"; this.title = null; }
       get cssRules() { return parseSheetFlat(this._text); }
       get rules() { return this.cssRules; }
       replaceSync(text) { this._text = String(text); }
@@ -797,8 +831,23 @@
       set: function (v) { this.__adopted = Array.prototype.slice.call(v); },
     });
   });
+  if (g.CSSStyleSheet) {
+    Object.setPrototypeOf(g.CSSStyleSheet.prototype, StyleSheet.prototype);
+    Object.setPrototypeOf(g.CSSStyleSheet, StyleSheet);
+  }
   var docProto = D.ctors && D.ctors.Document && D.ctors.Document.prototype;
   if (docProto && !Object.getOwnPropertyDescriptor(docProto, "styleSheets")) {
     Object.defineProperty(docProto, "styleSheets", { configurable: true, get: function () { return sheetsOf(this); } });
+  }
+  var styleProto = D.ctors && D.ctors.HTMLStyleElement && D.ctors.HTMLStyleElement.prototype;
+  if (styleProto && !Object.getOwnPropertyDescriptor(styleProto, "sheet")) {
+    Object.defineProperty(styleProto, "sheet", {
+      configurable: true,
+      get: function () {
+        var list = sheetsOf(this.ownerDocument);
+        for (var i = 0; i < list.length; i++) if (list[i].ownerNode === this) return list[i];
+        return null;
+      },
+    });
   }
 })(globalThis);

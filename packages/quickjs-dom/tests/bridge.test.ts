@@ -45,6 +45,38 @@ describe("bridge: objects of the page from the host", () => {
     expect(() => new w.DOMTokenList()).toThrow(TypeError);
   });
 
+  it("exposes StyleSheet, MediaList and StyleSheetList for the sheets", async () => {
+    const out = await dom.eval(`(() => {
+      const st = document.createElement("style");
+      st.setAttribute("media", "screen and (min-width: 100px), print");
+      st.textContent = "p { color: red }";
+      document.head.appendChild(st);
+      const sheets = document.styleSheets;
+      const sheet = sheets[sheets.length - 1];
+      const m = sheet.media;
+      const before = [m.length, m.item(0), m.item(1), m.item(2), m[0], String(m)];
+      m.appendMedium("tv"); m.deleteMedium("print");
+      return JSON.stringify([
+        typeof StyleSheet, typeof MediaList, typeof StyleSheetList,
+        sheets instanceof StyleSheetList, sheets.item(sheets.length - 1) === sheet, [...sheets].length === sheets.length,
+        sheet instanceof CSSStyleSheet, sheet instanceof StyleSheet, sheet.constructor.name,
+        st.sheet === sheet, m instanceof MediaList, m.constructor.name, before,
+        m.mediaText, m.length,
+        (() => { try { new StyleSheet(); return "no error"; } catch (e) { return e.name; } })(),
+      ]);
+    })()`);
+    expect(out).toBe(
+      JSON.stringify([
+        "function", "function", "function",
+        true, true, true,
+        true, true, "CSSStyleSheet",
+        true, true, "MediaList", [2, "screen and (min-width: 100px)", "print", null, "screen and (min-width: 100px)", "screen and (min-width: 100px), print"],
+        "screen and (min-width: 100px), tv", 2,
+        "TypeError",
+      ]),
+    );
+  });
+
   it("exposes Location for the location", async () => {
     expect(
       await dom.eval(`JSON.stringify([
