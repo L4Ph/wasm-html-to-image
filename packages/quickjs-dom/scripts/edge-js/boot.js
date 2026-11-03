@@ -53,6 +53,8 @@
     });
     // DOMStringMap is a global too, but stays off the window table (nativedom.js explains why)
     if (N.DOMStringMapCtor && !("DOMStringMap" in g)) Object.defineProperty(g, "DOMStringMap", { configurable: true, writable: true, value: N.DOMStringMapCtor });
+    // CSSStyleDeclaration likewise (its objects are all named properties)
+    if (N.CSSStyleDeclarationCtor && !("CSSStyleDeclaration" in g)) Object.defineProperty(g, "CSSStyleDeclaration", { configurable: true, writable: true, value: N.CSSStyleDeclarationCtor });
     g.document = d;
     ["window", "self", "top", "parent", "frames"].forEach(function (k) {
       Object.defineProperty(g, k, { configurable: true, writable: true, value: g });

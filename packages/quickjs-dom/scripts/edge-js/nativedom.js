@@ -705,7 +705,12 @@
     });
     return out;
   };
-  var StyleDecl = function (el) { Object.defineProperty(this, "_el", { value: el }); };
+  var StyleDecl = function CSSStyleDeclaration(el) { Object.defineProperty(this, "_el", { value: el }); };
+  // the one CSSStyleDeclaration for both el.style (here) and getComputedStyle (computed.js picks
+  // it up from here). It stays off the bridge's window table, like DOMStringMap: a style object is
+  // all named properties, and the bridge's class wrappers would keep host-side sets local.
+  D.CSSStyleDeclarationCtor = StyleDecl;
+  Object.defineProperty(StyleDecl.prototype, "parentRule", { value: null, writable: true, configurable: true });
   var styleItems = function (s) { return parseStyle(s._el.getAttribute("style")); };
   var styleWrite = function (s, items) {
     var text = items.map(function (d) { return d[0] + ": " + d[1] + ";"; }).join(" ");

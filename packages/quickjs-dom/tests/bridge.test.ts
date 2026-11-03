@@ -45,6 +45,29 @@ describe("bridge: objects of the page from the host", () => {
     expect(() => new w.DOMTokenList()).toThrow(TypeError);
   });
 
+  it("makes el.style and computed styles instances of the one CSSStyleDeclaration", async () => {
+    const out = await dom.eval(`(() => {
+      const el = document.getElementById("a");
+      el.style.color = "red";
+      const cs = getComputedStyle(el);
+      const proto = CSSStyleDeclaration.prototype;
+      return JSON.stringify([
+        typeof CSSStyleDeclaration, el.style instanceof CSSStyleDeclaration, cs instanceof CSSStyleDeclaration,
+        el.style.constructor.name, el.style.getPropertyValue("color"), cs.getPropertyValue("color"),
+        typeof proto.getPropertyValue, typeof proto.setProperty, typeof proto.removeProperty, typeof proto.getPropertyPriority, typeof proto.item,
+        "cssText" in proto, "length" in proto, el.style.parentRule, cs.parentRule,
+      ]);
+    })()`);
+    expect(out).toBe(
+      JSON.stringify([
+        "function", true, true,
+        "CSSStyleDeclaration", "red", "rgb(255, 0, 0)",
+        "function", "function", "function", "function", "function",
+        true, true, null, null,
+      ]),
+    );
+  });
+
   it("gives the window its on* handler properties", async () => {
     const out = await dom.eval(`(() => {
       const seen = [];

@@ -621,7 +621,9 @@
   var camel = function (k) { return k.replace(/-([a-z])/g, function (_, c) { return c.toUpperCase(); }); };
   var SHORT = { margin: "margin-", padding: "padding-" };
 
-  var Computed = function CSSStyleDeclaration() {};
+  // the element styles' own class (nativedom.js), so el.style and a computed style are instances
+  // of the one CSSStyleDeclaration; the fallback is for a layer running without nativedom.js
+  var Computed = D.CSSStyleDeclarationCtor || function CSSStyleDeclaration() {};
   var makeComputed = function (el, values) {
     var names = Object.keys(values).filter(function (n) { return n.slice(0, 2) !== "--"; }).sort();
     var read = function (name) {
@@ -674,7 +676,8 @@
     if (pseudo) return makeComputed(el, {});
     return makeComputed(el, computedOf(el, 0));
   };
-  if (D.window) D.window.CSSStyleDeclaration = D.window.CSSStyleDeclaration || Computed;
+  // (CSSStyleDeclaration is not put on D.window: boot.js installs the constructor as a global from
+  // D.CSSStyleDeclarationCtor, keeping style objects off the bridge's class table — see nativedom.js)
 
   // ---- document.styleSheets: the <style> elements, with their rules
   var CSSStyleRule = function CSSStyleRule() {};
