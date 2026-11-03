@@ -45,6 +45,38 @@ describe("bridge: objects of the page from the host", () => {
     expect(() => new w.DOMTokenList()).toThrow(TypeError);
   });
 
+  it("constructs Option and Audio, and names the document and range classes", async () => {
+    const out = await dom.eval(`(() => {
+      const opt = new Option("hi", "v", false, true);
+      const aud = new Audio("x.mp3");
+      const img = new Image();
+      const xd = document.implementation.createDocument(null, "root", null);
+      const xp = new DOMParser().parseFromString("<root/>", "text/xml");
+      const r = document.createRange();
+      const sr = new StaticRange({ startContainer: document.body, startOffset: 0, endContainer: document.body, endOffset: 0 });
+      return JSON.stringify([
+        opt.tagName, opt.textContent, opt.value, opt.selected, opt instanceof Option, opt instanceof HTMLOptionElement,
+        aud.tagName, aud.getAttribute("src"), aud instanceof Audio, img instanceof Image,
+        xd instanceof XMLDocument, xd.contentType, xp instanceof XMLDocument,
+        typeof CDATASection, typeof ProcessingInstruction, typeof CustomElementRegistry,
+        customElements instanceof CustomElementRegistry, customElements.constructor.name,
+        r instanceof AbstractRange, sr instanceof StaticRange, sr instanceof AbstractRange, sr.collapsed, sr.startContainer === document.body,
+        typeof XMLDocument,
+      ]);
+    })()`);
+    expect(out).toBe(
+      JSON.stringify([
+        "OPTION", "hi", "v", true, true, true,
+        "AUDIO", "x.mp3", true, true,
+        true, "application/xml", true,
+        "function", "function", "function",
+        true, "CustomElementRegistry",
+        true, true, true, true, true,
+        "function",
+      ]),
+    );
+  });
+
   it("answers the window's own functions", async () => {
     const out = await dom.eval(`(async () => {
       const got = [];

@@ -1688,8 +1688,12 @@
   var DOMParser = function DOMParser() {};
   def(DOMParser.prototype, "parseFromString", function (markup, type) {
     var doc = D.parse(String(markup));
-    // HTMLDocument is defined further down; at call time it exists, and text/html results are HTML documents
-    if ((type === undefined || type === "text/html") && typeof HTMLDocument !== "undefined") Object.setPrototypeOf(doc, HTMLDocument.prototype);
+    // HTMLDocument and XMLDocument are defined further down; at call time they exist, and the
+    // result takes the class of the type it was parsed as (the parsing itself is the one parser)
+    if (typeof HTMLDocument !== "undefined") {
+      if (type === undefined || type === "text/html") Object.setPrototypeOf(doc, HTMLDocument.prototype);
+      else if (/(^|\/)xml$/.test(type || "") || type === "image/svg+xml") Object.setPrototypeOf(doc, XMLDocument.prototype);
+    }
     return doc;
   });
   W.DOMParser = DOMParser;
@@ -1769,6 +1773,25 @@
   Object.setPrototypeOf(HTMLDocument.prototype, P.Document);
   Object.setPrototypeOf(HTMLDocument, D.ctors.Document);
   W.HTMLDocument = HTMLDocument;
+  // the same treatment for the other document class and the node classes no HTML document can
+  // hold: their interfaces exist (and createCDATASection rightly refuses for HTML documents),
+  // instances arrive only through createDocument and XML parsing paths
+  var XMLDocument = function XMLDocument() { illegal(); };
+  Object.setPrototypeOf(XMLDocument.prototype, P.Document);
+  Object.setPrototypeOf(XMLDocument, D.ctors.Document);
+  W.XMLDocument = XMLDocument;
+  var CDATASection = function CDATASection() { illegal(); };
+  Object.setPrototypeOf(CDATASection.prototype, P.Text);
+  Object.setPrototypeOf(CDATASection, D.ctors.Text);
+  W.CDATASection = CDATASection;
+  var ProcessingInstruction = function ProcessingInstruction() { illegal(); };
+  Object.setPrototypeOf(ProcessingInstruction.prototype, P.CharacterData);
+  Object.setPrototypeOf(ProcessingInstruction, D.ctors.CharacterData);
+  W.ProcessingInstruction = ProcessingInstruction;
+  // the custom elements registry object gets its interface
+  var CustomElementRegistry = function CustomElementRegistry() { illegal(); };
+  W.CustomElementRegistry = CustomElementRegistry;
+  Object.setPrototypeOf(registry, CustomElementRegistry.prototype);
   def(DOMImplementation.prototype, "hasFeature", function () { return true; });
   def(DOMImplementation.prototype, "createDocumentType", function (name, publicId, systemId) {
     name = String(name); publicId = String(publicId || ""); systemId = String(systemId || "");
@@ -1785,6 +1808,7 @@
   });
   def(DOMImplementation.prototype, "createDocument", function (ns, qname, doctype) {
     var doc = D.createDocument();
+    Object.setPrototypeOf(doc, XMLDocument.prototype);
     if (doctype) doc.appendChild(doctype);
     if (qname) doc.appendChild(ns ? doc.createElementNS(ns, String(qname)) : doc.createElement(String(qname)));
     return doc;
@@ -2439,6 +2463,27 @@
   def(rangeProto, "getBoundingClientRect", function () { return { x: 0, y: 0, width: 0, height: 0, top: 0, left: 0, right: 0, bottom: 0 }; });
   def(rangeProto, "getClientRects", function () { return []; });
   W.Range = Range;
+  // AbstractRange: the layer above Range (its boundary members stay on Range.prototype, where
+  // they were built; this adds the name and the instanceof). StaticRange is a real constructor
+  // over an init dictionary, immutable in practice because nothing writes its fields afterwards.
+  var AbstractRange = function AbstractRange() { illegal(); };
+  Object.setPrototypeOf(Range.prototype, AbstractRange.prototype);
+  Object.setPrototypeOf(Range, AbstractRange);
+  W.AbstractRange = AbstractRange;
+  var StaticRange = function StaticRange(init) {
+    init = init || {};
+    var miss = ["startContainer", "startOffset", "endContainer", "endOffset"].filter(function (k) { return !(k in init); });
+    if (miss.length) throw new TypeError("Failed to construct 'StaticRange': " + miss.map(function (k) { return "property " + k; }).join(", ") + " missing.");
+    this._sc = init.startContainer; this._so = init.startOffset >>> 0;
+    this._ec = init.endContainer; this._eo = init.endOffset >>> 0;
+  };
+  Object.setPrototypeOf(StaticRange.prototype, AbstractRange.prototype);
+  Object.setPrototypeOf(StaticRange, AbstractRange);
+  [["startContainer", "_sc"], ["startOffset", "_so"], ["endContainer", "_ec"], ["endOffset", "_eo"]].forEach(function (p) {
+    getter(StaticRange.prototype, p[0], function () { return this[p[1]]; });
+  });
+  getter(StaticRange.prototype, "collapsed", function () { return this._sc === this._ec && this._so === this._eo; });
+  W.StaticRange = StaticRange;
   def(P.Document, "createRange", function () {
     var r = new Range();
     r._sc = r._ec = this;

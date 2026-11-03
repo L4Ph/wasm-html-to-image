@@ -228,6 +228,23 @@
       if (height != null) i.setAttribute("height", height);
       return i;
     };
+    g.Image.prototype = Object.getPrototypeOf(d.createElement("img"));
+    // Option and Audio are the same kind of shortcut constructors over the document
+    g.Option = function (text, value, defaultSelected, selected) {
+      var o = d.createElement("option");
+      if (text !== undefined) o.textContent = String(text);
+      if (value !== undefined) o.setAttribute("value", String(value));
+      if (defaultSelected) o.setAttribute("selected", "");
+      if (selected) o.selected = true;
+      return o;
+    };
+    g.Option.prototype = Object.getPrototypeOf(d.createElement("option"));
+    g.Audio = function (src) {
+      var a = d.createElement("audio");
+      if (src !== undefined) a.setAttribute("src", String(src));
+      return a;
+    };
+    g.Audio.prototype = Object.getPrototypeOf(d.createElement("audio"));
     d.fonts = d.fonts || { ready: Promise.resolve(), check: function () { return true; }, load: function () { return Promise.resolve([]); }, add: function () {}, forEach: function () {}, addEventListener: function () {}, removeEventListener: function () {} };
     var state = "loading";
     Object.defineProperty(d, "readyState", { configurable: true, get: function () { return state; } });
