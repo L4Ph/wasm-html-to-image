@@ -308,3 +308,105 @@ describe("native DOM: memory", () => {
     expect(result.after).toBeLessThanOrEqual(result.before + 5);
   });
 });
+
+describe("native DOM: events", () => {
+  it("capture, target and bubble phases in order, with stopPropagation", async () => {
+    expect(
+      await run(`
+        var log = [], E = globalThis.Event;
+        var a = d.createElement("div"), b = d.createElement("p"), c = d.createElement("b");
+        a.appendChild(b); b.appendChild(c); d.appendChild(a);
+        var on = function (n, name, cap) { n.addEventListener("x", function (e) { log.push(name + e.eventPhase); }, cap); };
+        on(d, "d", true); on(a, "a", true); on(a, "A", false); on(b, "b", true); on(b, "B", false); on(c, "c", false); on(c, "C", true);
+        var ok = c.dispatchEvent(new E("x", { bubbles: true, cancelable: true }));
+        var nb = []; a.addEventListener("y", function () { nb.push("a"); }); c.dispatchEvent(new E("y"));
+        var stop = []; b.addEventListener("z", function (e) { e.stopPropagation(); }); a.addEventListener("z", function () { stop.push("a"); });
+        c.dispatchEvent(new E("z", { bubbles: true }));
+        return [log.join(","), ok, nb.length, stop.length];`),
+    ).toEqual(["d1,a1,b1,c2,C2,B3,A3", true, 0, 0]);
+  });
+
+  it("once, removeEventListener, handleEvent objects, preventDefault and on<type>", async () => {
+    expect(
+      await run(`
+        var E = globalThis.Event, el = d.createElement("button"), n = 0, obj = 0, prop = 0, f = function () { n++; };
+        el.addEventListener("click", f, { once: true }); el.addEventListener("click", { handleEvent: function () { obj++; } });
+        el.onclick = function () { prop++; };
+        el.click(); el.click();
+        var g = function () { n += 100; }; el.addEventListener("click", g); el.removeEventListener("click", g); el.click();
+        el.addEventListener("q", function (e) { e.preventDefault(); });
+        return [n, obj, prop, el.dispatchEvent(new E("q", { cancelable: true }))];`),
+    ).toEqual([1, 3, 3, false]);
+  });
+});
+
+describe("native DOM: MutationObserver", () => {
+  it("reports childList, attributes and characterData mutations as records, in a microtask", async () => {
+    const out = (await dom.eval(`(async function () {
+      var N = __native.dom, d = N.createDocument(), root = d.createElement("div"), got = [];
+      d.appendChild(root);
+      var mo = new N.MutationObserver(function (recs) { recs.forEach(function (r) { got.push(r); }); });
+      mo.observe(root, { childList: true, attributes: true, subtree: true, attributeOldValue: true, characterData: true });
+      var p = d.createElement("p"); root.appendChild(p);
+      p.setAttribute("id", "a"); p.setAttribute("id", "b"); p.removeAttribute("id");
+      var t = d.createTextNode("x"); p.appendChild(t); t.data = "y";
+      root.removeChild(p);
+      var sync = got.length;
+      await Promise.resolve();
+      return { sync: sync, recs: got.map(function (r) { return [r.type, r.target.nodeName, r.addedNodes.length, r.removedNodes.length, r.attributeName, r.oldValue].map(String).join("|"); }) };
+    })()`)) as { sync: number; recs: string[] };
+    expect(out.sync).toBe(0);
+    expect(out.recs).toEqual(["childList|DIV|1|0|null|null", "attributes|P|0|0|id|null", "attributes|P|0|0|id|a", "attributes|P|0|0|id|b", "childList|P|1|0|null|null", "characterData|#text|0|0|null|null", "childList|DIV|0|1|null|null"]);
+  });
+
+  it("only sees what it observes, and disconnect stops it", async () => {
+    const out = (await dom.eval(`(async function () {
+      var N = __native.dom, d = N.createDocument(), a = d.createElement("div"), b = d.createElement("div"), n = 0;
+      var mo = new N.MutationObserver(function (recs) { n += recs.length; });
+      mo.observe(a, { childList: true });
+      a.appendChild(d.createElement("i")); b.appendChild(d.createElement("i"));
+      a.firstChild.appendChild(d.createElement("u"));
+      await Promise.resolve();
+      var seen = n; mo.disconnect(); a.appendChild(d.createElement("i")); await Promise.resolve();
+      return [seen, n];
+    })()`)) as number[];
+    expect(out).toEqual([1, 1]);
+  });
+});
+
+describe("native DOM: style, forms and shadow roots", () => {
+  it("style reads and writes the style attribute", async () => {
+    expect(
+      await run(`
+        var el = d.createElement("div");
+        el.style.backgroundColor = "red"; el.style.setProperty("margin-top", "4px"); el.style.color = "blue";
+        var a = el.getAttribute("style"), len = el.style.length;
+        el.style.color = ""; el.style.cssText = "width: 10px; height:5px";
+        return [a, len, el.style.marginTop, el.style.width, el.getAttribute("style"), el.style.removeProperty("width"), el.style.cssText];`),
+    ).toEqual(["background-color: red; margin-top: 4px; color: blue;", 3, "", "10px", "width: 10px; height:5px", "10px", "height: 5px;"]);
+  });
+
+  it("form controls: value, checked, disabled, form", async () => {
+    expect(
+      await run(`
+        var doc = N.parse('<form id=f><input id=i value=a><textarea id=t>hi</textarea><select id=s><option value=x>X<option value=y selected>Y</select><input id=c type=checkbox checked></form>');
+        var $ = function (id) { return doc.getElementById(id); };
+        $("i").value = "b"; $("t").value = "bye"; $("s").value = "x"; $("c").checked = false; $("i").disabled = true;
+        return [$("i").value, $("i").getAttribute("value"), $("t").value, $("t").textContent, $("s").value, $("c").checked, $("i").disabled, $("i").form === $("f")];`),
+    ).toEqual(["b", "b", "bye", "bye", "x", false, true, true]);
+  });
+
+  it("attachShadow: the root belongs to the host, not to the tree, and events go through the host", async () => {
+    expect(
+      await run(`
+        var E = globalThis.Event, host = d.createElement("div"), got = [];
+        var root = host.attachShadow({ mode: "open" }), inner = d.createElement("span");
+        root.appendChild(inner);
+        host.addEventListener("x", function () { got.push("host"); });
+        inner.dispatchEvent(new E("x", { bubbles: true }));
+        var twice; try { host.attachShadow({ mode: "open" }); twice = "no error"; } catch (e) { twice = e.name; }
+        var closed = d.createElement("p"); closed.attachShadow({ mode: "closed" });
+        return [host.shadowRoot === root, root.host === host, host.childNodes.length, host.innerHTML, got, twice, closed.shadowRoot];`),
+    ).toEqual([true, true, 0, "", ["host"], "NotSupportedError", null]);
+  });
+});
