@@ -813,7 +813,7 @@
   // HTMLCollection / NodeList are live: a read-through proxy that re-reads the C answer when any tree or attribute
   // has changed since (D.version()). It is not an Array (as in a browser) but has the length, indices, item,
   // namedItem and the array methods.
-  var liveCollection = function (compute, named, kind) {
+  var liveCollection = function (compute, named, kind, namedItem) {
     var cache = null, ver = -1;
     var arr = function () {
       var v = D.version();
@@ -826,11 +826,13 @@
         if (k === "item") return function (i) { return arr()[i] || null; };
         if (k === "namedItem") return function (name) {
           var a = arr();
+          if (namedItem) { var r = namedItem(String(name), a); if (r !== undefined) return r; }
           for (var i = 0; i < a.length; i++) if (a[i].getAttribute && (a[i].getAttribute("id") === name || a[i].getAttribute("name") === name)) return a[i];
           return null;
         };
         var a2 = arr(), v2 = a2[k];
         if (v2 === undefined && named && typeof k === "string") {
+          if (namedItem) { var r2 = namedItem(k, a2); if (r2 !== undefined) return r2; }
           for (var j = 0; j < a2.length; j++) if (a2[j].getAttribute("id") === k || a2[j].getAttribute("name") === k) return a2[j];
         }
         return typeof v2 === "function" ? v2.bind(a2) : v2;
@@ -929,9 +931,33 @@
 
   // a form's controls (by name too, as in form.elements.email) and a select's options
   var CONTROLS = "input, select, textarea, button, fieldset, object, output";
+  // a name shared by several radio buttons answers a RadioNodeList, not the first of them
+  var RadioNodeList = function RadioNodeList() { illegal(); };
+  var makeRadioNodeList = function (nodes) {
+    var list = Object.create(RadioNodeList.prototype);
+    nodes.forEach(function (n, i) { list[i] = n; });
+    list.length = nodes.length;
+    return list;
+  };
+  Object.defineProperty(RadioNodeList.prototype, "value", {
+    configurable: true,
+    get: function () { for (var i = 0; i < this.length; i++) if (this[i].checked) return this[i].value; return ""; },
+    set: function (v) {
+      v = String(v);
+      for (var i = 0; i < this.length; i++) if (this[i].value === v) { this[i].checked = true; return; }
+      if (v === "") for (var j = 0; j < this.length; j++) this[j].checked = false;
+    },
+  });
+  RadioNodeList.prototype.item = function (i) { return i >= 0 && i < this.length ? this[i] : null; };
+  RadioNodeList.prototype[Symbol.iterator] = Array.prototype[Symbol.iterator];
+  var formNamedItem = function (name, a) {
+    var matches = a.filter(function (el) { return el.getAttribute && (el.getAttribute("id") === name || el.getAttribute("name") === name); });
+    if (matches.length > 1 && matches.every(function (el) { return el.type === "radio"; })) return makeRadioNodeList(matches);
+    return undefined;
+  };
   getter(P.HTMLFormElement, "elements", function () {
     var form = this;
-    return liveCollection(function () { return Array.prototype.slice.call(form.querySelectorAll(CONTROLS)); }, true, "HTMLFormControlsCollection");
+    return liveCollection(function () { return Array.prototype.slice.call(form.querySelectorAll(CONTROLS)); }, true, "HTMLFormControlsCollection", formNamedItem);
   });
   getter(P.HTMLFormElement, "length", function () { return this.querySelectorAll(CONTROLS).length; });
   getter(P.HTMLSelectElement, "options", function () {
@@ -1736,6 +1762,8 @@
   W.HTMLFormControlsCollection = function HTMLFormControlsCollection() { illegal(); };
   Object.setPrototypeOf(W.HTMLFormControlsCollection.prototype, W.HTMLCollection.prototype);
   W.NamedNodeMap = function NamedNodeMap() { illegal(); };
+  W.RadioNodeList = RadioNodeList;
+  Object.setPrototypeOf(RadioNodeList.prototype, NodeList.prototype);
   // NOT on the window table: the bridge would classify dataset objects as a known interface, and its class
   // wrappers keep host-side sets local (for expando properties) instead of forwarding them to the page —
   // but a DOMStringMap is nothing but named properties. boot.js picks the constructor up from here and

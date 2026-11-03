@@ -45,6 +45,28 @@ describe("bridge: objects of the page from the host", () => {
     expect(() => new w.DOMTokenList()).toThrow(TypeError);
   });
 
+  it("exposes RadioNodeList for a radio group", async () => {
+    const out = await dom.eval(`(() => {
+      const f = document.createElement("form");
+      f.innerHTML = '<input type=radio name=r value=a><input type=radio name=r value=b checked><input type=text name=t value=x>';
+      document.body.appendChild(f);
+      const list = f.elements.namedItem("r");
+      const viaProp = f.elements.r;
+      const single = f.elements.namedItem("t");
+      const ans = [
+        typeof RadioNodeList, list instanceof RadioNodeList, list instanceof NodeList, list.constructor.name,
+        list.length, list.value, viaProp === list || viaProp instanceof RadioNodeList, single === f.querySelector("input[type=text]"),
+      ];
+      list.value = "a";
+      ans.push(list.value, f.querySelectorAll("input")[0].checked);
+      list.value = "";
+      ans.push(list.value);
+      f.remove();
+      return JSON.stringify(ans);
+    })()`);
+    expect(out).toBe(JSON.stringify(["function", true, true, "RadioNodeList", 2, "b", true, true, "a", true, ""]));
+  });
+
   it("exposes FileList for input.files", async () => {
     const out = await dom.eval(`(() => {
       const f = document.createElement("input"); f.type = "file";
