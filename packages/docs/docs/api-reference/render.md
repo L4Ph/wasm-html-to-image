@@ -100,12 +100,12 @@ export interface RenderResult<T = Uint8Array | string> {
 
 | オプション   | 型                                                       | 説明 |
 | ------------ | -------------------------------------------------------- | ---- |
-| `javascript` | `boolean \| { timeout?: number, settleMs?: number, waitFor?: string, engine?: "jsdom" \| "quickjs" }` | ページの `<script>` を jsdom で実行してから描画する（Node.js の `single` 入口と CLI の `--js`。任意依存の `jsdom` が要る）。`true` は `load` の後 1 秒待つ。`timeout` は全体の上限（既定 10000 ms）、`settleMs` は `load` の後の待ち時間（既定 1000 ms）、`waitFor` は待つ CSS セレクタ（指定すると `settleMs` の代わりになる）。`engine: "quickjs"` は、jsdom の代わりに QuickJS（WebAssembly）と linkedom で実行する（[Edge で使う](#edgecloudflare-workers-などでスクリプトを実行する)）。jsdom にはレイアウトも安全な隔離もないので、信頼できるページだけに使う |
+| `javascript` | `boolean \| { timeout?: number, settleMs?: number, waitFor?: string, engine?: "jsdom" \| "quickjs" }` | ページの `<script>` を jsdom で実行してから描画する（Node.js の `single` 入口と CLI の `--js`。任意依存の `jsdom` が要る）。`true` は `load` の後 1 秒待つ。`timeout` は全体の上限（既定 10000 ms）、`settleMs` は `load` の後の待ち時間（既定 1000 ms）、`waitFor` は待つ CSS セレクタ（指定すると `settleMs` の代わりになる）。`engine: "quickjs"` は、jsdom の代わりに QuickJS（WebAssembly）と C 実装の DOM で実行する（[Edge で使う](#edgecloudflare-workers-などでスクリプトを実行する)）。jsdom にはレイアウトも安全な隔離もないので、信頼できるページだけに使う |
 | `mermaid`    | `{ source, theme?, padding?, background?, accent?, mode?, directives?, onWarning?, maxLines?, maxSourceBytes? }` | Mermaid の図を描く（`value` の代わり）。図の大きさに合わせた画像になる。詳しくは [Mermaid 変換](./mermaid.md) |
 
 #### Edge（Cloudflare Workers など）でスクリプトを実行する
 
-jsdom は Node.js 専用です。Workers のように `eval` できない環境では、`wasm-html-to-image/javascript` が、QuickJS（WebAssembly）と linkedom の上でページのスクリプトを実行します。React / Next.js のクライアントも、ハイドレーションと `useEffect` まで動くことを確認しています。
+jsdom は Node.js 専用です。Workers のように `eval` できない環境では、`wasm-html-to-image/javascript` が、QuickJS（WebAssembly）と C 実装の DOM の上でページのスクリプトを実行します。React / Next.js のクライアントも、ハイドレーションと `useEffect` まで動くことを確認しています。
 
 ```ts
 import { applyJavaScript } from "wasm-html-to-image/javascript";
@@ -117,7 +117,7 @@ const { data } = await render(options);
 
 - QuickJS の wasm は、実行環境に合わせてパッケージが選びます（`package.json` の `imports` の `#quickjs-wasm`）。Workers と Vercel / Next.js の Edge ではコンパイル済みのモジュールを取り込み、Node.js と Bun ではファイルを読み、Deno とブラウザでは `fetch` します。自前のモジュールを使うなら `applyJavaScript(options, { quickjsWasm })` で渡せます。Node.js の `single` 入口では、`javascript: { engine: "quickjs" }` でも選べます。
 - エンジン本体は別パッケージの [`wasm-quickjs-dom`](https://www.npmjs.com/package/wasm-quickjs-dom)（画像とは無関係の小さな JSDOM）で、`wasm-html-to-image` の依存として入ります。`createDOM` はそのまま `wasm-quickjs-dom` からも使えます。
-- 制限: レイアウトはなく（`getBoundingClientRect` は 0）、`canvas` は使えません。`type="module"` のスクリプトは実行しますが、`import` は先に取得できる（リテラルの指定子の）ものだけです。DOM は linkedom で jsdom より小さく、QuickJS はインタプリタなので、重いページは遅くなります。
+- 制限: レイアウトはなく（`getBoundingClientRect` は 0）、`canvas` は使えません。`type="module"` のスクリプトは実行しますが、`import` は先に取得できる（リテラルの指定子の）ものだけです。DOM は C 実装で jsdom より小さく、QuickJS はインタプリタなので、重いページは遅くなります。
 - jsdom と同じく、信頼できるページだけに使ってください（スクリプトは `fetch` できます）。信頼できないページには、下の「取得の制限」を必ず付けてください。
 - `IntersectionObserver` と `ResizeObserver` は、`observe()` したときに 1 回だけ通知します（スクロールのないページ全体を見る前提なので、すべて「交差している」扱いです。遅延読み込みの中身が出てきます）。`matchMedia` は表示幅（`width`）で答えます（`min-width` / `max-width` / `orientation` など、ライトモードで動きを減らさない設定のユーザーとして答えます）。`getComputedStyle` は、要素自身の `style` と初期値を返すだけで、カスケードは計算しません。
 

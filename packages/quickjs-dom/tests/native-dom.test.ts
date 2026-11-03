@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import { createDOM } from "../src/index.js";
 
-// The page running on the native DOM (`dom: "native"`): the scenarios of dom.test.ts that touch the DOM most.
+// The page running on the native DOM (the only DOM now): the scenarios of dom.test.ts that touch the DOM most.
 
 const page = async (html: string, run: string) => {
-  const dom = await createDOM({ html }, { dom: "native", settleMs: 20 });
+  const dom = await createDOM({ html }, { settleMs: 20 });
   try {
     return { value: await dom.eval(run), html: dom.serialize(), logs: dom.logs.filter((l) => l.type === "error") };
   } finally {
@@ -12,7 +12,7 @@ const page = async (html: string, run: string) => {
   }
 };
 
-describe("createDOM with dom: native", () => {
+describe("createDOM on the native DOM", () => {
   it("runs scripts, serializes with the doctype and finds head and body in loose markup", async () => {
     const r = await page(`<!doctype html><div id=a>x</div><script>document.getElementById("a").textContent = "y"; document.body.setAttribute("data-b", "1")</script>`, `document.head.tagName + document.body.tagName`);
     expect(r.html.startsWith("<!DOCTYPE html>")).toBe(true);

@@ -5,7 +5,7 @@ import { createDOM, isPrivateHost } from "wasm-quickjs-dom";
  *
  *   GET /?url=https://example.com&wait=%23app&settle=1000
  *
- * The page's scripts run in QuickJS (WebAssembly) on a linkedom DOM, because a Worker cannot `eval`. The response is
+ * The page's scripts run in QuickJS (WebAssembly) on a DOM written in C, because a Worker cannot `eval`. The response is
  * the DOM serialized as HTML, with a `<base href>` of the page's final URL so its relative links still resolve.
  * `?debug=1` answers JSON instead: the HTML plus what happened in the page (console, errors, requests).
  *

@@ -1,53 +1,40 @@
-// Builds the page in linkedom and exposes the hooks the host drives (see src/index.ts).
-// Runs after shims.js, the Web Streams polyfill and linkedom (`globalThis.__linkedom`).
+// Builds the page on the native DOM (csrc/nativedom*.h, scripts/edge-js/nativedom.js) and exposes the hooks the host
+// drives (see src/index.ts). Runs after shims.js, the Web Streams polyfill and nativedom.js.
 (function (g) {
   var done = new WeakSet(), list = [], current = null;
 
-  g.__edgeBoot = function (html, url, width, seed, native) {
+  g.__edgeBoot = function (html, url, width, seed) {
     g.__edgeStart(seed);
-    var L = g.__linkedom;
-    var parsed = L.parseHTML(native ? "" : html);
-    var d = parsed.document, w = parsed.window;
-    if (native) {
-      // the document and the node classes are the C ones; linkedom still supplies the rest of the window (Event, URL, ...)
-      var N = g.__native.dom;
-      d = N.parse(html);
-      var win = {};
-      ["addEventListener", "removeEventListener", "dispatchEvent"].forEach(function (k) {
-        Object.defineProperty(win, k, { configurable: true, writable: true, value: N.protos.Node[k] });
-      });
-      Object.defineProperty(d, "defaultView", { configurable: true, value: win });
-      // Markup is not given the html / head / body a browser adds, so these look for them and make what is missing
-      // (as linkedom does) instead of answering null.
-      var root = function () { return d.firstElementChild; };
-      var section = function (tag) {
-        var r = root(), el = r && (r.localName === tag ? r : null);
-        if (el) return el;
-        if (r) for (var c = r.firstElementChild; c; c = c.nextElementSibling) if (c.localName === tag) return c;
-        el = r && r.querySelector(tag);
-        if (el) return el;
-        el = d.createElement(tag);
-        if (!r) d.appendChild(el);
-        else if (r.localName === "html") { if (tag === "head") r.insertBefore(el, r.firstChild); else r.appendChild(el); }
-        else d.insertBefore(el, tag === "head" ? r : null);
-        return el;
-      };
-      Object.defineProperty(d, "documentElement", { configurable: true, get: root });
-      Object.defineProperty(d, "head", { configurable: true, get: function () { return section("head"); } });
-      Object.defineProperty(d, "body", { configurable: true, get: function () { return section("body"); } });
-      Object.keys(N.ctors).forEach(function (k) { Object.defineProperty(w, k, { configurable: true, writable: true, value: N.ctors[k] }); });
-      Object.defineProperty(w, "MutationObserver", { configurable: true, writable: true, value: N.MutationObserver });
-      Object.defineProperty(w, "customElements", { configurable: true, writable: true, value: N.customElements });
-      Object.defineProperty(w, "HTMLElement", { configurable: true, writable: true, value: N.HTMLElement });
-      g.__nativeDocument = true;
-    }
-    // the window's own properties (constructors, event target, ...) become globals
-    Object.getOwnPropertyNames(w).forEach(function (k) {
-      if (!(k in g) || k === "document") {
-        try { Object.defineProperty(g, k, { configurable: true, writable: true, value: w[k] }); } catch (e) {}
-      }
+    var N = g.__native.dom;
+    var d = N.parse(html), w = N.window;
+    // the window of the document: the event target of the page's own listeners
+    var win = {};
+    ["addEventListener", "removeEventListener", "dispatchEvent"].forEach(function (k) {
+      Object.defineProperty(win, k, { configurable: true, writable: true, value: N.protos.Node[k] });
     });
-    Object.keys(L).forEach(function (k) { if (/^[A-Z]/.test(k) && !(k in g)) g[k] = L[k]; });
+    Object.defineProperty(d, "defaultView", { configurable: true, value: win });
+    // Markup is not given the html / head / body a browser adds, so these look for them and make what is missing
+    // instead of answering null.
+    var root = function () { return d.firstElementChild; };
+    var section = function (tag) {
+      var r = root(), el = r && (r.localName === tag ? r : null);
+      if (el) return el;
+      if (r) for (var c = r.firstElementChild; c; c = c.nextElementSibling) if (c.localName === tag) return c;
+      el = r && r.querySelector(tag);
+      if (el) return el;
+      el = d.createElement(tag);
+      if (!r) d.appendChild(el);
+      else if (r.localName === "html") { if (tag === "head") r.insertBefore(el, r.firstChild); else r.appendChild(el); }
+      else d.insertBefore(el, tag === "head" ? r : null);
+      return el;
+    };
+    Object.defineProperty(d, "documentElement", { configurable: true, get: root });
+    Object.defineProperty(d, "head", { configurable: true, get: function () { return section("head"); } });
+    Object.defineProperty(d, "body", { configurable: true, get: function () { return section("body"); } });
+    // the window's classes (nodes, events, DOMParser, ...) become globals
+    Object.keys(w).forEach(function (k) {
+      if (!(k in g)) Object.defineProperty(g, k, { configurable: true, writable: true, value: w[k] });
+    });
     g.document = d;
     ["window", "self", "top", "parent", "frames"].forEach(function (k) {
       Object.defineProperty(g, k, { configurable: true, writable: true, value: g });
@@ -69,9 +56,6 @@
       replaceState: function (s, t, u) { this.state = s; moveTo(u); },
       back: function () {}, forward: function () {}, go: function () {},
     };
-    ["PopStateEvent", "HashChangeEvent", "PageTransitionEvent", "ErrorEvent", "ProgressEvent"].forEach(function (n) {
-      if (!g[n]) g[n] = class extends g.Event { constructor(t, i) { super(t, i); Object.assign(this, i || {}); } };
-    });
     g.screen = { width: width, height: Math.round(width * 0.75) };
     g.innerWidth = g.outerWidth = width;
     g.innerHeight = g.outerHeight = Math.round(width * 0.75);
@@ -147,7 +131,6 @@
     }
     g.localStorage = storage();
     g.sessionStorage = storage();
-    if (!g.customElements && w.customElements) g.customElements = w.customElements;
     g.Image = function (width, height) {
       var i = d.createElement("img");
       if (width != null) i.setAttribute("width", width);
@@ -158,7 +141,6 @@
     var state = "loading";
     Object.defineProperty(d, "readyState", { configurable: true, get: function () { return state; } });
     g.__edgeSetReady = function (s) { state = s; };
-    if (!g.MutationObserver) g.MutationObserver = w.MutationObserver || class { observe() {} disconnect() {} takeRecords() { return []; } };
     // There is no scrolling and the page is meant to be seen whole, so everything is "intersecting" and lazy content
     // (infinite lists, images that load on view) gets its turn; like a browser, each observer reports once on observe().
     function observer(Name, entryOf) {
@@ -214,8 +196,6 @@
           }, 0);
         }
         __fire(event) {
-          var handler = this["on" + event.type];
-          if (typeof handler === "function") { try { handler.call(this, event); } catch (e) { g.console.error(e); } }
           this.dispatchEvent(event);
         }
       };
@@ -295,8 +275,6 @@
     var s = list[i], e = new g.Event(ok ? "load" : "error");
     try {
       s.dispatchEvent(e);
-      var h = ok ? s.onload : s.onerror;
-      if (typeof h === "function") h.call(s, e);
     } catch (x) { __host.log("error", "load handler: " + (x && x.message ? x.name + ": " + x.message + " " + (x.stack || "") : String(x))); }
   };
   g.__edgeDocumentEvents = function () {
@@ -309,7 +287,7 @@
   g.__edgeSerialize = function () {
     var d = g.document, n = d.querySelectorAll("noscript");
     for (var i = 0; i < n.length; i++) n[i].remove();
-    var html = g.__nativeDocument ? g.__native.dom.serialize(d) : d.toString();
+    var html = g.__native.dom.serialize(d);
     return html.replace(/^<!DOCTYPE\s*(?:html)?\s*>/i, "<!DOCTYPE html>");
   };
 
@@ -330,7 +308,7 @@
     }
     var n = clone.querySelectorAll("noscript");
     for (var j = 0; j < n.length; j++) n[j].remove();
-    var html = g.__nativeDocument ? g.__native.dom.serialize(clone) : clone.toString();
+    var html = g.__native.dom.serialize(clone);
     return /^<!DOCTYPE/i.test(html) ? html.replace(/^<!DOCTYPE\s*(?:html)?\s*>/i, "<!DOCTYPE html>") : "<!DOCTYPE html>" + html;
   };
   // boxes: { "<number>": [x, y, width, height] } in page coordinates; an element without a box is 0 x 0

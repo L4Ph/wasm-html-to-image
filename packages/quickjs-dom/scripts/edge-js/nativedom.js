@@ -868,4 +868,119 @@
     });
   };
   [P.Element, P.Document, P.DocumentFragment].forEach(function (p) { liveMethod(p, "getElementsByTagName"); liveMethod(p, "getElementsByClassName"); });
+
+  // ---- the rest of a window's classes: events, EventTarget, DOMParser, ShadowRoot, ... (D.window: what boot.js installs)
+  var W = (D.window = {});
+  Object.keys(D.ctors).forEach(function (k) { W[k] = D.ctors[k]; });
+  W.MutationObserver = MutationObserver;
+  W.HTMLElement = HTMLElementShim;
+  W.customElements = registry;
+
+  var Event = function Event(type, init) {
+    if (arguments.length === 0) throw new TypeError("Failed to construct 'Event': 1 argument required, but only 0 present.");
+    init = init || {};
+    this.type = String(type);
+    this.bubbles = !!init.bubbles;
+    this.cancelable = !!init.cancelable;
+    this.composed = !!init.composed;
+    this.defaultPrevented = false;
+    this.cancelBubble = false;
+    this.eventPhase = 0;
+    this.target = this.currentTarget = this.srcElement = null;
+    this.isTrusted = false;
+    this.timeStamp = typeof performance !== "undefined" ? performance.now() : Date.now();
+    Object.defineProperty(this, "_stopImmediatePropagationFlag", { value: false, writable: true });
+    Object.defineProperty(this, "_path", { value: [], writable: true });
+  };
+  [["NONE", 0], ["CAPTURING_PHASE", 1], ["AT_TARGET", 2], ["BUBBLING_PHASE", 3]].forEach(function (c) {
+    Object.defineProperty(Event, c[0], { value: c[1] });
+    Object.defineProperty(Event.prototype, c[0], { value: c[1] });
+  });
+  def(Event.prototype, "preventDefault", function () { if (this.cancelable) this.defaultPrevented = true; });
+  def(Event.prototype, "stopPropagation", function () { this.cancelBubble = true; });
+  def(Event.prototype, "stopImmediatePropagation", function () { this.cancelBubble = true; this._stopImmediatePropagationFlag = true; });
+  def(Event.prototype, "composedPath", function () { return this._path.map(function (p) { return p.currentTarget; }); });
+  def(Event.prototype, "initEvent", function (type, bubbles, cancelable) { this.type = String(type); this.bubbles = !!bubbles; this.cancelable = !!cancelable; });
+  getter(Event.prototype, "returnValue", function () { return !this.defaultPrevented; }, function (v) { if (!v) this.preventDefault(); });
+  W.Event = Event;
+
+  // subclasses: the init dictionary's members become properties (with the defaults a browser gives them)
+  var subclass = function (name, parent, defaults) {
+    var C = { [name]: function (type, init) {
+      parent.call(this, type, init);
+      init = init || {};
+      for (var k in defaults) this[k] = k in init ? init[k] : defaults[k];
+    } }[name];
+    C.prototype = Object.create(parent.prototype, { constructor: { value: C, writable: true, configurable: true } });
+    Object.setPrototypeOf(C, parent);
+    W[name] = C;
+    return C;
+  };
+  subclass("CustomEvent", Event, { detail: null });
+  var UIEvent = subclass("UIEvent", Event, { detail: 0, view: null });
+  var MouseEvent = subclass("MouseEvent", UIEvent, { screenX: 0, screenY: 0, clientX: 0, clientY: 0, pageX: 0, pageY: 0, offsetX: 0, offsetY: 0, button: 0, buttons: 0, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false, relatedTarget: null });
+  subclass("PointerEvent", MouseEvent, { pointerId: 0, width: 1, height: 1, pressure: 0, pointerType: "", isPrimary: false });
+  subclass("WheelEvent", MouseEvent, { deltaX: 0, deltaY: 0, deltaZ: 0, deltaMode: 0 });
+  subclass("KeyboardEvent", UIEvent, { key: "", code: "", location: 0, repeat: false, isComposing: false, ctrlKey: false, shiftKey: false, altKey: false, metaKey: false });
+  subclass("FocusEvent", UIEvent, { relatedTarget: null });
+  subclass("InputEvent", UIEvent, { data: null, inputType: "", isComposing: false, dataTransfer: null });
+  subclass("CompositionEvent", UIEvent, { data: "" });
+  subclass("TouchEvent", UIEvent, { touches: [], targetTouches: [], changedTouches: [], ctrlKey: false, shiftKey: false, altKey: false, metaKey: false });
+  subclass("MessageEvent", Event, { data: null, origin: "", lastEventId: "", source: null, ports: [] });
+  subclass("StorageEvent", Event, { key: null, oldValue: null, newValue: null, url: "", storageArea: null });
+  subclass("TransitionEvent", Event, { propertyName: "", elapsedTime: 0, pseudoElement: "" });
+  subclass("AnimationEvent", Event, { animationName: "", elapsedTime: 0, pseudoElement: "" });
+  subclass("ClipboardEvent", Event, { clipboardData: null });
+  subclass("DragEvent", MouseEvent, { dataTransfer: null });
+  subclass("SubmitEvent", Event, { submitter: null });
+  subclass("HashChangeEvent", Event, { oldURL: "", newURL: "" });
+  subclass("PopStateEvent", Event, { state: null });
+  subclass("PageTransitionEvent", Event, { persisted: false });
+  subclass("ErrorEvent", Event, { message: "", filename: "", lineno: 0, colno: 0, error: null });
+  subclass("ProgressEvent", Event, { lengthComputable: false, loaded: 0, total: 0 });
+
+  var EventTarget = function EventTarget() {};
+  def(EventTarget.prototype, "addEventListener", addListener);
+  def(EventTarget.prototype, "removeEventListener", removeListener);
+  def(EventTarget.prototype, "dispatchEvent", dispatch);
+  W.EventTarget = EventTarget;
+  Object.setPrototypeOf(P.Node, EventTarget.prototype);
+  Object.setPrototypeOf(D.ctors.Node, EventTarget);
+
+  // more element interfaces (the plain ones that have no members of their own here)
+  ["HTMLUnknownElement", "HTMLMediaElement", "HTMLOptGroupElement", "HTMLSlotElement", "HTMLBaseElement", "HTMLDListElement",
+   "HTMLEmbedElement", "HTMLMapElement", "HTMLObjectElement", "HTMLOutputElement", "HTMLParamElement", "HTMLPictureElement",
+   "HTMLProgressElement", "HTMLQuoteElement", "HTMLTimeElement", "HTMLTrackElement", "HTMLMeterElement", "HTMLLegendElement",
+   "HTMLDataElement", "HTMLDataListElement", "HTMLModElement", "HTMLAreaElement", "HTMLFontElement", "HTMLMenuElement"].forEach(function (name) {
+    if (W[name]) return;
+    var C = { [name]: function () { illegal(); } }[name];
+    C.prototype = Object.create(P.HTMLElement, { constructor: { value: C, writable: true, configurable: true } });
+    Object.setPrototypeOf(C, D.ctors.HTMLElement);
+    W[name] = C;
+  });
+
+  var DOMParser = function DOMParser() {};
+  def(DOMParser.prototype, "parseFromString", function (markup) { return D.parse(String(markup)); });
+  W.DOMParser = DOMParser;
+  W.XMLSerializer = function XMLSerializer() {};
+  def(W.XMLSerializer.prototype, "serializeToString", function (node) { return D.serialize(node); });
+
+  var Attr = function Attr() { illegal(); };
+  W.Attr = Attr;
+  var NodeList = function NodeList() { illegal(); };
+  W.NodeList = NodeList;
+  W.HTMLCollection = function HTMLCollection() { illegal(); };
+  W.NodeFilter = { FILTER_ACCEPT: 1, FILTER_REJECT: 2, FILTER_SKIP: 3, SHOW_ALL: 0xFFFFFFFF, SHOW_ELEMENT: 1, SHOW_ATTRIBUTE: 2, SHOW_TEXT: 4, SHOW_CDATA_SECTION: 8, SHOW_COMMENT: 128, SHOW_DOCUMENT: 256 };
+  var ShadowRoot = function ShadowRoot() { illegal(); };
+  Object.setPrototypeOf(ShadowRoot, D.ctors.DocumentFragment);
+  ShadowRoot.prototype = Object.create(P.DocumentFragment, { constructor: { value: ShadowRoot, writable: true, configurable: true } });
+  Object.defineProperty(ShadowRoot, Symbol.hasInstance, { value: function (x) { return !!x && x.nodeType === 11 && !!x.host; } });
+  W.ShadowRoot = ShadowRoot;
+  // a shadow root has an innerHTML like an element's
+  if (!Object.getOwnPropertyDescriptor(P.DocumentFragment, "innerHTML")) {
+    getter(P.DocumentFragment, "innerHTML", function () { return D.serialize(this); }, function (html) {
+      while (this.firstChild) this.removeChild(this.firstChild);
+      this.appendChild(D.parseFragment(String(html), this.ownerDocument));
+    });
+  }
 })();

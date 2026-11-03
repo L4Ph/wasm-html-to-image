@@ -7,7 +7,7 @@ GET /?url=https://example.com&wait=%23app
 → 200 text/html
 ```
 
-A Worker cannot `eval`, so the page's scripts run in QuickJS (WebAssembly) on a linkedom DOM
+A Worker cannot `eval`, so the page's scripts run in QuickJS (WebAssembly) on a DOM written in C
 ([`wasm-quickjs-dom`](../quickjs-dom)); the response is that DOM serialized as HTML. Unlike
 `cloudflare-screenshot`, it does not include the image engine, so the Worker is small. This is not a
 browser: there is no layout and no canvas, heavy pages are slow, and a page that needs a feature the

@@ -16,7 +16,9 @@ const root = join(here, "..");
 const require = createRequire(join(root, "package.json"));
 const read = (path) => readFileSync(path, "utf8");
 
-// linkedom ships a self-contained ESM bundle for workers; its trailing `export { A, B as C }` becomes an object
+// The guest has no DOM library: the DOM is csrc/nativedom*.h with scripts/edge-js/nativedom.js on top. linkedom is a
+// devDependency that only the tests use, as the reference the native DOM is compared with; its self-contained worker
+// bundle (the trailing `export { A, B as C }` becomes an object) is written to .test-gen/ for them to evaluate in a page.
 const linkedomPath = join(dirname(require.resolve("linkedom/package.json")), "worker.js");
 const linkedom = read(linkedomPath).replace(/\nexport \{([^}]*)\};?\s*$/, (_, names) => {
   const items = names.split(",").map((n) => {
@@ -26,36 +28,13 @@ const linkedom = read(linkedomPath).replace(/\nexport \{([^}]*)\};?\s*$/, (_, na
   return `\nglobalThis.__linkedom = { ${items.join(", ")} };`;
 });
 if (!linkedom.includes("globalThis.__linkedom")) throw new Error("build-edge-js: linkedom's worker bundle has no export list to rewrite");
-
-// linkedom parses HTML with htmlparser2, which is slow in an interpreter. csrc/htmlparse.h is a native port of it
-// (`__native.parseHTML(markup, handlers)`); linkedom's parser goes through this wrapper so HTML takes the native path
-// and XML, or anything the port declines (it returns false), still takes htmlparser2's.
-// Setting `globalThis.__noNativeParse` turns the native path off (tests compare the two).
-const NATIVE_PARSER = `const makeParser = (isHTML, handlers, options) => {
-  let markup = "";
-  return {
-    write(chunk) { markup += chunk; },
-    end() {
-      if (isHTML && !globalThis.__noNativeParse && globalThis.__native && globalThis.__native.parseHTML(markup, handlers) === true) return;
-      const parser = new Parser(handlers, options);
-      parser.write(markup);
-      parser.end();
-    }
-  };
-};
-const parseFromString = (document, isHTML, markupLanguage) => {`;
-const parserCall = "const content = new Parser({";
-const parserHead = "const parseFromString = (document, isHTML, markupLanguage) => {";
-if (linkedom.split(parserCall).length !== 2 || linkedom.split(parserHead).length !== 2) {
-  throw new Error("build-edge-js: linkedom's parseFromString no longer looks the way the native parser hook expects");
-}
-const linkedomNative = linkedom.replace(parserCall, "const content = makeParser(isHTML, {").replace(parserHead, NATIVE_PARSER);
+mkdirSync(join(root, ".test-gen"), { recursive: true });
+writeFileSync(join(root, ".test-gen", "linkedom-ref.js"), `(function () {\n${linkedom}\n})();`);
 
 const streamsPath = join(dirname(require.resolve("web-streams-polyfill/package.json")), "dist", "polyfill.js");
 const parts = [
   read(join(here, "edge-js", "shims.js")),
   read(streamsPath),
-  `(function () {\n${linkedomNative}\n})();`,
   read(join(here, "edge-js", "boot.js")),
   read(join(here, "edge-js", "nativedom.js")),
 ];

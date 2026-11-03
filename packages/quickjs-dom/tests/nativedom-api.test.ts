@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDOM, type QuickJSDOM } from "../src/index.js";
+import { loadLinkedomRef } from "./linkedom-ref.js";
 
 // What the native DOM (csrc/nativedom*.h) must do as the DOM specification says, where linkedom is not a reference
 // (or has nothing to compare): each test runs a snippet in the page and checks what it returns.
@@ -7,6 +8,7 @@ import { createDOM, type QuickJSDOM } from "../src/index.js";
 let dom: QuickJSDOM;
 beforeAll(async () => {
   dom = await createDOM({ html: "<p>" }, { settleMs: 0 });
+  await loadLinkedomRef(dom);
 });
 afterAll(() => dom.close());
 

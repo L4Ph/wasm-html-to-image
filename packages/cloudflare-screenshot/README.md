@@ -6,7 +6,7 @@ A Cloudflare Worker that turns a web page into an image, **its scripts included*
 GET /?url=https://example.com&width=1280&format=png
 ```
 
-A Worker cannot `eval`, so the page's scripts run in QuickJS (WebAssembly) on a linkedom DOM
+A Worker cannot `eval`, so the page's scripts run in QuickJS (WebAssembly) on a DOM written in C
 (`wasm-html-to-image/javascript`). The result is rendered by the same engine as the rest of the library.
 This is not a browser: there is no layout and no canvas, heavy pages are slow, and a page that needs
 a feature the engine lacks renders as it was before its scripts ran. Pages that build their content with

@@ -6,7 +6,7 @@ import { applyJavaScript } from "wasm-html-to-image/javascript";
  *
  *   GET /?url=https://example.com&width=1280&format=png
  *
- * The page's scripts run in QuickJS (WebAssembly) on a linkedom DOM, because a Worker cannot `eval`.
+ * The page's scripts run in QuickJS (WebAssembly) on a DOM written in C, because a Worker cannot `eval`.
  * Set ALLOW_PRIVATE_HOSTS=1 (a `.dev.vars` entry, for local tests only) to let it reach localhost and private addresses.
  * That is not a browser: there is no layout, no canvas, and heavy pages are slow. Static HTML renders as is.
  */

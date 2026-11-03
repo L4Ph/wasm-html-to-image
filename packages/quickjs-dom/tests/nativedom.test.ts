@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createDOM, type QuickJSDOM } from "../src/index.js";
+import { loadLinkedomRef } from "./linkedom-ref.js";
 
 // The native DOM (csrc/nativedom*.h) against linkedom: the same random program of tree edits is run on both, and after
 // every step the two trees must look the same. This is the net the native DOM is built under.
@@ -7,6 +8,7 @@ import { createDOM, type QuickJSDOM } from "../src/index.js";
 let dom: QuickJSDOM;
 beforeAll(async () => {
   dom = await createDOM({ html: "<p>" }, { settleMs: 0 });
+  await loadLinkedomRef(dom);
 });
 afterAll(() => dom.close());
 
@@ -25,6 +27,7 @@ async function lockstep(seed: number, programs: number, steps: number): Promise<
   return (await dom.eval(
     (seed0: number, programs: number, steps: number) => {
       const N = (globalThis as any).__native.dom;
+      const ref = (globalThis as any).__linkedom.parseHTML("<p>").document;
       const TAGS = ["div", "span", "p", "a", "b", "ul", "li", "section", "em", "table", "td", "br", "img"];
       const VOID = ["br", "img"];
       const TEXTS = ["hello", "a < b & c > d", "x y", "", " ", "quote \" and ' marks", "日本語", "line\nbreak"];
@@ -44,7 +47,7 @@ async function lockstep(seed: number, programs: number, steps: number): Promise<
         const ndoc = N.createDocument();
         const L: any[] = [];
         const NN: any[] = [];
-        const lroot = document.createElement("div");
+        const lroot = ref.createElement("div");
         const nroot = ndoc.createElement("div");
         L.push(lroot);
         NN.push(nroot);
@@ -72,18 +75,18 @@ async function lockstep(seed: number, programs: number, steps: number): Promise<
             if (kind === 0) {
               const tag = pick(TAGS);
               op = `createElement ${tag}`;
-              add(document.createElement(tag), ndoc.createElement(tag));
+              add(ref.createElement(tag), ndoc.createElement(tag));
             } else if (kind === 1) {
               const t = pick(TEXTS);
               op = `createTextNode ${JSON.stringify(t)}`;
-              add(document.createTextNode(t), ndoc.createTextNode(t));
+              add(ref.createTextNode(t), ndoc.createTextNode(t));
             } else if (kind === 2) {
               op = "createDocumentFragment";
-              add(document.createDocumentFragment(), ndoc.createDocumentFragment());
+              add(ref.createDocumentFragment(), ndoc.createDocumentFragment());
             } else if (kind === 3) {
               const t = pick(TEXTS);
               op = `createComment ${JSON.stringify(t)}`;
-              add(document.createComment(t), ndoc.createComment(t));
+              add(ref.createComment(t), ndoc.createComment(t));
             } else if (kind <= 7) {
               // append / insertBefore a node into a parent that is not void and not inside the node
               const ti = rnd(L.length);
