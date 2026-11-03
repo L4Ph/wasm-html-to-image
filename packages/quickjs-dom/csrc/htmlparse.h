@@ -751,7 +751,7 @@ static void h_state_in_special_tag(HP *p, int c) {
     if ((c | 0x20) == p->curSeq[p->seqIndex]) {
         p->seqIndex += 1;
     } else if (p->seqIndex == 0) {
-        if (p->curSeq == SEQ_TITLE_END) {
+        if (p->curSeq == SEQ_TITLE_END || p->curSeq == SEQ_TEXTAREA_END) { /* RCDATA: character references are decoded */
             if (c == '&') h_start_entity(p);
         } else if (h_ff(p, '<')) p->seqIndex = 1;
     } else {

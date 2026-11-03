@@ -92,6 +92,10 @@ export class Bridge {
   private readonly fnIds = new Map<Function, number>();
   private readonly fnById = new Map<number, Function>();
   private nextFn = 1;
+  // ids given to the page since the functions were last sorted out (one may be in a request on its way)
+  private readonly fnUsed = new Set<number>();
+  private fnLimit = 256;
+  private pruning = false;
 
   constructor(vm: BridgeVM, options: BridgeOptions = {}) {
     this.vm = vm;
@@ -131,6 +135,30 @@ export class Bridge {
 
   // ---- calls into the guest ----
 
+  /** The number of functions of the host that the page may still call (for tests that look for leaks). */
+  registeredFunctions(): number {
+    return this.fnById.size;
+  }
+
+  /** Forget the functions the page no longer holds, once there are many. */
+  private pruneFunctions(): void {
+    if (this.pruning || this.closed || this.fnById.size < this.fnLimit) return;
+    this.pruning = true;
+    try {
+      const ids = [...this.fnById.keys()].filter((id) => !this.fnUsed.has(id));
+      const dead = ids.length ? (this.sendJ(["deadfns", ids]) as number[]) : [];
+      for (const id of dead) {
+        const fn = this.fnById.get(id);
+        if (fn) this.fnIds.delete(fn);
+        this.fnById.delete(id);
+      }
+      this.fnUsed.clear();
+      this.fnLimit = Math.max(256, this.fnById.size * 2);
+    } finally {
+      this.pruning = false;
+    }
+  }
+
   private sendReleases(): void {
     if (this.released.length === 0 || this.closed) return;
     const list = this.released;
@@ -153,6 +181,7 @@ export class Bridge {
   private send(request: string, noReleases = false): unknown {
     if (this.closed) throw new Error("The page has been closed.");
     if (!noReleases && this.released.length) this.sendReleases();
+    if (this.fnById.size >= this.fnLimit) this.pruneFunctions();
     const outer = this.depth === 0;
     if (outer && this.timeout) this.vm.setDeadline(Date.now() + this.timeout);
     this.depth++;
@@ -281,6 +310,7 @@ export class Bridge {
           this.fnIds.set(v, id);
           this.fnById.set(id, v);
         }
+        this.fnUsed.add(id);
         return { $: "f", i: id };
       }
       default: {

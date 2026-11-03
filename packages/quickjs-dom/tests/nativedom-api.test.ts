@@ -608,3 +608,73 @@ describe("native DOM: members real pages call", () => {
     ).toEqual(["c1,c2", "p", 3, 1, null, "New", "9", 0, "9"]);
   });
 });
+
+describe("markup set inside raw-text elements", () => {
+  const code = "for(r=0;r<t;r++)x;n>3&&q<z>1";
+  it("script, style, textarea and title take it as text; .text reads it back", async () => {
+    const dom = await createDOM({ html: "<body></body>" }, { settleMs: 0 });
+    try {
+      const w = dom.bridge().window as any;
+      const d = w.document;
+      for (const tag of ["script", "style", "textarea", "title", "xmp", "noscript"]) {
+        const e = d.createElement(tag);
+        e.innerHTML = code;
+        expect([tag, e.childNodes.length, e.textContent]).toEqual([tag, 1, code]);
+        e.insertAdjacentHTML("beforeend", "<b>x</b>");
+        expect(e.textContent).toBe(code + "<b>x</b>");
+      }
+      const t = d.createElement("textarea");
+      t.innerHTML = "a &amp; b";
+      expect(t.textContent).toBe("a & b"); // character references are decoded in the text of a textarea
+      const s = d.createElement("script");
+      s.text = code;
+      expect([s.textContent, s.text]).toEqual([code, code]);
+      const o = d.createElement("option");
+      o.innerHTML = "  a \n b ";
+      expect(o.text).toBe("a b");
+    } finally {
+      dom.close();
+    }
+  });
+});
+
+describe("media elements", () => {
+  it("are elements without a playable source: paused, empty, and play() is refused", async () => {
+    const dom = await createDOM({ html: "<body><video id=v muted autoplay></video><audio id=a></audio></body>" }, { settleMs: 0 });
+    try {
+      const w = dom.bridge().window as any;
+      const d = w.document;
+      const v = d.getElementById("v");
+      expect(v instanceof w.HTMLMediaElement).toBe(true);
+      expect(v instanceof w.HTMLVideoElement).toBe(true);
+      expect(d.getElementById("a") instanceof w.HTMLMediaElement).toBe(true);
+      expect([v.muted, v.defaultMuted, v.autoplay, v.paused, v.ended, v.readyState, v.volume, v.currentTime, v.canPlayType("video/mp4")]).toEqual([true, true, true, true, false, 0, 1, 0, ""]);
+      expect(Number.isNaN(v.duration)).toBe(true);
+      v.muted = false;
+      v.volume = 0.5;
+      v.currentTime = 3;
+      expect([v.muted, v.volume, v.currentTime]).toEqual([false, 0.5, 3]);
+      expect(() => (v.volume = 2)).toThrow(/range/);
+      expect(v.buffered.length).toBe(0);
+      expect(v.playsInline).toBe(false);
+      v.playsInline = true;
+      expect(v.getAttribute("playsinline")).toBe("");
+      v.pause();
+      v.load();
+    } finally {
+      dom.close();
+    }
+  });
+});
+
+describe("character references in RCDATA", () => {
+  it("a textarea's text is decoded like a title's", async () => {
+    const dom = await createDOM({ html: "<!doctype html><title>A &amp; B</title><body><textarea id=t>x &amp; y &lt;b&gt;</textarea><script id=s>a &amp; b</script></body>" }, { settleMs: 0 });
+    try {
+      const d = dom.bridge().window.document as any;
+      expect([d.title, d.getElementById("t").value, d.getElementById("s").textContent]).toEqual(["A & B", "x & y <b>", "a &amp; b"]);
+    } finally {
+      dom.close();
+    }
+  });
+});

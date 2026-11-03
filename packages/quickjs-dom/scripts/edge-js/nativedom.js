@@ -83,7 +83,35 @@
   };
   def(P.Element, "insertAdjacentElement", function (where, el) { return adjacent(this, where, el); });
   def(P.Element, "insertAdjacentText", function (where, text) { adjacent(this, where, this.ownerDocument.createTextNode(String(text))); });
-  def(P.Element, "insertAdjacentHTML", function (where, html) { adjacent(this, where, D.parseFragment(String(html), this.ownerDocument)); });
+  // HTML set inside script, style, textarea ...: their content is text, not markup (what a "<" starts there is not a tag)
+  var RAW_TEXT = { script: 1, style: 1, xmp: 1, iframe: 1, noembed: 1, noframes: 1, noscript: 1, plaintext: 1, textarea: 2, title: 2 };
+  var rawTextOf = function (ctx, html) {
+    var kind = ctx && ctx.nodeType === 1 ? RAW_TEXT[ctx.localName] : 0;
+    if (!kind) return null;
+    if (kind === 1) return html;
+    var tmp = D.parseFragment("<" + ctx.localName + ">" + html + "</" + ctx.localName + ">", ctx.ownerDocument); // character references
+    return tmp.firstChild ? tmp.firstChild.textContent : "";
+  };
+  (function () {
+    var d = Object.getOwnPropertyDescriptor(P.Element, "innerHTML");
+    if (!d || !d.set) return;
+    var set = d.set;
+    Object.defineProperty(P.Element, "innerHTML", {
+      get: d.get, configurable: true,
+      set: function (v) {
+        var text = RAW_TEXT[this.localName] ? rawTextOf(this, v === null ? "" : String(v)) : null;
+        if (text === null) set.call(this, v); else this.textContent = text;
+      },
+    });
+  })();
+  def(P.Element, "insertAdjacentHTML", function (where, html) {
+    html = String(html);
+    var w = String(where).toLowerCase(), text = rawTextOf(w === "beforebegin" || w === "afterend" ? this.parentNode : this, html);
+    var frag;
+    if (text === null) frag = D.parseFragment(html, this.ownerDocument);
+    else { frag = this.ownerDocument.createDocumentFragment(); if (text) frag.appendChild(this.ownerDocument.createTextNode(text)); }
+    adjacent(this, where, frag);
+  });
 
   var outerDesc = Object.getOwnPropertyDescriptor(P.Element, "outerHTML");
   getter(P.Element, "outerHTML", outerDesc.get, function (html) {
@@ -832,6 +860,11 @@
   }, function (v) { this.setAttribute("type", String(v)); });
   getter(P.HTMLSelectElement, "type", function () { return this.hasAttribute("multiple") ? "select-multiple" : "select-one"; });
   getter(P.HTMLTextAreaElement, "type", function () { return "textarea"; });
+  // .text is the text of the element (an option's with its white space collapsed)
+  ["HTMLScriptElement", "HTMLAnchorElement", "HTMLTitleElement"].forEach(function (name) {
+    getter(P[name], "text", function () { return this.textContent; }, function (v) { this.textContent = String(v); });
+  });
+  getter(P.HTMLOptionElement, "text", function () { return this.textContent.replace(/[ \t\n\f\r]+/g, " ").trim(); }, function (v) { this.textContent = String(v); });
 
   // an option that is selected deselects the others of a single select
   getter(P.HTMLOptionElement, "selected", function () { return this.hasAttribute("selected"); }, function (v) {
@@ -902,7 +935,6 @@
       return chosen;
     });
   });
-  getter(P.HTMLOptionElement, "text", function () { return this.textContent; });
   getter(P.HTMLOptionElement, "index", function () {
     var select = this.closest("select");
     return select ? Array.prototype.indexOf.call(select.querySelectorAll("option"), this) : 0;
@@ -933,19 +965,231 @@
       if (d) Object.defineProperty(P[name], prop, d);
     });
   });
-  // SVG is told by the namespace, not by tag, so these answer instanceof by it
-  ["SVGElement", "SVGSVGElement", "SVGGraphicsElement"].forEach(function (name) {
+  // SVG. The elements of SVG's own tags (svg, g, path, rect, ...) get their interfaces by tag like HTML's; an element the
+  // HTML tags overlap with (a, script, style, title) stays an HTML one. SVGElement and SVGGraphicsElement also answer
+  // instanceof by the namespace, so that those count too. (The interfaces sit on HTMLElement's prototype, which brings
+  // style, dataset, focus and the on<event> properties that SVG elements have as well.)
+  var svgClass = function (name, parent, tags) {
     var C = { [name]: function () { illegal(); } }[name];
-    C.prototype = Object.create(P.Element, { constructor: { value: C, writable: true, configurable: true } });
-    Object.setPrototypeOf(C, D.ctors.Element);
-    Object.defineProperty(C, Symbol.hasInstance, {
-      value: function (x) {
-        if (!x || x.nodeType !== 1 || x.namespaceURI !== "http://www.w3.org/2000/svg") return false;
-        return name === "SVGSVGElement" ? x.localName === "svg" : true;
-      },
-    });
+    C.prototype = Object.create(parent ? P[parent] : P.HTMLElement, { constructor: { value: C, writable: true, configurable: true } });
+    Object.setPrototypeOf(C, parent ? D.ctors[parent] : D.ctors.HTMLElement);
+    Object.defineProperty(C, Symbol.hasInstance, { value: Function.prototype[Symbol.hasInstance], configurable: true }); // not the parent's
     D.ctors[name] = C;
+    P[name] = C.prototype;
+    (tags || []).forEach(function (t) { D.setTagProto(t, C.prototype); });
+    return C;
+  };
+  var SVG_URI = "http://www.w3.org/2000/svg";
+  ["SVGElement", "SVGGraphicsElement"].forEach(function (name) {
+    var C = svgClass(name, name === "SVGElement" ? null : "SVGElement");
+    Object.defineProperty(C, Symbol.hasInstance, {
+      value: function (x) { return !!x && x.nodeType === 1 && x.namespaceURI === SVG_URI; },
+    });
   });
+  svgClass("SVGSVGElement", "SVGGraphicsElement", ["svg"]);
+  Object.defineProperty(D.ctors.SVGSVGElement, Symbol.hasInstance, {
+    value: function (x) { return !!x && x.nodeType === 1 && x.namespaceURI === SVG_URI && x.localName === "svg"; },
+  });
+  svgClass("SVGGElement", "SVGGraphicsElement", ["g"]);
+  svgClass("SVGUseElement", "SVGGraphicsElement", ["use"]);
+  svgClass("SVGImageElement", "SVGGraphicsElement", ["image"]);
+  svgClass("SVGForeignObjectElement", "SVGGraphicsElement", ["foreignobject"]);
+  svgClass("SVGTextElement", "SVGGraphicsElement", ["text"]);
+  svgClass("SVGTSpanElement", "SVGGraphicsElement", ["tspan"]);
+  svgClass("SVGGeometryElement", "SVGGraphicsElement");
+  [["SVGPathElement", "path"], ["SVGRectElement", "rect"], ["SVGCircleElement", "circle"], ["SVGEllipseElement", "ellipse"],
+    ["SVGLineElement", "line"], ["SVGPolylineElement", "polyline"], ["SVGPolygonElement", "polygon"]].forEach(function (e) { svgClass(e[0], "SVGGeometryElement", [e[1]]); });
+  [["SVGDefsElement", "defs"], ["SVGSymbolElement", "symbol"], ["SVGClipPathElement", "clippath"], ["SVGMaskElement", "mask"],
+    ["SVGLinearGradientElement", "lineargradient"], ["SVGRadialGradientElement", "radialgradient"], ["SVGStopElement", "stop"],
+    ["SVGPatternElement", "pattern"], ["SVGMarkerElement", "marker"], ["SVGFilterElement", "filter"], ["SVGDescElement", "desc"],
+    ["SVGMetadataElement", "metadata"]].forEach(function (e) { svgClass(e[0], "SVGElement", [e[1]]); });
+
+  // what scripts read of SVG elements: animated attributes (className, href, x / y / width / height ...), the owner and
+  // viewport, and geometry (getBBox, getTotalLength, getPointAtLength) worked out from the attributes
+  (function () {
+    var SE = P.SVGElement, SG = P.SVGGraphicsElement;
+    var animated = function (read, write) {
+      var o = {};
+      Object.defineProperty(o, "baseVal", { get: read, set: write, enumerable: true });
+      Object.defineProperty(o, "animVal", { get: read, enumerable: true });
+      return o;
+    };
+    getter(SE, "className", function () {
+      var el = this;
+      return animated(function () { return el.getAttribute("class") || ""; }, function (v) { el.setAttribute("class", String(v)); });
+    }, function (v) { this.setAttribute("class", String(v)); });
+    var UNITS = [[/%$/, 2, 0], [/em$/, 3, 16], [/ex$/, 4, 8], [/px$/, 5, 1], [/cm$/, 6, 96 / 2.54], [/mm$/, 7, 96 / 25.4], [/in$/, 8, 96], [/pt$/, 9, 4 / 3], [/pc$/, 10, 16]];
+    var unitOf = function (s) {
+      for (var i = 0; i < UNITS.length; i++) if (UNITS[i][0].test(s)) return UNITS[i];
+      return [null, 1, 1];
+    };
+    var length = function (el, attr) {
+      var text = function () { var s = el.getAttribute(attr); return s === null ? "0" : s.trim(); };
+      var num = function () { var n = parseFloat(text()); return isFinite(n) ? n : 0; };
+      var len = {};
+      Object.defineProperties(len, {
+        value: { get: function () { return unitOf(text())[1] === 2 ? 0 : num() * unitOf(text())[2]; }, set: function (v) { el.setAttribute(attr, String(v)); }, enumerable: true },
+        valueInSpecifiedUnits: { get: num, set: function (v) { el.setAttribute(attr, String(v) + text().replace(/^[-+.\d]+(e[-+]?\d+)?/i, "")); }, enumerable: true },
+        valueAsString: { get: text, set: function (v) { el.setAttribute(attr, String(v)); }, enumerable: true },
+        unitType: { get: function () { return unitOf(text())[1]; }, enumerable: true },
+      });
+      return len;
+    };
+    ["x", "y", "width", "height", "cx", "cy", "r", "rx", "ry", "x1", "x2", "y1", "y2"].forEach(function (attr) {
+      getter(SE, attr, function () { var l = length(this, attr); return { baseVal: l, animVal: l }; });
+    });
+    getter(SE, "viewBox", function () {
+      var el = this;
+      var read = function () {
+        var p = (el.getAttribute("viewBox") || "").trim().split(/[\s,]+/).map(parseFloat);
+        return p.length === 4 && p.every(isFinite) ? { x: p[0], y: p[1], width: p[2], height: p[3] } : { x: 0, y: 0, width: 0, height: 0 };
+      };
+      return animated(read);
+    });
+    getter(SE, "href", function () {
+      var el = this;
+      return animated(function () { var v = el.getAttribute("href"); return v !== null ? v : el.getAttribute("xlink:href") || ""; }, function (v) { el.setAttribute("href", String(v)); });
+    });
+    getter(SE, "ownerSVGElement", function () {
+      for (var n = this.parentNode; n && n.nodeType === 1; n = n.parentNode) if (n.localName === "svg") return n;
+      return null;
+    });
+    getter(SE, "viewportElement", function () {
+      for (var n = this.parentNode; n && n.nodeType === 1; n = n.parentNode) if (n.localName === "svg") return n;
+      return null;
+    });
+    var matrix = function () {
+      var m = { a: 1, b: 0, c: 0, d: 1, e: 0, f: 0 };
+      m.inverse = m.multiply = m.translate = m.scale = m.rotate = function () { return matrix(); };
+      return m;
+    };
+    var point = function (x, y) {
+      return { x: x, y: y, matrixTransform: function () { return point(this.x, this.y); } };
+    };
+    def(SG, "getCTM", function () { return matrix(); });
+    def(SG, "getScreenCTM", function () { return matrix(); });
+    getter(SG, "transform", function () {
+      var list = { numberOfItems: 0, length: 0, clear: function () {}, consolidate: function () { return null; }, getItem: function () { throw new RangeError("Index out of range"); } };
+      return { baseVal: list, animVal: list };
+    });
+    def(P.SVGSVGElement, "createSVGPoint", function () { return point(0, 0); });
+    def(P.SVGSVGElement, "createSVGMatrix", function () { return matrix(); });
+    def(P.SVGSVGElement, "createSVGNumber", function () { return { value: 0 }; });
+    def(P.SVGSVGElement, "getElementById", function (id) { return this.querySelector("#" + (globalThis.CSS && CSS.escape ? CSS.escape(String(id)) : String(id))); });
+    def(P.SVGSVGElement, "getCurrentTime", function () { return 0; });
+    ["pauseAnimations", "unpauseAnimations", "suspendRedraw", "unsuspendRedraw", "forceRedraw"].forEach(function (n) { def(P.SVGSVGElement, n, function () { return 0; }); });
+    getter(P.SVGSVGElement, "currentScale", function () { return 1; });
+
+    // ---- geometry
+    var attrNum = function (el, a) { var n = parseFloat(el.getAttribute(a)); return isFinite(n) ? n : 0; };
+    var pairs = function (s) {
+      var n = (s || "").trim().split(/[\s,]+/).map(parseFloat).filter(isFinite), out = [];
+      for (var i = 0; i + 1 < n.length; i += 2) out.push({ x: n[i], y: n[i + 1] });
+      return out;
+    };
+    // a path flattened: points, each with m true when it starts a subpath
+    var pathPoints = function (d) {
+      var toks = String(d || "").match(/[a-zA-Z]|[-+]?(?:\d+\.?\d*|\.\d+)(?:e[-+]?\d+)?/gi) || [];
+      var i = 0, cmd = "", x = 0, y = 0, sx = 0, sy = 0, pts = [], c2 = null, q1 = null, guard = 0;
+      var num = function () { var n = parseFloat(toks[i++]); return isFinite(n) ? n : 0; };
+      var add = function (a, b) { pts.push({ x: a, y: b }); x = a; y = b; };
+      var cubic = function (x1, y1, x2, y2, x3, y3) {
+        var x0 = x, y0 = y;
+        for (var t = 1; t <= 16; t++) {
+          var u = t / 16, v = 1 - u;
+          add(v * v * v * x0 + 3 * v * v * u * x1 + 3 * v * u * u * x2 + u * u * u * x3, v * v * v * y0 + 3 * v * v * u * y1 + 3 * v * u * u * y2 + u * u * u * y3);
+        }
+      };
+      var quad = function (x1, y1, x2, y2) { cubic(x + 2 / 3 * (x1 - x), y + 2 / 3 * (y1 - y), x2 + 2 / 3 * (x1 - x2), y2 + 2 / 3 * (y1 - y2), x2, y2); };
+      while (i < toks.length && guard++ < 100000) {
+        if (/^[a-zA-Z]$/.test(toks[i])) cmd = toks[i++];
+        else if (cmd === "M") cmd = "L";
+        else if (cmd === "m") cmd = "l";
+        var rel = cmd !== cmd.toUpperCase(), K = cmd.toUpperCase(), ox = rel ? x : 0, oy = rel ? y : 0, p, q, r, s, t2, u2;
+        var keepC = false, keepQ = false;
+        if (K === "M") { x = ox + num(); y = oy + num(); sx = x; sy = y; pts.push({ x: x, y: y, m: true }); }
+        else if (K === "L") add(ox + num(), oy + num());
+        else if (K === "H") add(ox + num(), y);
+        else if (K === "V") add(x, oy + num());
+        else if (K === "C") { p = ox + num(); q = oy + num(); r = ox + num(); s = oy + num(); t2 = ox + num(); u2 = oy + num(); cubic(p, q, r, s, t2, u2); c2 = [r, s]; keepC = true; }
+        else if (K === "S") { var rx0 = c2 ? 2 * x - c2[0] : x, ry0 = c2 ? 2 * y - c2[1] : y; r = ox + num(); s = oy + num(); t2 = ox + num(); u2 = oy + num(); cubic(rx0, ry0, r, s, t2, u2); c2 = [r, s]; keepC = true; }
+        else if (K === "Q") { p = ox + num(); q = oy + num(); r = ox + num(); s = oy + num(); quad(p, q, r, s); q1 = [p, q]; keepQ = true; }
+        else if (K === "T") { var tx = q1 ? 2 * x - q1[0] : x, ty = q1 ? 2 * y - q1[1] : y; r = ox + num(); s = oy + num(); quad(tx, ty, r, s); q1 = [tx, ty]; keepQ = true; }
+        else if (K === "A") { num(); num(); num(); num(); num(); add(ox + num(), oy + num()); } // an arc is taken as its chord
+        else if (K === "Z") { add(sx, sy); }
+        else { i++; }
+        if (!keepC) c2 = null;
+        if (!keepQ) q1 = null;
+        if (K === "Z" && i < toks.length && !/^[a-zA-Z]$/.test(toks[i])) cmd = "L";
+      }
+      return pts;
+    };
+    var shapePoints = function (el) {
+      var t = el.localName, n = function (a) { return attrNum(el, a); }, pts;
+      if (t === "rect") { var x = n("x"), y = n("y"), w = n("width"), h = n("height"); return [{ x: x, y: y, m: true }, { x: x + w, y: y }, { x: x + w, y: y + h }, { x: x, y: y + h }, { x: x, y: y }]; }
+      if (t === "line") return [{ x: n("x1"), y: n("y1"), m: true }, { x: n("x2"), y: n("y2") }];
+      if (t === "polyline" || t === "polygon") {
+        pts = pairs(el.getAttribute("points"));
+        if (pts.length) pts[0].m = true;
+        if (t === "polygon" && pts.length) pts.push({ x: pts[0].x, y: pts[0].y });
+        return pts;
+      }
+      if (t === "path") return pathPoints(el.getAttribute("d"));
+      if (t === "circle" || t === "ellipse") {
+        var rx = t === "circle" ? n("r") : n("rx"), ry = t === "circle" ? n("r") : n("ry"), cx = n("cx"), cy = n("cy"), out = [];
+        for (var k = 0; k <= 64; k++) out.push({ x: cx + rx * Math.cos(k / 32 * Math.PI), y: cy + ry * Math.sin(k / 32 * Math.PI), m: k === 0 });
+        return out;
+      }
+      return [];
+    };
+    var lengthOf = function (pts) {
+      var sum = 0;
+      for (var i = 1; i < pts.length; i++) if (!pts[i].m) sum += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+      return sum;
+    };
+    var GEOMETRY = ["rect", "line", "polyline", "polygon", "path", "circle", "ellipse"];
+    def(P.SVGGeometryElement, "getTotalLength", function () {
+      var t = this.localName;
+      if (t === "circle") return 2 * Math.PI * attrNum(this, "r");
+      if (t === "ellipse") { var a = attrNum(this, "rx"), b = attrNum(this, "ry"), h = Math.pow(a - b, 2) / Math.pow(a + b, 2); return a + b === 0 ? 0 : Math.PI * (a + b) * (1 + 3 * h / (10 + Math.sqrt(4 - 3 * h))); }
+      return lengthOf(shapePoints(this));
+    });
+    def(P.SVGGeometryElement, "getPointAtLength", function (len) {
+      var pts = shapePoints(this), left = Math.max(0, +len || 0), last = pts.length ? point(pts[0].x, pts[0].y) : point(0, 0);
+      for (var i = 1; i < pts.length; i++) {
+        if (pts[i].m) { last = point(pts[i].x, pts[i].y); continue; }
+        var seg = Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+        if (left <= seg && seg > 0) { var f = left / seg; return point(pts[i - 1].x + (pts[i].x - pts[i - 1].x) * f, pts[i - 1].y + (pts[i].y - pts[i - 1].y) * f); }
+        left -= seg;
+        last = point(pts[i].x, pts[i].y);
+      }
+      return last;
+    });
+    var box = function (x, y, w, h) { return { x: x, y: y, width: w, height: h, top: y, left: x, right: x + w, bottom: y + h }; };
+    def(SG, "getBBox", function () {
+      var t = this.localName;
+      if (GEOMETRY.indexOf(t) >= 0) {
+        var pts = shapePoints(this);
+        if (!pts.length) return box(0, 0, 0, 0);
+        var x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+        pts.forEach(function (p) { x0 = Math.min(x0, p.x); y0 = Math.min(y0, p.y); x1 = Math.max(x1, p.x); y1 = Math.max(y1, p.y); });
+        return box(x0, y0, x1 - x0, y1 - y0);
+      }
+      if (t === "g" || t === "svg" || t === "a") { // the union of the children (their transforms are not applied)
+        var ax0 = Infinity, ay0 = Infinity, ax1 = -Infinity, ay1 = -Infinity, any = false;
+        for (var c = this.firstElementChild; c; c = c.nextElementSibling) {
+          if (typeof c.getBBox !== "function") continue;
+          var b = c.getBBox();
+          if (!b.width && !b.height && GEOMETRY.indexOf(c.localName) < 0) continue;
+          any = true;
+          ax0 = Math.min(ax0, b.x); ay0 = Math.min(ay0, b.y); ax1 = Math.max(ax1, b.x + b.width); ay1 = Math.max(ay1, b.y + b.height);
+        }
+        return any ? box(ax0, ay0, ax1 - ax0, ay1 - ay0) : box(0, 0, 0, 0);
+      }
+      if (t === "image" || t === "foreignobject" || t === "use") return box(attrNum(this, "x"), attrNum(this, "y"), attrNum(this, "width"), attrNum(this, "height"));
+      return box(attrNum(this, "x"), attrNum(this, "y"), 0, 0); // text: no layout
+    });
+  })();
 
   // Namespaces, as far as pages need them: an element is SVG or MathML by the root it sits in (or was made with
   // createElementNS), and the *NS attribute methods work on qualified names.
@@ -1079,6 +1323,62 @@
   W.EventTarget = EventTarget;
   Object.setPrototypeOf(P.Node, EventTarget.prototype);
   Object.setPrototypeOf(D.ctors.Node, EventTarget);
+
+  // Media elements. Nothing is decoded or played: the state a page reads is that of an element that has no usable source
+  // (paused, duration NaN, readyState 0), and play() is refused the way a browser refuses it.
+  (function () {
+    var C = { HTMLMediaElement: function () { illegal(); } }.HTMLMediaElement;
+    C.prototype = Object.create(P.HTMLElement, { constructor: { value: C, writable: true, configurable: true } });
+    Object.setPrototypeOf(C, D.ctors.HTMLElement);
+    D.ctors.HTMLMediaElement = C; P.HTMLMediaElement = C.prototype; W.HTMLMediaElement = C;
+    ["HTMLVideoElement", "HTMLAudioElement"].forEach(function (n) {
+      Object.setPrototypeOf(P[n], C.prototype);
+      Object.setPrototypeOf(D.ctors[n], C);
+    });
+    var MP = C.prototype, state = new WeakMap();
+    var st = function (el) {
+      var s = state.get(el);
+      if (!s) state.set(el, s = { muted: el.hasAttribute("muted"), volume: 1, time: 0, rate: 1, defaultRate: 1, srcObject: null });
+      return s;
+    };
+    ["autoplay", "loop", "controls"].forEach(function (p) { reflectBool(MP, p, p); });
+    reflectBool(MP, "playsInline", "playsinline");
+    reflectBool(MP, "defaultMuted", "muted");
+    reflectBool(MP, "disableRemotePlayback", "disableremoteplayback");
+    getter(MP, "preload", function () { var v = (this.getAttribute("preload") || "").toLowerCase(); return v === "none" || v === "metadata" || v === "auto" ? v : "metadata"; }, function (v) { this.setAttribute("preload", String(v)); });
+    getter(MP, "crossOrigin", function () { return this.getAttribute("crossorigin"); }, function (v) { if (v === null) this.removeAttribute("crossorigin"); else this.setAttribute("crossorigin", String(v)); });
+    getter(MP, "muted", function () { return st(this).muted; }, function (v) { st(this).muted = !!v; });
+    getter(MP, "volume", function () { return st(this).volume; }, function (v) {
+      v = +v;
+      if (!(v >= 0 && v <= 1)) throw domError("IndexSizeError", "The volume provided (" + v + ") is outside the range [0, 1].");
+      st(this).volume = v;
+    });
+    getter(MP, "currentTime", function () { return st(this).time; }, function (v) { st(this).time = +v || 0; });
+    getter(MP, "playbackRate", function () { return st(this).rate; }, function (v) { st(this).rate = +v; });
+    getter(MP, "defaultPlaybackRate", function () { return st(this).defaultRate; }, function (v) { st(this).defaultRate = +v; });
+    getter(MP, "srcObject", function () { return st(this).srcObject; }, function (v) { st(this).srcObject = v; });
+    getter(MP, "currentSrc", function () { var s = this.getAttribute("src"); return s ? new URL(s, this.ownerDocument.baseURI || undefined).href : ""; });
+    var constant = function (name, value) { getter(MP, name, function () { return value; }); };
+    [["paused", true], ["ended", false], ["seeking", false], ["duration", NaN], ["readyState", 0], ["networkState", 0], ["error", null], ["videoWidth", 0], ["videoHeight", 0]].forEach(function (e) { constant(e[0], e[1]); });
+    var ranges = function () {
+      return {
+        length: 0,
+        start: function () { throw domError("IndexSizeError", "The index provided is greater than or equal to the maximum bound."); },
+        end: function () { throw domError("IndexSizeError", "The index provided is greater than or equal to the maximum bound."); },
+      };
+    };
+    ["buffered", "played", "seekable"].forEach(function (n) { getter(MP, n, ranges); });
+    getter(MP, "textTracks", function () { return Object.assign(Object.create(EventTarget.prototype), { length: 0 }); });
+    ["HAVE_NOTHING", "HAVE_METADATA", "HAVE_CURRENT_DATA", "HAVE_FUTURE_DATA", "HAVE_ENOUGH_DATA"].forEach(function (n, i) { C[n] = i; MP[n] = i; });
+    ["NETWORK_EMPTY", "NETWORK_IDLE", "NETWORK_LOADING", "NETWORK_NO_SOURCE"].forEach(function (n, i) { C[n] = i; MP[n] = i; });
+    def(MP, "play", function () { return Promise.reject(domError("NotSupportedError", "The element has no supported sources.")); });
+    def(MP, "pause", function () {});
+    def(MP, "load", function () {});
+    def(MP, "canPlayType", function () { return ""; });
+    def(MP, "fastSeek", function (t) { st(this).time = +t || 0; });
+    def(MP, "addTextTrack", function () { return { kind: "subtitles", label: "", language: "", mode: "disabled", cues: null, addCue: function () {}, removeCue: function () {} }; });
+    reflectString(P.HTMLVideoElement, "poster", "poster");
+  })();
 
   // more element interfaces (the plain ones that have no members of their own here)
   ["HTMLUnknownElement", "HTMLMediaElement", "HTMLOptGroupElement", "HTMLSlotElement", "HTMLBaseElement", "HTMLDListElement",
@@ -1573,9 +1873,109 @@
     if (n.nodeType === 10) throw domError("InvalidNodeTypeError", "The node is a doctype.");
   };
   var checkOffset = function (n, o) { if (o > nodeLength(n) || o < 0) throw domError("IndexSizeError", "The offset " + o + " is larger than the node's length (" + nodeLength(n) + ")."); };
+  // Live ranges: when the tree changes under a range its boundary points move as the specification says. The
+  // primitive mutators are wrapped once the first range exists; ranges are held weakly.
+  var liveRanges = [];
+  var eachRange = function (fn) {
+    for (var i = liveRanges.length - 1; i >= 0; i--) {
+      var r = liveRanges[i].deref();
+      if (!r) { liveRanges.splice(i, 1); continue; }
+      var sc = r._sc, so = r._so, ec = r._ec, eo = r._eo;
+      fn(r);
+      if (r._selection && (sc !== r._sc || so !== r._so || ec !== r._ec || eo !== r._eo)) r._selection._changed();
+    }
+  };
+  var rangesRemove = function (node) {
+    var p = node.parentNode;
+    if (!p || !liveRanges.length) return;
+    var i = indexOf(node);
+    eachRange(function (r) {
+      if (isInclusiveAncestor(node, r._sc)) { r._sc = p; r._so = i; } else if (r._sc === p && r._so > i) r._so--;
+      if (isInclusiveAncestor(node, r._ec)) { r._ec = p; r._eo = i; } else if (r._ec === p && r._eo > i) r._eo--;
+    });
+  };
+  var rangesInsert = function (p, i, count) {
+    if (!count || !liveRanges.length) return;
+    eachRange(function (r) {
+      if (r._sc === p && r._so > i) r._so += count;
+      if (r._ec === p && r._eo > i) r._eo += count;
+    });
+  };
+  var rangesReplaceAll = function (node) {
+    // all children of node replaced: boundaries inside it (or after its start) collapse to its start
+    if (!liveRanges.length) return;
+    eachRange(function (r) {
+      if (isInclusiveAncestor(node, r._sc) && (r._sc !== node || r._so > 0)) { r._sc = node; r._so = 0; }
+      if (isInclusiveAncestor(node, r._ec) && (r._ec !== node || r._eo > 0)) { r._ec = node; r._eo = 0; }
+    });
+  };
+  var rangesReplaceData = function (node) {
+    if (!liveRanges.length) return;
+    var len = node.data.length;
+    eachRange(function (r) {
+      if (r._sc === node && r._so > 0 && r._so <= len) r._so = 0;
+      if (r._ec === node && r._eo > 0 && r._eo <= len) r._eo = 0;
+    });
+  };
+  var rangesInstalled = false;
+  var installRanges = function () {
+    rangesInstalled = true;
+    var count = function (n) { return n.nodeType === 11 ? n.childNodes.length : 1; };
+    wrap(P.Node, "appendChild", function (orig) {
+      return function (node) {
+        if (node.nodeType !== 11) rangesRemove(node);
+        var i = this.childNodes.length, c = count(node);
+        var r = orig.call(this, node);
+        rangesInsert(this, i, c);
+        return r;
+      };
+    });
+    wrap(P.Node, "insertBefore", function (orig) {
+      return function (node, ref) {
+        if (node.nodeType !== 11 && node !== ref) rangesRemove(node);
+        var i = ref ? indexOf(ref) : this.childNodes.length, c = count(node);
+        var r = orig.call(this, node, ref);
+        rangesInsert(this, i, c);
+        return r;
+      };
+    });
+    wrap(P.Node, "removeChild", function (orig) {
+      return function (node) {
+        if (node && node.parentNode === this) rangesRemove(node);
+        return orig.call(this, node);
+      };
+    });
+    wrap(P.Node, "replaceChild", function (orig) {
+      return function (node, old) {
+        if (old && old.parentNode === this && node !== old) {
+          if (node.nodeType !== 11) rangesRemove(node);
+          var i = indexOf(old), c = count(node);
+          rangesRemove(old);
+          var r = orig.call(this, node, old);
+          rangesInsert(this, i, c);
+          return r;
+        }
+        return orig.call(this, node, old);
+      };
+    });
+    wrap(P.Node, "textContent", function (set) {
+      return function (v) {
+        if (this.nodeType === 3 || this.nodeType === 8) rangesReplaceData(this); else rangesReplaceAll(this);
+        set.call(this, v);
+      };
+    });
+    wrap(P.Element, "innerHTML", function (set) {
+      return function (v) { rangesReplaceAll(this); set.call(this, v); };
+    });
+    wrap(P.CharacterData, "data", function (set) {
+      return function (v) { rangesReplaceData(this); set.call(this, v); };
+    });
+  };
   var Range = function Range() {
     var doc = globalThis.document;
     this._sc = this._ec = doc; this._so = this._eo = 0;
+    if (!rangesInstalled) installRanges();
+    liveRanges.push(new WeakRef(this));
   };
   var rangeProto = Range.prototype;
   var setBoundary = function (range, isStart, node, offset) {

@@ -48,6 +48,11 @@ export interface JavaScriptOptions {
   settleMs?: number;
   /** CSS selector to wait for after `load`; replaces `settleMs` when given. */
   waitFor?: string;
+  /**
+   * Fetch the `<link rel=stylesheet>` sheets so that `getComputedStyle` cascades them too (default false: only `<style>`
+   * elements and style attributes count).
+   */
+  stylesheets?: boolean;
 }
 
 /** What the script phase produced. */
@@ -597,12 +602,30 @@ export function openPage(
       return out;
     };
 
+    // <link rel=stylesheet> sheets, fetched by the host and handed to the page for getComputedStyle
+    const loadStyleSheets = async () => {
+      const raw = call("__edgeLinks()");
+      const list: { i: number; href: string }[] = typeof raw === "string" ? JSON.parse(raw) : [];
+      const sheets = await Promise.all(
+        list.map((l) =>
+          loggedFetch(new URL(l.href, baseUrl).href, { signal: AbortSignal.timeout(Math.max(1, remaining())) })
+            .then(text)
+            .then(
+              (css) => ({ i: l.i, css }),
+              () => undefined,
+            ),
+        ),
+      );
+      for (const s of sheets) if (s) call(`__edgeSetSheet(${s.i}, ${JSON.stringify(s.css)})`);
+    };
+
     const start = async (how: { scripts?: boolean; external?: boolean; settle?: boolean } = {}) => {
       mode.scripts = how.scripts ?? true;
       mode.external = how.external ?? true;
       begin();
       const scripts = runScripts(); // the inline scripts run before this returns; only the ones that fetch wait
       await scripts;
+      if (opts.stylesheets) await loadStyleSheets();
       call("__edgeDocumentEvents()");
       if (how.settle ?? true) await wait(opts.settleMs ?? DEFAULT_SETTLE_MS, opts.waitFor);
     };

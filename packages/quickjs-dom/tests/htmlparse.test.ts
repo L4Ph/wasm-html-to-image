@@ -137,7 +137,7 @@ describe("native HTML parser matches htmlparser2", () => {
       "<style>x</styles>y</style>z",
       "<title>a &amp; b <b>not a tag</b></title><p>x",
       "<title>unterminated &amp",
-      "<textarea>a &amp; <b>x</b></textarea>y",
+      "<textarea>a <b>x</b></textarea>y",
       "<xmp><p>&amp;</xmp>z",
       "<script>unterminated",
       "<script>x</script",

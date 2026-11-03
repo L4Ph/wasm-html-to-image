@@ -268,3 +268,24 @@ describe("bridge: what was read is not kept past a change of the page", () => {
     expect([...d.body.children].length).toBe(2);
   });
 });
+
+describe("bridge: functions of the host that the page held", () => {
+  it("are forgotten once the page lets go of them", () => {
+    const d = w.document;
+    const el = d.createElement("button");
+    d.body.appendChild(el);
+    let calls = 0;
+    const keep = () => calls++;
+    el.addEventListener("click", keep);
+    for (let i = 0; i < 1000; i++) {
+      const f = () => {};
+      el.addEventListener("click", f);
+      el.removeEventListener("click", f);
+    }
+    d.body.getAttribute("x"); // any call lets the bridge sort the functions out
+    expect(bridge.registeredFunctions()).toBeLessThan(600);
+    el.click();
+    expect(calls).toBe(1); // the listener that is still registered still works
+    el.remove();
+  });
+});

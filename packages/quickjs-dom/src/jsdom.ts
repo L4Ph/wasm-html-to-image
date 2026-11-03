@@ -87,7 +87,7 @@ export class JSDOM {
       }
     };
     const url = options.url ?? "about:blank";
-    this.page = openPage(decode(html), url, engine.quickjsWasm ?? defaultWasm(), { ...engine, onLog: report });
+    this.page = openPage(decode(html), url, engine.quickjsWasm ?? defaultWasm(), { ...engine, onLog: report, stylesheets: options.resources === "usable" });
     const bridge = this.page.dom.bridge({ timeout: engine.timeout });
     this.bridgeWindow = bridge.window;
     // the page's `window.close()` ends the page

@@ -1,7 +1,8 @@
 // getComputedStyle and document.styleSheets: the style sheets of the page's <style> elements and the style attributes,
 // cascaded (importance, specificity, order), inherited, with the browser's defaults for display and a few others.
-// Not computed: layout (sizes stay "auto" or as declared), units (a length is as written), external sheets, pseudo-elements,
-// custom properties' var() substitution, calc().
+// Lengths come out in px (em / rem / absolute units; calc(), min(), max(), clamp() when they hold no percentages), custom
+// properties are inherited and substituted by var(), and <link rel=stylesheet> sheets count once the host has loaded them.
+// Not computed: layout (sizes stay "auto" or as declared), percentages, pseudo-elements.
 (function (g) {
   var D = g.__native.dom;
 
@@ -132,6 +133,7 @@
       if (m) { important = true; value = value.slice(0, m.index).trim(); }
       if (!prop || value === "") return;
       if (prop.slice(0, 2) === "--") out.push([prop, value, important]);
+      else if (value.indexOf("var(") >= 0) out.push([prop, value, important, true]); // expanded once the variables are known
       else expand(prop, value).forEach(function (e) { out.push([e[0], e[1], important]); });
     });
     return out;
@@ -223,11 +225,27 @@
 
   // the rules of a document's <style> elements in order, kept while the document is as it was
   var sheetCache = new WeakMap();
+  // the text of <link rel=stylesheet> sheets, which the host fetches and hands over (see __edgeLinks)
+  var linkSheets = new WeakMap();
+  var linkEls = [];
+  g.__edgeLinks = function () {
+    var out = [];
+    linkEls = Array.prototype.slice.call(g.document.querySelectorAll("link[href]")).filter(function (l) { return /(^|\s)stylesheet(\s|$)/i.test(l.getAttribute("rel") || ""); });
+    linkEls.forEach(function (l, i) { out.push({ i: i, href: l.getAttribute("href") }); });
+    return JSON.stringify(out);
+  };
+  g.__edgeSetSheet = function (i, text) {
+    var l = linkEls[i];
+    if (!l) return;
+    linkSheets.set(l, text);
+    sheetCache = new WeakMap();
+    memo = { v: -1, m: new WeakMap() };
+  };
   var documentRules = function (doc) {
     var v = D.version(), have = sheetCache.get(doc);
     if (have && have.v === v) return have.rules;
     var rules = [], order = 0;
-    var styles = doc.querySelectorAll("style");
+    var styles = doc.querySelectorAll("style, link");
     for (var i = 0; i < styles.length; i++) {
       var st = styles[i];
       if (st.hasAttribute("disabled")) continue;
@@ -235,7 +253,9 @@
       if (type && type.toLowerCase() !== "text/css") continue;
       var m = st.getAttribute("media");
       var base = m ? [m] : [];
-      rulesOf(st.textContent).forEach(function (r) { rules.push({ selector: r.selector, weight: r.weight, decls: r.decls, media: base.concat(r.media), order: order++ }); });
+      var css = st.localName === "link" ? linkSheets.get(st) : st.textContent;
+      if (css === undefined) continue;
+      rulesOf(css).forEach(function (r) { rules.push({ selector: r.selector, weight: r.weight, decls: r.decls, media: base.concat(r.media), order: order++ }); });
     }
     sheetCache.set(doc, { v: v, rules: rules });
     return rules;
@@ -261,13 +281,14 @@
       case "caption": return "table-caption";
       case "col": return "table-column";
       case "colgroup": return "table-column-group";
-      case "img": case "input": case "select": case "button": case "textarea": case "video": case "canvas": case "audio": case "iframe": case "object": case "svg": return "inline-block";
+      case "img": case "input": case "select": case "button": case "textarea": case "video": case "canvas": case "audio": case "iframe": case "object": return "inline-block";
       default: return "inline";
     }
   };
   var uaStyle = function (el) {
     var t = el.localName, o = { display: uaDisplay(el) };
     if (t === "b" || t === "strong" || t === "th" || /^h[1-6]$/.test(t)) o["font-weight"] = "bold";
+    if (/^h[1-6]$/.test(t)) o["font-size"] = ["2em", "1.5em", "1.17em", "1em", "0.83em", "0.67em"][+t.charAt(1) - 1];
     if (t === "i" || t === "em" || t === "cite" || t === "var" || t === "dfn" || t === "address") o["font-style"] = "italic";
     if ((t === "a" && el.hasAttribute("href")) || t === "u" || t === "ins") o["text-decoration-line"] = "underline";
     if (t === "s" || t === "strike" || t === "del") o["text-decoration-line"] = "line-through";
@@ -280,7 +301,7 @@
     if (t === "button" || t === "input" || t === "select" || t === "textarea") o.cursor = "default";
     return o;
   };
-  var INHERITED = "color cursor direction font font-family font-size font-style font-variant font-weight letter-spacing line-height list-style list-style-image list-style-position list-style-type pointer-events quotes text-align text-indent text-transform text-shadow visibility white-space word-spacing word-break overflow-wrap tab-size caret-color".split(" ");
+  var INHERITED = "color cursor direction font font-family font-size font-style font-variant font-weight letter-spacing line-height list-style list-style-image list-style-position list-style-type pointer-events quotes text-align text-indent text-transform text-shadow visibility white-space word-spacing word-break overflow-wrap tab-size caret-color fill fill-opacity fill-rule stroke stroke-width stroke-opacity stroke-linecap stroke-linejoin stroke-dasharray stroke-dashoffset stroke-miterlimit".split(" ");
   var INITIAL = {
     "color": "rgb(0, 0, 0)", "background-color": "rgba(0, 0, 0, 0)", "background-image": "none", "visibility": "visible", "opacity": "1", "position": "static",
     "overflow-x": "visible", "overflow-y": "visible", "pointer-events": "auto", "z-index": "auto", "float": "none", "clear": "none", "cursor": "auto",
@@ -291,6 +312,7 @@
     "margin-top": "0px", "margin-right": "0px", "margin-bottom": "0px", "margin-left": "0px", "padding-top": "0px", "padding-right": "0px", "padding-bottom": "0px", "padding-left": "0px",
     "border-top-width": "0px", "border-right-width": "0px", "border-bottom-width": "0px", "border-left-width": "0px",
     "border-top-style": "none", "border-right-style": "none", "border-bottom-style": "none", "border-left-style": "none",
+    "fill": "rgb(0, 0, 0)", "fill-opacity": "1", "fill-rule": "nonzero", "stroke": "none", "stroke-width": "1px", "stroke-opacity": "1", "stroke-linecap": "butt", "stroke-linejoin": "miter",
     "list-style-type": "disc", "flex-direction": "row", "flex-wrap": "nowrap", "justify-content": "normal", "align-items": "normal", "transform": "none", "content": "normal",
   };
 
@@ -352,18 +374,178 @@
     memo.m.set(el, made);
     return made;
   };
-  var cascade = function (el, depth) {
-    var doc = el.ownerDocument, ua = uaStyle(el), win = {}, order = 0;
+  // a picker keeps, per property, the declaration that wins: importance, then style attribute, then specificity, then order
+  var picker = function () {
     var best = {}; // property -> { v, imp, inline, w, o }
-    var offer = function (prop, value, imp, inline, w, o) {
-      var b = best[prop];
-      if (b) {
-        if (b.imp !== imp) { if (!imp) return; }
-        else if (b.inline !== inline) { if (!inline) return; }
-        else if (b.w > w || (b.w === w && b.o > o)) return;
-      }
-      best[prop] = { v: value, imp: imp, inline: inline, w: w, o: o };
+    return {
+      best: best,
+      offer: function (prop, value, imp, inline, w, o) {
+        var b = best[prop];
+        if (b) {
+          if (b.imp !== imp) { if (!imp) return; }
+          else if (b.inline !== inline) { if (!inline) return; }
+          else if (b.w > w || (b.w === w && b.o > o)) return;
+        }
+        best[prop] = { v: value, imp: imp, inline: inline, w: w, o: o };
+      },
     };
+  };
+  // var(--name, fallback) replaced by the values of the custom properties; null when a variable has no value
+  var substVars = function (s, vars, stack) {
+    for (var guard = 0; guard < 50; guard++) {
+      var at = s.indexOf("var(");
+      if (at < 0) return s;
+      var depth = 0, close = -1;
+      for (var i = at + 3; i < s.length; i++) {
+        var c = s.charAt(i);
+        if (c === "(") depth++;
+        else if (c === ")" && --depth === 0) { close = i; break; }
+      }
+      if (close < 0) return null;
+      var inner = s.slice(at + 4, close), comma = findTop(inner, 0, ","), name = inner.slice(0, comma).trim();
+      var value = vars[name];
+      if (value !== undefined && stack.indexOf(name) < 0) value = substVars(value, vars, stack.concat(name));
+      else value = null;
+      if (value === null) value = comma < inner.length ? substVars(inner.slice(comma + 1).trim(), vars, stack) : null;
+      if (value === null) return null;
+      s = s.slice(0, at) + value + s.slice(close + 1);
+    }
+    return null;
+  };
+
+  // ---- lengths: a computed length is in px; calc(), min(), max() and clamp() are evaluated when they can be
+  var unitPx = function (n, u, fs, root) {
+    switch (u.toLowerCase()) {
+      case "px": return n;
+      case "em": return n * fs;
+      case "rem": return n * root;
+      case "ch": case "ex": return n * fs * 0.5;
+      case "pt": return n * 4 / 3;
+      case "pc": return n * 16;
+      case "in": return n * 96;
+      case "cm": return n * 96 / 2.54;
+      case "mm": return n * 96 / 25.4;
+      case "q": return n * 96 / 101.6;
+      case "vw": return n * (g.innerWidth || 1024) / 100;
+      case "vh": return n * (g.innerHeight || 768) / 100;
+      case "vmin": return n * Math.min(g.innerWidth || 1024, g.innerHeight || 768) / 100;
+      case "vmax": return n * Math.max(g.innerWidth || 1024, g.innerHeight || 768) / 100;
+    }
+    return null;
+  };
+  var fmtPx = function (x) { x = +x.toFixed(3); return (x === 0 ? 0 : x) + "px"; };
+  // a math expression -> { v, px } or null (a percentage, an unknown unit or anything unparsed leaves the text as it was)
+  var evalMath = function (s, fs, root) {
+    var i = 0, bad = {};
+    var ws = function () { while (i < s.length && /\s/.test(s.charAt(i))) i++; };
+    var sum, primary;
+    var args = function () {
+      var out = [];
+      for (;;) {
+        out.push(sum()); ws();
+        if (s.charAt(i) === ",") { i++; continue; }
+        if (s.charAt(i) === ")") { i++; return out; }
+        throw bad;
+      }
+    };
+    var same = function (a, b) { if (a.px !== b.px) throw bad; };
+    primary = function () {
+      ws();
+      var rest = s.slice(i), m = /^(calc|min|max|clamp)\(/i.exec(rest);
+      if (m) {
+        i += m[0].length;
+        var list = args(), f = m[1].toLowerCase();
+        if (f === "calc") { if (list.length !== 1) throw bad; return list[0]; }
+        list.forEach(function (e) { same(e, list[0]); });
+        if (f === "min") return { v: Math.min.apply(null, list.map(function (e) { return e.v; })), px: list[0].px };
+        if (f === "max") return { v: Math.max.apply(null, list.map(function (e) { return e.v; })), px: list[0].px };
+        if (list.length !== 3) throw bad;
+        return { v: Math.max(list[0].v, Math.min(list[1].v, list[2].v)), px: list[0].px };
+      }
+      if (s.charAt(i) === "(") {
+        i++;
+        var v = sum(); ws();
+        if (s.charAt(i) !== ")") throw bad;
+        i++;
+        return v;
+      }
+      m = /^[+-]?(\d+\.?\d*|\.\d+)(e[+-]?\d+)?(%|[a-z]+)?/i.exec(rest);
+      if (!m) throw bad;
+      i += m[0].length;
+      var n = parseFloat(m[0]), u = m[3];
+      if (!u) return { v: n, px: false };
+      var px = u === "%" ? null : unitPx(n, u, fs, root);
+      if (px === null) throw bad;
+      return { v: px, px: true };
+    };
+    var term = function () {
+      var a = primary();
+      for (;;) {
+        ws();
+        var c = s.charAt(i);
+        if (c === "*") { i++; var b = primary(); if (a.px && b.px) throw bad; a = { v: a.v * b.v, px: a.px || b.px }; }
+        else if (c === "/") { i++; var d = primary(); if (d.px || d.v === 0) throw bad; a = { v: a.v / d.v, px: a.px }; }
+        else return a;
+      }
+    };
+    sum = function () {
+      var a = term();
+      for (;;) {
+        ws();
+        var c = s.charAt(i);
+        if (c === "+" || c === "-") { i++; var b = term(); same(a, b); a = { v: c === "+" ? a.v + b.v : a.v - b.v, px: a.px }; }
+        else return a;
+      }
+    };
+    try {
+      var r = sum(); ws();
+      return i === s.length ? r : null;
+    } catch (e) {
+      if (e === bad) return null;
+      throw e;
+    }
+  };
+  var lengthsIn = function (v, fs, root) {
+    if (!/\d/.test(v) || /["'(]\s*url\(|url\(|["']/.test(v)) return v;
+    var out = "", i = 0, m;
+    // math functions first (they may nest: only the outermost is evaluated)
+    while (i < v.length) {
+      var rest = v.slice(i);
+      m = /(^|[^\w-])(calc|min|max|clamp)\(/i.exec(rest);
+      if (!m) { out += rest; break; }
+      var start = i + m.index + m[1].length;
+      out += v.slice(i, start);
+      var depth = 0, end = -1;
+      for (var j = start; j < v.length; j++) {
+        var c = v.charAt(j);
+        if (c === "(") depth++;
+        else if (c === ")" && --depth === 0) { end = j; break; }
+      }
+      if (end < 0) { out += v.slice(start); break; }
+      var text = v.slice(start, end + 1), r = evalMath(text, fs, root);
+      out += r === null ? text : r.px ? fmtPx(r.v) : String(+r.v.toFixed(3));
+      i = end + 1;
+    }
+    return out.replace(/(^|[\s,(\/])(-?(?:\d+\.?\d*|\.\d+))(px|em|rem|pt|pc|in|cm|mm|q|vw|vh|vmin|vmax|ch|ex)(?![\w-])/gi, function (all, pre, n, u) {
+      var px = unitPx(parseFloat(n), u, fs, root);
+      return px === null ? all : pre + fmtPx(px);
+    });
+  };
+  var FONT_KEYWORDS = { "xx-small": 9, "x-small": 10, "small": 13, "medium": 16, "large": 18, "x-large": 24, "xx-large": 32, "xxx-large": 48 };
+  var fontSizePx = function (v, parentPx, root) {
+    var low = v.trim().toLowerCase(), m;
+    if (FONT_KEYWORDS[low] !== undefined) return FONT_KEYWORDS[low];
+    if (low === "smaller") return parentPx / 1.2;
+    if (low === "larger") return parentPx * 1.2;
+    if ((m = /^(-?[\d.]+)%$/.exec(low))) return parentPx * parseFloat(m[1]) / 100;
+    var s = lengthsIn(low, parentPx, root);
+    if ((m = /^(-?[\d.]+)px$/.exec(s))) return parseFloat(m[1]);
+    return null;
+  };
+
+  var cascade = function (el, depth) {
+    var doc = el.ownerDocument, ua = uaStyle(el), order = 0;
+    var cands = []; // [prop, value, imp, inline, w, o, hasVar]
     var rules = doc ? documentRules(doc) : [];
     for (var i = 0; i < rules.length; i++) {
       var r = rules[i];
@@ -371,15 +553,34 @@
       var hit;
       try { hit = el.matches(r.selector); } catch (e) { hit = false; }
       if (!hit) continue;
-      for (var j = 0; j < r.decls.length; j++) offer(r.decls[j][0], r.decls[j][1], r.decls[j][2], false, r.weight, r.order);
+      for (var j = 0; j < r.decls.length; j++) cands.push([r.decls[j][0], r.decls[j][1], r.decls[j][2], false, r.weight, r.order, r.decls[j][3]]);
     }
     var inline = el.getAttribute("style");
-    if (inline) parseDeclarations(inline).forEach(function (d) { offer(d[0], d[1], d[2], true, 0, ++order); });
+    if (inline) parseDeclarations(inline).forEach(function (d) { cands.push([d[0], d[1], d[2], true, 0, ++order, d[3]]); });
     var parent = el.parentElement, parentStyle = parent && depth < 200 ? computedOf(parent, depth + 1) : null;
     var out = {}, k;
+    // custom properties inherit, and a declaration may use any of them
+    var vars = {}, custom = picker(), plain = picker();
+    if (parentStyle) for (k in parentStyle) if (k.slice(0, 2) === "--") vars[k] = parentStyle[k];
+    cands.forEach(function (c) { if (c[0].slice(0, 2) === "--") custom.offer(c[0], c[1], c[2], c[3], c[4], c[5]); });
+    for (k in custom.best) {
+      var cv = custom.best[k].v;
+      if (cv.toLowerCase() === "inherit" || cv.toLowerCase() === "unset") { if (parentStyle && parentStyle[k] !== undefined) vars[k] = parentStyle[k]; else delete vars[k]; }
+      else if (cv.toLowerCase() === "initial") delete vars[k];
+      else vars[k] = cv;
+    }
+    cands.forEach(function (c) {
+      if (c[0].slice(0, 2) === "--") return;
+      if (!c[6]) { plain.offer(c[0], c[1], c[2], c[3], c[4], c[5]); return; }
+      var value = substVars(c[1], vars, []);
+      if (value === null) return; // invalid at computed-value time
+      expand(c[0], value).forEach(function (e) { plain.offer(e[0], e[1], c[2], c[3], c[4], c[5]); });
+    });
+    var best = plain.best;
     for (k in INITIAL) out[k] = INITIAL[k];
     if (parentStyle) INHERITED.forEach(function (p) { if (parentStyle[p] !== undefined) out[p] = parentStyle[p]; });
     for (k in ua) out[k] = ua[k] === "inherit" && parentStyle ? parentStyle[k] : ua[k];
+    for (k in vars) out[k] = vars[k];
     for (k in best) {
       var v = best[k].v, low = v.toLowerCase();
       if (low === "inherit") out[k] = parentStyle && parentStyle[k] !== undefined ? parentStyle[k] : INITIAL[k] || "";
@@ -391,7 +592,14 @@
     ["top", "right", "bottom", "left"].forEach(function (s) { if (out["border-" + s + "-color"] === undefined || out["border-" + s + "-color"] === "currentcolor") out["border-" + s + "-color"] = out.color; });
     // the lengths of the borders that have no style are 0
     ["top", "right", "bottom", "left"].forEach(function (s) { var st = out["border-" + s + "-style"]; if (st === "none" || st === "hidden") out["border-" + s + "-width"] = "0px"; });
-    for (k in out) if (k === "color" || k.slice(-6) === "-color") { if (out[k] !== "currentcolor") out[k] = normColor(out[k]); }
+    // lengths in px: em against this element's font size (the parent's for font-size itself), rem against the root's
+    var parentPx = parentStyle ? parseFloat(parentStyle["font-size"]) || 16 : 16;
+    var ownPx = fontSizePx(out["font-size"], parentPx, 16);
+    if (ownPx === null) ownPx = parentPx; else out["font-size"] = fmtPx(ownPx);
+    var rootPx = ownPx;
+    if (parent && doc && doc.documentElement && doc.documentElement !== el) rootPx = parseFloat(computedOf(doc.documentElement, depth + 1)["font-size"]) || 16;
+    for (k in out) if (k !== "font-size" && k.slice(0, 2) !== "--" && k !== "font-family") out[k] = lengthsIn(out[k], ownPx, rootPx);
+    for (k in out) if (k === "color" || k === "fill" || k === "stroke" || k.slice(-6) === "-color") { if (out[k] !== "currentcolor") out[k] = normColor(out[k]); }
     if (out["overflow-x"] === undefined) out["overflow-x"] = "visible";
     out.overflow = out["overflow-x"] === out["overflow-y"] ? out["overflow-x"] : out["overflow-x"] + " " + out["overflow-y"];
     // the display of a floated or absolutely positioned box is block-level
@@ -405,9 +613,9 @@
 
   var Computed = function CSSStyleDeclaration() {};
   var makeComputed = function (el, values) {
-    var names = Object.keys(values).sort();
+    var names = Object.keys(values).filter(function (n) { return n.slice(0, 2) !== "--"; }).sort();
     var read = function (name) {
-      name = name.toLowerCase();
+      if (name.slice(0, 2) !== "--") name = name.toLowerCase(); // custom properties are case-sensitive
       var v = values[name];
       if (v === undefined && SHORT[name]) {
         var f = SIDES.map(function (s) { return values[SHORT[name] + s]; });

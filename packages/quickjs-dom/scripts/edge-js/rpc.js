@@ -11,7 +11,7 @@
   var collect = function () {
     protoNames = new Map(); ctorNames = new Map(); interfaces = [];
     var add = function (name, C) {
-      if (typeof C !== "function" || !C.prototype || typeof C.prototype !== "object") return;
+      if (typeof C !== "function" || !C.prototype || typeof C.prototype !== "object" || !/^[A-Z]/.test(name)) return; // window.getSelection is a function, not an interface
       if (protoNames.has(C.prototype)) { ctorNames.set(C, protoNames.get(C.prototype)); return; } // a shim of an interface is that interface
       protoNames.set(C.prototype, name); ctorNames.set(C, name); interfaces.push([name, C]);
     };
@@ -147,10 +147,10 @@
     return dec(r.v);
   };
   var hostFunction = function (id) {
-    var f = callbacks.get(id);
+    var ref = callbacks.get(id), f = ref && ref.deref();
     if (!f) {
       f = function () { return callHost(id, this, arguments); };
-      callbacks.set(id, f);
+      callbacks.set(id, new WeakRef(f));
     }
     return f;
   };
@@ -248,6 +248,16 @@
       return null;
     },
     live: function () { return live; },
+    // of these functions of the host's, the ones the page no longer holds (the host may let them go)
+    deadfns: function (r) {
+      return json(r[1].filter(function (id) {
+        var ref = callbacks.get(id);
+        if (ref && ref.deref()) return false;
+        callbacks.delete(id);
+        return true;
+      }));
+    },
+    liveFns: function () { return callbacks.size; },
   };
 
   var callMethod = function (id, key, args) {

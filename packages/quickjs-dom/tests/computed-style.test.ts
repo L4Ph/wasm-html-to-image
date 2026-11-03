@@ -130,3 +130,88 @@ describe("document.styleSheets", () => {
     expect(window.getComputedStyle(el).color).toBe("rgb(0, 0, 255)");
   });
 });
+
+describe("custom properties, units and calc()", () => {
+  const CSS = `<!doctype html><html><head><style>
+    :root { --gap: 4px; --main: #336699; --pair: 2px 6px; font-size: 20px }
+    body { margin: 0 }
+    .a { margin: var(--gap); color: var(--main); padding: var(--pair); width: var(--missing, 33px) }
+    .b { --gap: 10px; margin-left: var(--gap); border: var(--gap) solid var(--main) }
+    .c { font-size: 1.5em; margin-top: 2em; height: calc(2rem + 10px); width: calc(100% - 10px); line-height: 1.5em }
+    .d { margin-top: calc(1in / 2); padding-top: min(10px, 2em); padding-left: max(1px, 3pt); padding-right: clamp(1px, 100px, 5px) }
+    .e { color: var(--undefined); margin-top: 7px }
+    h2 { }
+  </style></head><body>
+    <div class="a" id="a"><span class="b" id="b"></span></div>
+    <div class="c" id="c"><span id="inner" style="font-size: 50%; margin-top: 2em"></span></div>
+    <div class="d" id="d"></div><div class="e" id="e"></div><h2 id="h2"></h2>
+  </body></html>`;
+  const style = (id: string) => {
+    const { window } = make(CSS);
+    return window.getComputedStyle(window.document.getElementById(id));
+  };
+
+  it("substitutes var() with inheritance, fallbacks and shorthands", () => {
+    const a = style("a");
+    expect(a.getPropertyValue("--gap")).toBe("4px");
+    expect([a.marginTop, a.marginLeft]).toEqual(["4px", "4px"]);
+    expect(a.color).toBe("rgb(51, 102, 153)");
+    expect([a.paddingTop, a.paddingRight]).toEqual(["2px", "6px"]);
+    expect(a.width).toBe("33px");
+    const b = style("b");
+    expect(b.getPropertyValue("--gap")).toBe("10px"); // redefined at .b
+    expect(b.marginLeft).toBe("10px");
+    expect(b.borderTopWidth).toBe("10px");
+    expect(b.borderTopColor).toBe("rgb(51, 102, 153)"); // --main is inherited
+  });
+
+  it("an undefined variable without a fallback leaves the declaration out", () => {
+    const e = style("e");
+    expect(e.color).toBe("rgb(0, 0, 0)");
+    expect(e.marginTop).toBe("7px");
+  });
+
+  it("computes lengths in px", () => {
+    const c = style("c");
+    expect(c.fontSize).toBe("30px"); // 1.5em of the 20px of :root
+    expect(c.marginTop).toBe("60px"); // 2em of its own font size
+    expect(c.height).toBe("50px"); // calc(2rem + 10px), rem = 20px
+    expect(c.width).toBe("calc(100% - 10px)"); // a percentage needs a layout
+    expect(c.lineHeight).toBe("45px");
+    expect(style("inner").fontSize).toBe("15px");
+    expect(style("inner").marginTop).toBe("30px"); // em of the element's own computed size
+    const d = style("d");
+    expect(d.marginTop).toBe("48px");
+    expect(d.paddingTop).toBe("10px");
+    expect(d.paddingLeft).toBe("4px");
+    expect(d.paddingRight).toBe("5px");
+    expect(style("h2").fontSize).toBe("30px"); // 1.5em of 20px
+  });
+});
+
+describe("<link rel=stylesheet>", () => {
+  it("is cascaded once the sheets are fetched (resources: usable)", async () => {
+    const http = await import("node:http");
+    const server = http.createServer((req, res) => {
+      res.setHeader("content-type", "text/css");
+      res.end(req.url === "/a.css" ? "p { color: red; margin-top: calc(1px + 2px) } @media (min-width: 1px) { .x { display: flex } }" : "");
+    });
+    await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
+    const port = (server.address() as any).port;
+    try {
+      const html = `<!doctype html><html><head><link rel="stylesheet" href="/a.css"><style>p { color: blue }</style></head><body><p id=p class=x>t</p></body></html>`;
+      const dom = new JSDOM(html, { url: `http://127.0.0.1:${port}/`, resources: "usable", virtualConsole: null });
+      open.push(dom);
+      await dom.ready;
+      const p = dom.window.document.getElementById("p");
+      // the later <style> beats the link by order; the margin comes only from the link
+      expect(dom.window.getComputedStyle(p).color).toBe("rgb(0, 0, 255)");
+      expect(dom.window.getComputedStyle(p).marginTop).toBe("3px");
+      expect(dom.window.getComputedStyle(p).display).toBe("flex");
+      const plain = make(html.replace("<link", "<link data-x"));
+      expect(plain.window.getComputedStyle(plain.window.document.getElementById("p")).marginTop).toBe("0px");
+    } finally {
+      server.close();
+    }
+  });
+});
