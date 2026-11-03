@@ -45,6 +45,15 @@ describe("bridge: objects of the page from the host", () => {
     expect(() => new w.DOMTokenList()).toThrow(TypeError);
   });
 
+  it("exposes MutationRecord for mutation records", async () => {
+    const out = await dom.eval(`new Promise((res) => {
+      const mo = new MutationObserver((rs) => res([typeof MutationRecord, rs[0] instanceof MutationRecord, rs[0].constructor.name, (() => { try { new MutationRecord(); return "no error"; } catch (e) { return e.name; } })()]));
+      mo.observe(document.body, { childList: true });
+      document.body.appendChild(document.createElement("i"));
+    })`);
+    expect(out).toEqual(["function", true, "MutationRecord", "TypeError"]);
+  });
+
   it("gives the same wrapper for the same node", () => {
     const d = w.document;
     expect(d.getElementById("a")).toBe(d.getElementById("a"));

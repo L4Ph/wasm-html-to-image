@@ -352,13 +352,14 @@
       if (recs.length) o._callback.call(o, recs, o);
     });
   };
+  var MutationRecord = function MutationRecord() { throw new TypeError("Illegal constructor"); };
   var record = function (type, target, extra) {
     var base = { type: type, target: target, addedNodes: [], removedNodes: [], previousSibling: null, nextSibling: null, attributeName: null, attributeNamespace: null, oldValue: null };
     interested(target, function (o, opt) {
       if (type === "childList" && !opt.childList) return;
       if (type === "attributes" && (!opt.attributes || (opt.attributeFilter && opt.attributeFilter.indexOf(extra.attributeName) < 0))) return;
       if (type === "characterData" && !opt.characterData) return;
-      var rec = Object.assign({}, base, extra);
+      var rec = Object.assign(Object.create(MutationRecord.prototype), base, extra);
       if (!((type === "attributes" && opt.attributeOldValue) || (type === "characterData" && opt.characterDataOldValue))) rec.oldValue = null;
       queue(o, rec);
     }, target);
@@ -1335,6 +1336,7 @@
   var W = (D.window = {});
   Object.keys(D.ctors).forEach(function (k) { W[k] = D.ctors[k]; });
   W.MutationObserver = MutationObserver;
+  W.MutationRecord = MutationRecord;
   W.HTMLElement = HTMLElementShim;
   W.customElements = registry;
 
