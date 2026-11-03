@@ -32,7 +32,8 @@ async function lockstep(seed: number, programs: number, steps: number): Promise<
       const VOID = ["br", "img"];
       const TEXTS = ["hello", "a < b & c > d", "x y", "", " ", "quote \" and ' marks", "日本語", "line\nbreak"];
       const ATTRS = [["class", "a"], ["class", "a b"], ["class", "b"], ["id", "x"], ["id", "y"], ["title", "abc"], ["title", "a\"b"], ["href", "http://b/c"], ["data-i", "1"]];
-      const MARKUP = ["<p>one</p><p class=a>two</p>", "<ul><li>a<li>b</ul>", "text &amp; <b>bold</b>", "<div id=x><span class='a b'>s</span></div>", "<a href=http://a/b title=t>link</a>", "", "<br><img src=x>"];
+      // no character references here: linkedom splits text at one, a browser (and the native DOM) does not
+      const MARKUP =["<p>one</p><p class=a>two</p>", "<ul><li>a<li>b</ul>", "text <b>bold</b>","<div id=x><span class='a b'>s</span></div>", "<a href=http://a/b title=t>link</a>", "", "<br><img src=x>"];
       const SELECTORS = ["div", "p", "span", "li", ".a", ".b", ".a.b", "#x", "#y", "[title]", "[title^=a]", "[href*=b]", "[data-i=\"1\"]", "div p", "div > p", "ul > li", "p.a", "div, span", "*", "section em", "a[href]"];
       const TOKENS = ["a", "b", "c", "on", "x-y"];
       let seed = seed0 >>> 0;

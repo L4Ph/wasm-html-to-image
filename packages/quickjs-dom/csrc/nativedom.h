@@ -230,6 +230,23 @@ static JSValue nd_build(JSContext *c, HP *p, JSValueConst root, JSValueConst own
         case EV_TEXT:
         case EV_COMMENT: {
             const uint8_t *s = (ev[i + 1] ? p->extra.p : p->s) + ev[i + 2];
+            if (ev[i] == EV_TEXT) {
+                /* the parser splits text at a character reference; a tree has one text node there, as in a browser */
+                ND *last = nd_of(stack[depth - 1]);
+                ND *prev = last && !JS_IsNull(last->last) ? nd_of(last->last) : NULL;
+                if (prev && prev->type == 3) {
+                    size_t add = (size_t)ev[i + 3];
+                    char *grown = realloc(prev->tag, (size_t)prev->taglen + add + 1);
+                    if (!grown) { free(stack); return JS_ThrowOutOfMemory(c); }
+                    memcpy(grown + prev->taglen, s, add);
+                    prev->taglen += (int)add;
+                    grown[prev->taglen] = 0;
+                    prev->tag = grown;
+                    nd_version++;
+                    i += 4;
+                    break;
+                }
+            }
             JSValue node = nd_new(c, owner, ev[i] == EV_TEXT ? 3 : 8, (const char *)s, (size_t)ev[i + 3], 0);
             if (JS_IsException(node)) { free(stack); return node; }
             nd_insert(c, stack[depth - 1], node, JS_NULL);

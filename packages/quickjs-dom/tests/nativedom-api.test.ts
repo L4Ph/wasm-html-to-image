@@ -45,6 +45,16 @@ describe("native DOM: interfaces", () => {
   });
 });
 
+describe("native DOM: parsing", () => {
+  it("a character reference does not split a text node", async () => {
+    const out = await dom.eval(() => {
+      const t = new DOMParser().parseFromString("<p>a&#x27;s &amp; b<!-- c -->d&lt;e</p>", "text/html").querySelector("p")!;
+      return [...t.childNodes].map((n) => n.nodeType + ":" + n.textContent);
+    });
+    expect(out).toEqual(["3:a's & b", "8: c ", "3:d<e"]);
+  });
+});
+
 describe("native DOM: documents", () => {
   it("documentElement, head, body and doctype", async () => {
     expect(
