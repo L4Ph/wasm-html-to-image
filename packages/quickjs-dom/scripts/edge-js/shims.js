@@ -3,6 +3,8 @@
 (function (g) {
   var B64 = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   var t0 = Date.now();
+  // the engine's own Promise: a page may replace the global (core-js does, and its then() waits on a MutationObserver)
+  Object.defineProperty(g, "__nativePromise", { value: Promise });
 
   g.atob = function (s) {
     s = String(s).replace(/[\t\n\f\r ]+/g, "").replace(/=+$/, "");
@@ -169,7 +171,7 @@
       constructor(m, n) { super(m || ""); this.name = n || "Error"; this.code = 0; }
     };
   }
-  if (!g.queueMicrotask) g.queueMicrotask = function (fn) { Promise.resolve().then(fn); };
+  if (!g.queueMicrotask) g.queueMicrotask = function (fn) { g.__nativePromise.resolve().then(fn); };
   // QuickJS-ng has its own `performance`, whose origin is the moment the context was made: here that is the moment the
   // guest was started once for all pages, so the page gets one counted from its own start
   var perf = {

@@ -869,3 +869,26 @@ describe("createDOM: instances are copies of one started instance", () => {
     }
   });
 });
+
+describe("a page that replaces Promise", () => {
+  it("observers, queueMicrotask and eval() keep working when the global Promise needs a MutationObserver (core-js)", async () => {
+    const page = await createDOM(
+      {
+        html: `<body><script>
+          var Native = Promise, node = document.createTextNode(""), flip = false, queued = [];
+          new MutationObserver(function () { var q = queued; queued = []; q.forEach(function (f) { f(); }); }).observe(node, { characterData: true });
+          function Fake(ex) { var cbs = []; this.then = function (f) { cbs.push(f); queued.push(function () { cbs.forEach(function (c) { c(1); }); }); node.data = (flip = !flip) ? "a" : "b"; }; ex(function () {}); }
+          Fake.resolve = function () { return new Fake(function () {}); };
+          window.Promise = Fake;
+        </script></body>`,
+      },
+      { settleMs: 0, timeout: 4000 },
+    );
+    try {
+      expect(await page.eval(`typeof Promise.resolve().then + ":" + (Promise !== __nativePromise)`)).toBe("function:true");
+      expect(await page.eval(`(function () { var t = document.createTextNode("ab"); t.appendData("cd"); t.insertData(0, "<"); t.deleteData(1, 1); t.replaceData(0, 1, ">"); return t.data + t.substringData(1, 2); })()`)).toBe(">bcdbc");
+    } finally {
+      page.close();
+    }
+  });
+});

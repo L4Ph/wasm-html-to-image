@@ -695,7 +695,7 @@ export function openPage(
       begin();
       call("globalThis.__edgeResult = undefined");
       run(
-        `Promise.resolve().then(() => (0, eval)(${JSON.stringify(code)}))` +
+        `__nativePromise.resolve().then(() => (0, eval)(${JSON.stringify(code)}))` +
           `.then((v) => { try { return { ok: true, v: JSON.stringify(v) }; } catch (e) { return { ok: false, v: String(e) }; } },` +
           ` (e) => ({ ok: false, v: (e && e.message ? (e.name || 'Error') + ': ' + e.message : String(e)) }))` +
           `.then((r) => { globalThis.__edgeResult = r; });`,

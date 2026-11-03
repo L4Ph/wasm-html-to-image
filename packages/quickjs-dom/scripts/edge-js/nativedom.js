@@ -331,7 +331,7 @@
     o._records.push(rec);
     if (o._scheduled) return;
     o._scheduled = true;
-    Promise.resolve().then(function () {
+    globalThis.__nativePromise.resolve().then(function () {
       o._scheduled = false;
       var recs = o._records.splice(0);
       if (recs.length) o._callback.call(o, recs, o);
@@ -1239,6 +1239,20 @@
   };
   [P.Element, P.Document, P.DocumentFragment].forEach(function (p) { liveGetter(p, "children"); });
   liveGetter(P.Node, "childNodes");
+  // the data methods of Text / Comment (all through `data`, so observers and ranges see them)
+  (function () {
+    var range = function (self, offset, count, name) {
+      var len = self.data.length;
+      offset = offset >>> 0;
+      if (offset > len) { var e = new Error("Failed to execute '" + name + "' on 'CharacterData': The offset " + offset + " is greater than the node's length (" + len + ")."); e.name = "IndexSizeError"; throw e; }
+      return Math.min(count === undefined ? len : count >>> 0, len - offset);
+    };
+    def(P.CharacterData, "substringData", function (o, c) { var n = range(this, o, c, "substringData"); return this.data.substr(o >>> 0, n); });
+    def(P.CharacterData, "appendData", function (d) { this.data = this.data + String(d); });
+    def(P.CharacterData, "insertData", function (o, d) { range(this, o, 0, "insertData"); this.data = this.data.slice(0, o >>> 0) + String(d) + this.data.slice(o >>> 0); });
+    def(P.CharacterData, "deleteData", function (o, c) { var n = range(this, o, c, "deleteData"); this.data = this.data.slice(0, o >>> 0) + this.data.slice((o >>> 0) + n); });
+    def(P.CharacterData, "replaceData", function (o, c, d) { var n = range(this, o, c, "replaceData"); this.data = this.data.slice(0, o >>> 0) + String(d) + this.data.slice((o >>> 0) + n); });
+  })();
   var equalNodes = function (a, b) {
     if (a === b) return true;
     if (!a || !b || a.nodeType !== b.nodeType) return false;
