@@ -45,6 +45,22 @@ describe("bridge: objects of the page from the host", () => {
     expect(() => new w.DOMTokenList()).toThrow(TypeError);
   });
 
+  it("gives the window its on* handler properties", async () => {
+    const out = await dom.eval(`(() => {
+      const seen = [];
+      const names = [];
+      let o = window;
+      while (o) { for (const k of Object.getOwnPropertyNames(o)) if (/^on./.test(k) && !names.includes(k)) names.push(k); o = Object.getPrototypeOf(o); }
+      const before = [window.onclick, window.onload];
+      window.onclick = (e) => seen.push("win:" + e.target.id);
+      document.getElementById("a").dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      const mid = [typeof window.onclick, seen.join(",")];
+      window.onclick = null;
+      return JSON.stringify([names.length, before, mid, window.onclick, typeof window.onbeforeunload, typeof window.onmessage]);
+    })()`);
+    expect(out).toBe(JSON.stringify([118, [null, null], ["function", "win:a"], null, "object", "object"]));
+  });
+
   it("reflects the aria* properties onto their attributes", async () => {
     const out = await dom.eval(`(() => {
       const el = document.getElementById("a");

@@ -910,11 +910,11 @@
     "progress ratechange reset resize scroll scrollend securitypolicyviolation seeked seeking select selectionchange selectstart slotchange stalled submit suspend " +
     "timeupdate toggle touchcancel touchend touchmove touchstart transitioncancel transitionend transitionrun transitionstart volumechange waiting wheel").split(" ");
   var HANDLER = Symbol("handlers");
-  [P.HTMLElement, P.Document].forEach(function (proto) {
-    HANDLER_EVENTS.forEach(function (type) {
+  var defHandlers = function (target, events) {
+    events.forEach(function (type) {
       var name = "on" + type;
-      if (Object.getOwnPropertyDescriptor(proto, name)) return;
-      getter(proto, name, function () {
+      if (Object.getOwnPropertyDescriptor(target, name)) return;
+      getter(target, name, function () {
         var h = this[HANDLER] && this[HANDLER][type];
         if (h !== undefined) return h;
         var code = this.nodeType === 1 ? this.getAttribute(name) : null;
@@ -927,7 +927,12 @@
         (this[HANDLER] || Object.defineProperty(this, HANDLER, { value: {}, configurable: true })[HANDLER])[type] = typeof v === "function" ? v : null;
       });
     });
-  });
+  };
+  [P.HTMLElement, P.Document].forEach(function (proto) { defHandlers(proto, HANDLER_EVENTS); });
+  // the window has its own handler list on top of the shared one (print, unload, message, storage, ...)
+  defHandlers(globalThis, HANDLER_EVENTS.concat(("afterprint beforematch beforeprint beforetoggle beforeunload contextlost contextrestored cuechange hashchange " +
+    "languagechange message messageerror offline online pagehide pageshow pointerrawupdate popstate rejectionhandled storage unhandledrejection unload " +
+    "webkitanimationend webkitanimationiteration webkitanimationstart webkittransitionend").split(" ")));
 
   // a form's controls (by name too, as in form.elements.email) and a select's options
   var CONTROLS = "input, select, textarea, button, fieldset, object, output";
