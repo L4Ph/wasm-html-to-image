@@ -326,6 +326,10 @@
       if (done.has(s)) continue;
       done.add(s);
       var type = (s.getAttribute("type") || "").toLowerCase();
+      if (type === "importmap") {
+        out.push({ idx: list.push(s) - 1, src: null, text: s.textContent, importmap: true });
+        continue;
+      }
       // legacy-browser polyfills are marked `nomodule`; linkedom keeps the attribute name's case (`noModule`)
       if (s.hasAttribute("nomodule") || s.hasAttribute("noModule") || (type && type !== "module" && type !== "text/javascript" && type !== "application/javascript")) continue;
       var src = s.getAttribute("src");

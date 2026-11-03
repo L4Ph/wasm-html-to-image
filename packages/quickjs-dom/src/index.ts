@@ -266,7 +266,46 @@ export async function createDOM(
   // ES modules: QuickJS loads them synchronously, so the host fetches a module's whole import graph first
   // (static imports and `import("literal")`), then serves the sources from memory
   const modules = new Map<string, string | Error>();
+  // import maps (`<script type="importmap">`): specifier prefixes and scopes, with every address resolved against the page
+  const mapImports: [string, string][] = [];
+  const mapScopes: [string, [string, string][]][] = [];
+  const mapEntries = (value: unknown): [string, string][] =>
+    value && typeof value === "object"
+      ? Object.entries(value as Record<string, unknown>).flatMap(([key, to]): [string, string][] => {
+          try {
+            return typeof to === "string" ? [[/^(\.{0,2}\/|[a-z][a-z0-9+.-]*:)/i.test(key) ? new URL(key, baseUrl).href : key, new URL(to, baseUrl).href]] : [];
+          } catch {
+            return [];
+          }
+        })
+      : [];
+  const addImportMap = (json: string) => {
+    try {
+      const map = JSON.parse(json) as { imports?: unknown; scopes?: Record<string, unknown> };
+      mapImports.push(...mapEntries(map.imports));
+      for (const [scope, entries] of Object.entries(map.scopes ?? {})) mapScopes.push([new URL(scope, baseUrl).href, mapEntries(entries)]);
+    } catch {
+      // an invalid import map is ignored, as a browser does
+    }
+  };
+  const mapped = (entries: [string, string][], name: string): string | undefined => {
+    let best: [string, string] | undefined;
+    for (const e of entries) {
+      if (e[0] === name) return e[1];
+      if (e[0].endsWith("/") && name.startsWith(e[0]) && (!best || e[0].length > best[0].length)) best = e;
+    }
+    return best && best[1] + name.slice(best[0].length);
+  };
   const resolveModule = (base: string, name: string) => {
+    if (mapImports.length || mapScopes.length) {
+      const scopes = mapScopes.filter(([s]) => s === base || (s.endsWith("/") && base.startsWith(s))).sort((a, b) => b[0].length - a[0].length);
+      for (const [, entries] of scopes) {
+        const hit = mapped(entries, name);
+        if (hit) return hit;
+      }
+      const hit = mapped(mapImports, name);
+      if (hit) return hit;
+    }
     try {
       return new URL(name, base).href;
     } catch {
@@ -375,9 +414,9 @@ export async function createDOM(
       const code = source.replace(/\bimport\.meta\.url\b/g, JSON.stringify(name));
       modules.set(name, code);
       const pending: string[] = [];
-      for (const m of code.matchAll(/(?:\bfrom\s*|\bimport\s*\(?\s*)(["'`])(\.{0,2}\/[^"'`$]+|https?:[^"'`$]+)\1/g)) {
+      for (const m of code.matchAll(/(?:\bfrom\s*|\bimport\s*\(?\s*)(["'`])([^"'`$\s]+)\1/g)) {
         const target = resolveModule(name, m[2]);
-        if (!modules.has(target) && modules.size < MAX_MODULES) {
+        if (/^https?:/.test(target) && !modules.has(target) && modules.size < MAX_MODULES) {
           modules.set(target, new Error(`could not load module ${target}`));
           pending.push(target);
         }
@@ -403,7 +442,7 @@ export async function createDOM(
     const runScripts = async () => {
       for (;;) {
         const raw = call("__edgeNextScripts()");
-        const list: { idx: number; src: string | null; text: string; module?: boolean }[] = typeof raw === "string" ? JSON.parse(raw) : [];
+        const list: { idx: number; src: string | null; text: string; module?: boolean; importmap?: boolean }[] = typeof raw === "string" ? JSON.parse(raw) : [];
         if (!list.length || remaining() <= 0) return;
         // the external ones are all requested at once; they still run one by one, in document order
         const sources = list.map((s) => {
@@ -417,6 +456,10 @@ export async function createDOM(
             );
         });
         for (const [i, s] of list.entries()) {
+          if (s.importmap) {
+            addImportMap(s.text);
+            continue;
+          }
           let code = s.text;
           let name = "inline";
           if (s.src) {

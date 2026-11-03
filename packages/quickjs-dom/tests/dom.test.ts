@@ -274,6 +274,18 @@ describe("javascript option, QuickJS engine: ES modules", () => {
     );
     expect(out.html).toContain('data-m="b"');
   });
+
+  it("resolves bare specifiers and prefixes through an import map", async () => {
+    const map = JSON.stringify({ imports: { bee: "./b.js", "lib/": "/" } });
+    const out = await runPageScriptsQuickJS(
+      {
+        baseUrl: base,
+        html: `<!doctype html><body><script type="importmap">${map}</script><script type="module">import { b } from "bee"; import { b as c } from "lib/b.js"; document.body.setAttribute("data-m", b + c);</script></body>`,
+      },
+      { settleMs: 100 },
+    );
+    expect(out.html).toContain('data-m="bb"');
+  });
 });
 
 describe("javascript option, QuickJS engine: import.meta", () => {
