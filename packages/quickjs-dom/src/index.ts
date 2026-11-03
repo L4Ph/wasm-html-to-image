@@ -128,7 +128,7 @@ export interface CreateDOMOptions extends JavaScriptOptions, EdgeJavaScriptEngin
   width?: number;
   /**
    * The DOM implementation: `"native"` is the one written in C inside the QuickJS wasm (much faster),
-   * `"linkedom"` the JavaScript one (default for now).
+   * `"linkedom"` the JavaScript one (the previous default).
    */
   dom?: "native" | "linkedom";
 }
@@ -401,7 +401,7 @@ export async function createDOM(
       return code;
     };
 
-    const boot = vm.eval(`__edgeBoot(${JSON.stringify(html)}, ${JSON.stringify(baseUrl)}, ${Math.round(viewportWidth)}, ${JSON.stringify(randomSeed())}, ${options.dom === "native"})`, "boot.js");
+    const boot = vm.eval(`__edgeBoot(${JSON.stringify(html)}, ${JSON.stringify(baseUrl)}, ${Math.round(viewportWidth)}, ${JSON.stringify(randomSeed())}, ${options.dom !== "linkedom"})`, "boot.js");
     if (boot.type === "error") throw new Error(`The QuickJS engine could not build the page: ${boot.value}`);
 
     // scripts in document order, the ones that scripts add included; each external one is fetched by the host
