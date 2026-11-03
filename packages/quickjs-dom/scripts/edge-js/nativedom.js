@@ -997,11 +997,8 @@
     if (!filter) return 1;
     return typeof filter === "function" ? filter(node) : filter.acceptNode(node);
   };
-  var following = function (node, root, skipChildren) {
-    if (!skipChildren && node.firstChild) return node.firstChild;
-    for (; node && node !== root; node = node.parentNode) if (node.nextSibling) return node.nextSibling;
-    return null;
-  };
+  // the next node in document order inside root, of a type in the mask (all, without one): the step is made in C
+  var following = D.following;
   var preceding = function (node, root) {
     if (node === root) return null;
     var sib = node.previousSibling;
@@ -1017,7 +1014,7 @@
       get referenceNode() { return cur || root; },
       pointerBeforeReference: false,
       nextNode: function () {
-        for (var n = cur === null ? root : following(cur, root); n; n = following(n, root)) if (verdict(n, what, filter) === 1) { cur = n; return n; }
+        for (var n = cur === null ? root : following(cur, root, false, what); n; n = following(n, root, false, what)) if (verdict(n, what, filter) === 1) { cur = n; return n; }
         return null;
       },
       previousNode: function () {
@@ -1034,7 +1031,7 @@
     var walkNext = function () {
       var n = w.currentNode, skip = false;
       for (;;) {
-        n = following(n, root, skip);
+        n = following(n, root, skip, what);
         if (!n) return null;
         var v = ok(n);
         if (v === 1) { w.currentNode = n; return n; }

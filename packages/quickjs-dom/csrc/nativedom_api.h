@@ -664,6 +664,33 @@ static JSValue js_dom_serialize(JSContext *ctx, JSValueConst this_val, int argc,
 
 /* for tests: how many nodes are alive, and a garbage collection to free the unreachable ones */
 static JSValue js_dom_version(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { return JS_NewInt64(ctx, nd_version); }
+/* the next node after argv[0] in document order inside root (argv[1]) whose type is in the mask (argv[3]), skipping the
+   children of argv[0] when argv[2] is true; null at the end. Traversals (TreeWalker, NodeIterator) step with this. */
+static JSValue js_dom_following(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    if (!nd_of(argv[0])) return JS_NULL;
+    JSValueConst root = argv[1];
+    int skip = JS_ToBool(ctx, argv[2]);
+    uint32_t mask = 0xFFFFFFFFu;
+    if (argc > 3 && JS_ToUint32(ctx, &mask, argv[3])) return JS_EXCEPTION;
+    JSValue cur = argv[0]; /* borrowed: the tree holds every node on the way */
+    for (;;) {
+        ND *c = nd_of(cur);
+        if (!skip && !JS_IsNull(c->first)) cur = c->first;
+        else {
+            JSValue x = cur;
+            for (;;) {
+                if (nd_same(x, root)) return JS_NULL;
+                ND *xn = nd_of(x);
+                if (!JS_IsNull(xn->next)) { cur = xn->next; break; }
+                if (JS_IsNull(xn->parent)) return JS_NULL;
+                x = xn->parent;
+            }
+        }
+        skip = 0;
+        ND *n = nd_of(cur);
+        if (mask & (1u << (n->type - 1))) return JS_DupValue(ctx, cur);
+    }
+}
 static JSValue js_dom_set_tag_proto(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     size_t len;
     const char *tag = JS_ToCStringLen(ctx, &len, argv[0]);
@@ -852,6 +879,7 @@ static void nd_register(JSContext *c, JSValueConst native) {
     JS_SetPropertyStr(c, dom, "serialize", JS_NewCFunction(c, js_dom_serialize, "serialize", 1));
     JS_SetPropertyStr(c, dom, "setTagProto", JS_NewCFunction(c, js_dom_set_tag_proto, "setTagProto", 2));
     JS_SetPropertyStr(c, dom, "version", JS_NewCFunction(c, js_dom_version, "version", 0));
+    JS_SetPropertyStr(c, dom, "following", JS_NewCFunction(c, js_dom_following, "following", 4));
     JS_SetPropertyStr(c, dom, "liveNodes", JS_NewCFunction(c, js_dom_live, "liveNodes", 0));
     JS_SetPropertyStr(c, dom, "gc", JS_NewCFunction(c, js_dom_gc, "gc", 0));
     JS_SetPropertyStr(c, dom, "createDocument", JS_NewCFunction(c, js_dom_create_document, "createDocument", 0));
