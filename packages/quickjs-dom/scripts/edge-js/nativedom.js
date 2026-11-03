@@ -811,6 +811,39 @@
     return root;
   });
   getter(P.Element, "shadowRoot", function () { var r = this[SHADOW]; return r && r.mode === "open" ? r : null; });
+  // ElementInternals: what a custom element reports about itself. The shadow root is the real
+  // one (a closed root is visible here, as it should be); the form side is inert — these elements
+  // are not form-associated in this engine, so validity is a standing all-valid state and the
+  // setters have nothing to set.
+  var ElementInternals = function ElementInternals() { illegal(); };
+  D.ctors.ElementInternals = ElementInternals;
+  var INTERNALS = new WeakMap();
+  def(P.HTMLElement, "attachInternals", function () {
+    // only a custom element has internals (the spec's condition), and only once
+    if (!defs.has(this.localName)) { var e0 = new Error("Failed to execute 'attachInternals' on 'HTMLElement': The target element is not a custom element."); e0.name = "NotSupportedError"; throw e0; }
+    if (INTERNALS.has(this)) { var e = new Error("Failed to execute 'attachInternals' on 'HTMLElement': This element has already been attached to an internals object."); e.name = "NotSupportedError"; throw e; }
+    var el = this;
+    var internals = Object.create(ElementInternals.prototype);
+    var validity = Object.create(W.ValidityState.prototype);
+    ["valueMissing", "typeMismatch", "patternMismatch", "tooLong", "tooShort", "rangeUnderflow", "rangeOverflow", "stepMismatch", "badInput", "customError"].forEach(function (k) {
+      Object.defineProperty(validity, k, { value: false, enumerable: true });
+    });
+    Object.defineProperty(validity, "valid", { value: true, enumerable: true });
+    Object.defineProperties(internals, {
+      shadowRoot: { get: function () { return el[SHADOW] || null; }, enumerable: true },
+      form: { value: null, enumerable: true },
+      labels: { value: null, enumerable: true },
+      willValidate: { value: false, enumerable: true },
+      validationMessage: { value: "", enumerable: true },
+      validity: { value: validity, enumerable: true },
+      checkValidity: { value: function () { return true; } },
+      reportValidity: { value: function () { return true; } },
+      setValidity: { value: function () {} },
+      setFormValue: { value: function () {} },
+    });
+    INTERNALS.set(this, internals);
+    return internals;
+  });
   // events leave a shadow tree through its host
   var plainParent = parentOf;
   parentOf = function (n) { return n.parentNode || (n.nodeType === 11 && n.host) || plainParent(n); };
@@ -1078,15 +1111,33 @@
   // viewport, and geometry (getBBox, getTotalLength, getPointAtLength) worked out from the attributes
   (function () {
     var SE = P.SVGElement, SG = P.SVGGraphicsElement;
-    var animated = function (read, write) {
+    // the SVG value interfaces: the animated pairs below wear them where a value actually arises.
+    // They are stashed for boot.js to install as globals, NOT registered as ctors: an animated
+    // value is all named properties (baseVal/animVal), and the bridge's class wrappers would keep
+    // host-side writes (className.baseVal = ...) local instead of forwarding them — the
+    // DOMStringMap lesson.
+    var svgValue = function (name) { var C = { [name]: function () { illegal(); } }[name]; (D.svgValueCtors || (D.svgValueCtors = {}))[name] = C; return C; };
+    var SVGAnimatedString = svgValue("SVGAnimatedString");
+    var SVGAnimatedRect = svgValue("SVGAnimatedRect");
+    var SVGRect = svgValue("SVGRect");
+    svgValue("SVGNumber");
+    svgValue("SVGStringList");
+    var SVGPreserveAspectRatio = svgValue("SVGPreserveAspectRatio");
+    [["SVG_PRESERVEASPECTRATIO_UNKNOWN", 0], ["SVG_PRESERVEASPECTRATIO_NONE", 1], ["SVG_PRESERVEASPECTRATIO_XMINYMIN", 2], ["SVG_PRESERVEASPECTRATIO_XMIDYMIN", 3], ["SVG_PRESERVEASPECTRATIO_XMAXYMIN", 4], ["SVG_PRESERVEASPECTRATIO_XMINYMID", 5], ["SVG_PRESERVEASPECTRATIO_XMIDYMID", 6], ["SVG_PRESERVEASPECTRATIO_XMAXYMID", 7], ["SVG_PRESERVEASPECTRATIO_XMINYMAX", 8], ["SVG_PRESERVEASPECTRATIO_XMIDYMAX", 9], ["SVG_PRESERVEASPECTRATIO_XMAXYMAX", 10], ["SVG_MEETORSLICE_UNKNOWN", 0], ["SVG_MEETORSLICE_MEET", 1], ["SVG_MEETORSLICE_SLICE", 2]].forEach(function (p) {
+      SVGPreserveAspectRatio[p[0]] = p[1];
+      Object.defineProperty(SVGPreserveAspectRatio.prototype, p[0], { value: p[1] });
+    });
+    svgValue("SVGAnimatedPreserveAspectRatio");
+    var animated = function (read, write, proto) {
       var o = {};
+      if (proto) Object.setPrototypeOf(o, proto);
       Object.defineProperty(o, "baseVal", { get: read, set: write, enumerable: true });
       Object.defineProperty(o, "animVal", { get: read, enumerable: true });
       return o;
     };
     getter(SE, "className", function () {
       var el = this;
-      return animated(function () { return el.getAttribute("class") || ""; }, function (v) { el.setAttribute("class", String(v)); });
+      return animated(function () { return el.getAttribute("class") || ""; }, function (v) { el.setAttribute("class", String(v)); }, SVGAnimatedString.prototype);
     }, function (v) { this.setAttribute("class", String(v)); });
     var UNITS = [[/%$/, 2, 0], [/em$/, 3, 16], [/ex$/, 4, 8], [/px$/, 5, 1], [/cm$/, 6, 96 / 2.54], [/mm$/, 7, 96 / 25.4], [/in$/, 8, 96], [/pt$/, 9, 4 / 3], [/pc$/, 10, 16]];
     var unitOf = function (s) {
@@ -1112,13 +1163,14 @@
       var el = this;
       var read = function () {
         var p = (el.getAttribute("viewBox") || "").trim().split(/[\s,]+/).map(parseFloat);
-        return p.length === 4 && p.every(isFinite) ? { x: p[0], y: p[1], width: p[2], height: p[3] } : { x: 0, y: 0, width: 0, height: 0 };
+        var r = p.length === 4 && p.every(isFinite) ? { x: p[0], y: p[1], width: p[2], height: p[3] } : { x: 0, y: 0, width: 0, height: 0 };
+        return Object.setPrototypeOf(r, SVGRect.prototype);
       };
-      return animated(read);
+      return animated(read, undefined, SVGAnimatedRect.prototype);
     });
     getter(SE, "href", function () {
       var el = this;
-      return animated(function () { var v = el.getAttribute("href"); return v !== null ? v : el.getAttribute("xlink:href") || ""; }, function (v) { el.setAttribute("href", String(v)); });
+      return animated(function () { var v = el.getAttribute("href"); return v !== null ? v : el.getAttribute("xlink:href") || ""; }, function (v) { el.setAttribute("href", String(v)); }, SVGAnimatedString.prototype);
     });
     getter(SE, "ownerSVGElement", function () {
       for (var n = this.parentNode; n && n.nodeType === 1; n = n.parentNode) if (n.localName === "svg") return n;
@@ -2942,10 +2994,25 @@
     return xpResult(fn({ node: ctx, pos: 1, size: 1 }), type | 0);
   };
   def(P.Document, "evaluate", function (src, ctx, resolver, type) { return xpEvaluate(src, ctx || this, type); });
+  var XPathExpression = function XPathExpression() { illegal(); };
+  W.XPathExpression = XPathExpression;
+  var XPathException = function XPathException(message) {
+    Object.defineProperties(this, {
+      message: { value: String(message || ""), enumerable: true },
+      name: { value: "XPathException", enumerable: true },
+      code: { value: 0, enumerable: true },
+    });
+  };
+  Object.setPrototypeOf(XPathException.prototype, Error.prototype);
+  XPathException.INVALID_EXPRESSION_ERR = 51;
+  XPathException.TYPE_ERR = 52;
+  Object.defineProperty(XPathException.prototype, "INVALID_EXPRESSION_ERR", { value: 51 });
+  Object.defineProperty(XPathException.prototype, "TYPE_ERR", { value: 52 });
+  W.XPathException = XPathException;
   def(P.Document, "createExpression", function (src) {
     var text = String(src);
     xpCompile(text);
-    return { evaluate: function (ctx, type) { return xpEvaluate(text, ctx, type); } };
+    return Object.setPrototypeOf({ evaluate: function (ctx, type) { return xpEvaluate(text, ctx, type); } }, XPathExpression.prototype);
   });
   def(P.Document, "createNSResolver", function (n) { return { lookupNamespaceURI: function () { return null; } }; });
   var XPathEvaluator = function XPathEvaluator() {};

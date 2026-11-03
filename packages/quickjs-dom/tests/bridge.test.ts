@@ -45,6 +45,37 @@ describe("bridge: objects of the page from the host", () => {
     expect(() => new w.DOMTokenList()).toThrow(TypeError);
   });
 
+  it("answers the SVG value interfaces, XPath classes and ElementInternals", async () => {
+    const out = await dom.eval(`(() => {
+      const d = document;
+      const svg = d.createElementNS("http://www.w3.org/2000/svg", "svg");
+      svg.setAttribute("viewBox", "0 0 10 20");
+      svg.setAttribute("class", "c1");
+      const expr = d.createExpression("//b");
+      if (!customElements.get("x-probe")) customElements.define("x-probe", class extends HTMLElement {});
+      const host = d.createElement("x-probe");
+      const internals = host.attachInternals();
+      let again = "no throw";
+      try { host.attachInternals(); } catch (e) { again = e.name; }
+      return JSON.stringify([
+        svg.className instanceof SVGAnimatedString, svg.className.baseVal, svg.href instanceof SVGAnimatedString,
+        svg.viewBox instanceof SVGAnimatedRect, svg.viewBox.baseVal instanceof SVGRect, svg.viewBox.baseVal.width,
+        typeof SVGNumber, typeof SVGStringList, typeof SVGPreserveAspectRatio, SVGPreserveAspectRatio.SVG_PRESERVEASPECTRATIO_XMIDYMID, typeof SVGAnimatedPreserveAspectRatio,
+        expr instanceof XPathExpression, expr.evaluate(d, 0).snapshotLength >= 0, typeof XPathException, XPathException.TYPE_ERR,
+        internals instanceof ElementInternals, internals.validity.valid, internals.checkValidity(), internals.form, again,
+      ]);
+    })()`);
+    expect(out).toBe(
+      JSON.stringify([
+        true, "c1", true,
+        true, true, 10,
+        "function", "function", "function", 6, "function",
+        true, true, "function", 52,
+        true, true, true, null, "NotSupportedError",
+      ]),
+    );
+  });
+
   it("builds the CSS rule classes from a sheet", async () => {
     const out = await dom.eval(`(() => {
       const d = document.implementation.createHTMLDocument("");

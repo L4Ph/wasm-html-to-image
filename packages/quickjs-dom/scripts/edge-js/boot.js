@@ -55,6 +55,8 @@
     if (N.DOMStringMapCtor && !("DOMStringMap" in g)) Object.defineProperty(g, "DOMStringMap", { configurable: true, writable: true, value: N.DOMStringMapCtor });
     // CSSStyleDeclaration likewise (its objects are all named properties)
     if (N.CSSStyleDeclarationCtor && !("CSSStyleDeclaration" in g)) Object.defineProperty(g, "CSSStyleDeclaration", { configurable: true, writable: true, value: N.CSSStyleDeclarationCtor });
+    // the SVG value interfaces likewise (their objects are baseVal/animVal pairs)
+    if (N.svgValueCtors) for (var vk in N.svgValueCtors) if (!(vk in g)) Object.defineProperty(g, vk, { configurable: true, writable: true, value: N.svgValueCtors[vk] });
     g.document = d;
     ["window", "self", "top", "parent", "frames"].forEach(function (k) {
       Object.defineProperty(g, k, { configurable: true, writable: true, value: g });

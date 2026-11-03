@@ -726,8 +726,10 @@
         var store = function (list, fr) { var t = list.join("\n"); owner.textContent = t; owner.__rt = t; owner.__rl = list; owner.__fr = fr || null; };
         var cssRules = function () {
           listOf();
-          var fr = owner.__fr || (owner.__fr = parseSheetFlat(owner.__rt));
-          stampSheet(fr, obj);
+          // the sheet stamp is applied when the list is built (and to a rule insertRule adds),
+          // not on every read: CSS-in-JS pages read cssRules in loops over thousands of rules
+          var fr = owner.__fr;
+          if (!fr) { fr = owner.__fr = parseSheetFlat(owner.__rt); stampSheet(fr, obj); }
           return fr;
         };
         var obj = {
@@ -742,7 +744,9 @@
             if (index < 0 || index > list.length) throw domErr("IndexSizeError", "Failed to execute 'insertRule' on 'CSSStyleSheet': the index " + index + " is greater than the length of the rule list.");
             var fr = (cssRules(), owner.__fr);
             list.splice(index, 0, String(rule));
-            fr.splice(index, 0, parseSheetFlat(String(rule))[0]); // the rule list is live
+            var added = parseSheetFlat(String(rule))[0];
+            stampSheet([added], obj);
+            fr.splice(index, 0, added); // the rule list is live
             store(list, fr);
             return index;
           },
