@@ -179,6 +179,13 @@
       constructor(m, n) { super(m || ""); this.name = n || "Error"; this.code = 0; }
     };
   }
+  if (!g.QuotaExceededError) {
+    // (the runtime's own DOMException, when it is the one in place, keeps code behind a
+    // getter-only accessor, so the legacy code is defined, not assigned)
+    g.QuotaExceededError = class QuotaExceededError extends g.DOMException {
+      constructor(m) { super(m || "", "QuotaExceededError"); Object.defineProperty(this, "code", { value: 22, writable: true, configurable: true }); }
+    };
+  }
   if (!g.queueMicrotask) g.queueMicrotask = function (fn) { g.__nativePromise.resolve().then(fn); };
   // QuickJS-ng has its own `performance`, whose origin is the moment the context was made: here that is the moment the
   // guest was started once for all pages, so the page gets one counted from its own start
@@ -455,10 +462,20 @@
 
   // XMLHttpRequest on top of fetch (axios and older libraries)
   g.XMLHttpRequest = g.XMLHttpRequest || (function () {
-    var XHR = class XMLHttpRequest {
+    // the two event-target interfaces of the family: XHR extends the first (boot.js chains it to
+    // the real EventTarget once that layer has loaded), and each request's upload is the second
+    var XHRET = class XMLHttpRequestEventTarget {};
+    var XHRUpload = class XMLHttpRequestUpload {};
+    g.XMLHttpRequestEventTarget = XHRET;
+    g.XMLHttpRequestUpload = XHRUpload;
+    var XHR = class XMLHttpRequest extends XHRET {
       constructor() {
+        super();
         this.readyState = 0; this.status = 0; this.statusText = ""; this.responseText = ""; this.response = null; this.responseType = ""; this.responseURL = "";
-        this.timeout = 0; this.withCredentials = false; this.upload = { addEventListener: function () {}, removeEventListener: function () {} };
+        this.timeout = 0; this.withCredentials = false;
+        var upload = new XHRUpload();
+        upload.addEventListener = function () {}; upload.removeEventListener = function () {};
+        this.upload = upload;
         this.l = {}; this.h = {}; this.rh = {};
       }
       open(m, u) { this.m = String(m).toUpperCase(); this.u = String(u); this.rh = {}; this.aborted = false; this.set(1); }

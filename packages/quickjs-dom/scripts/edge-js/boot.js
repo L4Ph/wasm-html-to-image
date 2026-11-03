@@ -523,6 +523,13 @@
         }
       };
     }
+    // the XHR family's parent interface joins the real EventTarget chain (shims.js loads before it exists)
+    if (g.XMLHttpRequestEventTarget && g.EventTarget) {
+      Object.setPrototypeOf(g.XMLHttpRequestEventTarget.prototype, g.EventTarget.prototype);
+      Object.setPrototypeOf(g.XMLHttpRequestEventTarget, g.EventTarget);
+      Object.setPrototypeOf(g.XMLHttpRequestUpload.prototype, g.XMLHttpRequestEventTarget.prototype);
+      Object.setPrototypeOf(g.XMLHttpRequestUpload, g.XMLHttpRequestEventTarget);
+    }
     if (!g.Performance) g.Performance = function Performance() { throw new TypeError("Illegal constructor"); };
     if (g.performance) Object.setPrototypeOf(g.performance, g.Performance.prototype);
     if (g.performance && !g.performance.timing) {

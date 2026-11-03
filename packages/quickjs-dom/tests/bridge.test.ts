@@ -45,6 +45,34 @@ describe("bridge: objects of the page from the host", () => {
     expect(() => new w.DOMTokenList()).toThrow(TypeError);
   });
 
+  it("constructs the remaining event classes and the XHR family", async () => {
+    const out = await dom.eval(`(() => {
+      const ce = new CloseEvent("close", { wasClean: true, code: 1000, reason: "bye" });
+      const pre = new PromiseRejectionEvent("unhandledrejection", { promise: Promise.resolve(1), reason: "r" });
+      const dm = new DeviceMotionEvent("devicemotion", { interval: 16 });
+      const xhr = new XMLHttpRequest();
+      const qe = new QuotaExceededError("full");
+      return JSON.stringify([
+        ce.type, ce.wasClean, ce.code, ce.reason, ce instanceof Event,
+        pre.reason, pre.promise instanceof Promise, pre instanceof Event,
+        dm.interval, dm.acceleration, new BlobEvent("blob", { data: null }).type,
+        typeof BeforeUnloadEvent, typeof DeviceOrientationEvent, typeof DeviceMotionEventAcceleration, typeof DeviceMotionEventRotationRate,
+        xhr instanceof XMLHttpRequestEventTarget, xhr instanceof EventTarget, xhr.upload instanceof XMLHttpRequestUpload, xhr.upload instanceof XMLHttpRequestEventTarget,
+        qe.name, qe.code, qe instanceof DOMException, typeof QuotaExceededError,
+      ]);
+    })()`);
+    expect(out).toBe(
+      JSON.stringify([
+        "close", true, 1000, "bye", true,
+        "r", true, true,
+        16, null, "blob",
+        "function", "function", "function", "function",
+        true, true, true, true,
+        "QuotaExceededError", 22, true, "function",
+      ]),
+    );
+  });
+
   it("constructs Option and Audio, and names the document and range classes", async () => {
     const out = await dom.eval(`(() => {
       const opt = new Option("hi", "v", false, true);

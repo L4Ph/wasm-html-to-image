@@ -1440,6 +1440,18 @@
   subclass("PageTransitionEvent", Event, { persisted: false });
   subclass("ErrorEvent", Event, { message: "", filename: "", lineno: 0, colno: 0, error: null });
   subclass("ProgressEvent", Event, { lengthComputable: false, loaded: 0, total: 0 });
+  subclass("BeforeUnloadEvent", Event, {});
+  subclass("BlobEvent", Event, { data: null, timecode: 0 });
+  subclass("CloseEvent", Event, { wasClean: false, code: 0, reason: "" });
+  subclass("PromiseRejectionEvent", Event, { promise: null, reason: undefined });
+  subclass("DeviceOrientationEvent", Event, { alpha: null, beta: null, gamma: null, absolute: false });
+  subclass("DeviceMotionEvent", Event, { acceleration: null, accelerationIncludingGravity: null, rotationRate: null, interval: 0 });
+  // the motion component interfaces: never constructed, their values ride on a DeviceMotionEvent
+  [["DeviceMotionEventAcceleration", ["x", "y", "z"]], ["DeviceMotionEventRotationRate", ["alpha", "beta", "gamma"]]].forEach(function (pair) {
+    var C = { [pair[0]]: function () { illegal(); } }[pair[0]];
+    pair[1].forEach(function (k) { getter(C.prototype, k, function () { return null; }); });
+    W[pair[0]] = C;
+  });
 
   var EventTarget = function EventTarget() {};
   def(EventTarget.prototype, "addEventListener", addListener);
