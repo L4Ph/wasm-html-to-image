@@ -48,6 +48,90 @@
       },
     };
   }
+  // The rest of Intl that pages touch, in English only (QuickJS has no locale data): enough for a page not to fail
+  (function (I) {
+    var define = function (name, C) { if (!I[name]) Object.defineProperty(I, name, { value: C, writable: true, configurable: true }); };
+    var locale = function (l) { return typeof l === "string" ? l : Array.isArray(l) && l.length ? l[0] : "en-US"; };
+    define("Segmenter", class Segmenter {
+      constructor(l, o) { this._l = locale(l); this._g = (o && o.granularity) || "grapheme"; }
+      segment(str) {
+        str = String(str);
+        var gran = this._g, out = [], re;
+        if (gran === "word") re = /[\p{L}\p{N}_']+|\s+|[^\p{L}\p{N}_'\s]/gu;
+        else if (gran === "sentence") re = /[^.!?]*[.!?]+\s*|[^.!?]+$/gu;
+        else re = /\p{RI}\p{RI}|(?:\p{Emoji_Presentation}|\p{Emoji}️?)(?:\p{EMod}|‍(?:\p{Emoji_Presentation}|\p{Emoji}️?)|️|⃣)*|\P{M}\p{M}*|[\s\S]/gu;
+        var m;
+        while ((m = re.exec(str)) && m[0] !== "") {
+          var seg = { segment: m[0], index: m.index, input: str };
+          if (gran === "word") seg.isWordLike = /[\p{L}\p{N}]/u.test(m[0]);
+          out.push(seg);
+        }
+        var res = { containing: function (i) { i = i || 0; return out.find(function (s) { return i >= s.index && i < s.index + s.segment.length; }); } };
+        res[Symbol.iterator] = function () { return out[Symbol.iterator](); };
+        return res;
+      }
+      resolvedOptions() { return { locale: this._l, granularity: this._g }; }
+      static supportedLocalesOf(l) { return [].concat(l || []); }
+    });
+    define("PluralRules", class PluralRules {
+      constructor(l, o) { this._l = locale(l); this._t = (o && o.type) || "cardinal"; }
+      select(n) {
+        n = Number(n);
+        if (this._t === "ordinal") { var a = n % 10, b = n % 100; return a === 1 && b !== 11 ? "one" : a === 2 && b !== 12 ? "two" : a === 3 && b !== 13 ? "few" : "other"; }
+        return n === 1 ? "one" : "other";
+      }
+      resolvedOptions() { return { locale: this._l, type: this._t }; }
+      static supportedLocalesOf(l) { return [].concat(l || []); }
+    });
+    define("Collator", class Collator {
+      constructor(l, o) {
+        this._l = locale(l); this._o = o || {};
+        var self = this;
+        this.compare = function (a, b) { return self._o.numeric || self._o.sensitivity === "base" ? String(a).localeCompare(String(b), undefined, self._o) : String(a).localeCompare(String(b)); };
+      }
+      resolvedOptions() { return { locale: this._l, usage: "sort", sensitivity: "variant", ignorePunctuation: false, collation: "default", numeric: !!this._o.numeric, caseFirst: "false" }; }
+      static supportedLocalesOf(l) { return [].concat(l || []); }
+    });
+    define("ListFormat", class ListFormat {
+      constructor(l, o) { this._o = o || {}; }
+      format(list) {
+        var a = Array.from(list, String), word = this._o.type === "disjunction" ? "or" : "and";
+        if (this._o.type === "unit") return a.join(this._o.style === "narrow" ? " " : ", ");
+        return a.length < 2 ? a.join("") : a.length === 2 ? a[0] + " " + word + " " + a[1] : a.slice(0, -1).join(", ") + ", " + word + " " + a[a.length - 1];
+      }
+    });
+    define("RelativeTimeFormat", class RelativeTimeFormat {
+      constructor(l, o) { this._o = o || {}; }
+      format(v, unit) {
+        v = Number(v); unit = String(unit).replace(/s$/, "");
+        if (this._o.numeric === "auto") {
+          if (v === 0) return unit === "day" ? "today" : "this " + unit;
+          if (v === 1) return unit === "day" ? "tomorrow" : "next " + unit;
+          if (v === -1) return unit === "day" ? "yesterday" : "last " + unit;
+        }
+        var n = Math.abs(v), label = n + " " + unit + (n === 1 ? "" : "s");
+        return v < 0 || Object.is(v, -0) ? label + " ago" : "in " + label;
+      }
+    });
+    define("DateTimeFormat", class DateTimeFormat {
+      constructor(l, o) { this._l = locale(l); this._o = o || {}; }
+      format(d) {
+        d = d === undefined ? new Date() : new Date(d);
+        var o = this._o, utc = o.timeZone === "UTC";
+        var get = function (k) { return utc ? d["getUTC" + k]() : d["get" + k](); };
+        var date = (get("Month") + 1) + "/" + get("Date") + "/" + get("FullYear");
+        var pad = function (n) { return n < 10 ? "0" + n : String(n); };
+        var h = get("Hours"), time = (h % 12 || 12) + ":" + pad(get("Minutes")) + ":" + pad(get("Seconds")) + " " + (h < 12 ? "AM" : "PM");
+        var wantsTime = o.timeStyle || o.hour || o.minute || o.second, wantsDate = o.dateStyle || o.year || o.month || o.day || o.weekday || !wantsTime;
+        return wantsDate && wantsTime ? date + ", " + time : wantsTime ? time : date;
+      }
+      formatToParts(d) { return [{ type: "literal", value: this.format(d) }]; }
+      resolvedOptions() { return { locale: this._l, calendar: "gregory", numberingSystem: "latn", timeZone: this._o.timeZone || "UTC" }; }
+      static supportedLocalesOf(l) { return [].concat(l || []); }
+    });
+    define("getCanonicalLocales", function (l) { return [].concat(l || []); });
+    if (!I.supportedValuesOf) define("supportedValuesOf", function () { return []; });
+  })(g.Intl);
   if (!g.DOMException) {
     g.DOMException = class DOMException extends Error {
       constructor(m, n) { super(m || ""); this.name = n || "Error"; this.code = 0; }

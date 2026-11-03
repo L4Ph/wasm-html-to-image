@@ -275,6 +275,14 @@ describe("javascript option, QuickJS engine: ES modules", () => {
     expect(out.html).toContain('data-m="b"');
   });
 
+  it("module scripts run after the classic scripts of the document", async () => {
+    const out = await runPageScriptsQuickJS(
+      { baseUrl: base, html: '<!doctype html><body><script type="module">document.body.setAttribute("data-o", window.early);</script><script>window.early = "set";</script></body>' },
+      { settleMs: 100 },
+    );
+    expect(out.html).toContain('data-o="set"');
+  });
+
   it("a classic inline script can import() a module relative to the page", async () => {
     const out = await runPageScriptsQuickJS(
       { baseUrl: base, html: '<!doctype html><body><script>import("./b.js").then(function (m) { document.body.setAttribute("data-d", m.b); });</script></body>' },

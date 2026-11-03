@@ -129,16 +129,40 @@
         },
       });
     };
+    // Storage: an instance of its class, whose items also read, write and delete as properties (localStorage.theme = "x")
+    var maps = new WeakMap();
+    var Storage = function Storage() { throw new TypeError("Illegal constructor"); };
+    var sp = Storage.prototype;
+    var items = function (s) { return maps.get(s); };
+    Object.defineProperties(sp, {
+      getItem: { value: function getItem(k) { k = String(k); var m = items(this); return m.has(k) ? m.get(k) : null; }, writable: true, configurable: true },
+      setItem: { value: function setItem(k, v) { items(this).set(String(k), String(v)); }, writable: true, configurable: true },
+      removeItem: { value: function removeItem(k) { items(this).delete(String(k)); }, writable: true, configurable: true },
+      clear: { value: function clear() { items(this).clear(); }, writable: true, configurable: true },
+      key: { value: function key(i) { var ks = Array.from(items(this).keys()); return ks[i] === undefined ? null : ks[i]; }, writable: true, configurable: true },
+      length: { get: function () { return items(this).size; }, configurable: true },
+    });
+    g.Storage = Storage;
     function storage() {
-      var m = new Map();
-      return {
-        getItem: function (k) { k = String(k); return m.has(k) ? m.get(k) : null; },
-        setItem: function (k, v) { m.set(String(k), String(v)); },
-        removeItem: function (k) { m.delete(String(k)); },
-        clear: function () { m.clear(); },
-        key: function (i) { return Array.from(m.keys())[i] == null ? null : Array.from(m.keys())[i]; },
-        get length() { return m.size; },
-      };
+      var target = Object.create(sp);
+      var data = new Map();
+      maps.set(target, data);
+      var proxy = new Proxy(target, {
+        get: function (t, k, r) {
+          if (typeof k !== "string" || k in t) return Reflect.get(t, k, t);
+          var m = items(t);
+          return m.has(k) ? m.get(k) : undefined;
+        },
+        set: function (t, k, v) { if (typeof k !== "string") return Reflect.set(t, k, v); items(t).set(k, String(v)); return true; },
+        deleteProperty: function (t, k) { if (typeof k === "string") items(t).delete(k); return true; },
+        has: function (t, k) { return k in t || (typeof k === "string" && items(t).has(k)); },
+        ownKeys: function (t) { return Array.from(items(t).keys()); },
+        getOwnPropertyDescriptor: function (t, k) {
+          return typeof k === "string" && items(t).has(k) ? { value: items(t).get(k), writable: true, enumerable: true, configurable: true } : undefined;
+        },
+      });
+      maps.set(proxy, data); // the methods are called with the proxy as this
+      return proxy;
     }
     g.localStorage = storage();
     g.sessionStorage = storage();
@@ -245,6 +269,57 @@
         close() {}
       };
     }
+    // more of the platform that scripts feature-detect or call and ignore the result of
+    var AS = g.AbortSignal;
+    if (AS && !AS.timeout) {
+      AS.abort = function (reason) { var c = new g.AbortController(); c.abort(reason); return c.signal; };
+      AS.timeout = function (ms) { var c = new g.AbortController(); setTimeout(function () { c.abort(new Error("The operation timed out.")); }, ms); return c.signal; };
+      AS.any = function (signals) {
+        var c = new g.AbortController();
+        Array.from(signals).forEach(function (s) { if (s.aborted) c.abort(s.reason); else s.addEventListener("abort", function () { c.abort(s.reason); }); });
+        return c.signal;
+      };
+    }
+    if (!g.PerformanceObserver) {
+      g.PerformanceObserver = class PerformanceObserver {
+        constructor(cb) { this._cb = cb; }
+        observe() {}
+        disconnect() {}
+        takeRecords() { return []; }
+        static get supportedEntryTypes() { return []; }
+      };
+    }
+    if (!g.MessageChannel) {
+      g.MessageChannel = class MessageChannel {
+        constructor() {
+          var mk = function () { var p = new g.EventTarget(); p.onmessage = null; p.start = function () {}; p.close = function () {}; return p; };
+          var a = mk(), b = mk();
+          var link = function (from, to) {
+            from.postMessage = function (data) {
+              setTimeout(function () {
+                var ev = new g.Event("message"); ev.data = data;
+                if (typeof to.onmessage === "function") to.onmessage(ev);
+                to.dispatchEvent(ev);
+              }, 0);
+            };
+          };
+          link(a, b); link(b, a);
+          this.port1 = a; this.port2 = b;
+        }
+      };
+    }
+    if (g.performance && !g.performance.timing) {
+      g.performance.timing = { navigationStart: g.performance.timeOrigin, fetchStart: g.performance.timeOrigin, responseStart: g.performance.timeOrigin, domLoading: g.performance.timeOrigin, domInteractive: g.performance.timeOrigin, domContentLoadedEventStart: g.performance.timeOrigin, domContentLoadedEventEnd: g.performance.timeOrigin, loadEventStart: 0, loadEventEnd: 0 };
+      g.performance.navigation = { type: 0, redirectCount: 0 };
+      g.performance.toJSON = function () { return {}; };
+    }
+    if (!g.navigator.sendBeacon) g.navigator.sendBeacon = function () { return true; };
+    if (!g.navigator.storage) g.navigator.storage = { estimate: function () { return Promise.resolve({ quota: 0, usage: 0 }); }, persist: function () { return Promise.resolve(false); }, persisted: function () { return Promise.resolve(false); } };
+    if (!g.navigator.clipboard) g.navigator.clipboard = { writeText: function () { return Promise.resolve(); }, readText: function () { return Promise.reject(new g.DOMException("Read permission denied.", "NotAllowedError")); } };
+    if (!("webdriver" in g.navigator)) g.navigator.webdriver = false;
+    if (!("doNotTrack" in g.navigator)) g.navigator.doNotTrack = null;
+    if (!("vendor" in g.navigator)) { g.navigator.vendor = "Google Inc."; g.navigator.appVersion = "5.0 (X11)"; g.navigator.maxTouchPoints = 0; g.navigator.pdfViewerEnabled = false; }
+    if (!d.timeline) d.timeline = { get currentTime() { return g.performance.now(); } };
     if (!d.getElementsByName) d.getElementsByName = function (n) { return d.querySelectorAll('[name="' + n + '"]'); };
 
     // URL-valued properties read back absolute, as in a browser (framework code does `new URL(script.src)`)

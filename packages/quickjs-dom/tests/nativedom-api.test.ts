@@ -690,3 +690,21 @@ describe("URL against an opaque base", () => {
     }
   });
 });
+
+describe("Storage and Intl", () => {
+  it("localStorage is a Storage whose items are also properties; Intl has what pages feature-detect", async () => {
+    const dom = await createDOM({ html: "<body></body>" }, { settleMs: 0 });
+    try {
+      const w = dom.bridge().window as any;
+      expect(w.eval("localStorage instanceof Storage")).toBe(true);
+      expect(w.eval('localStorage.theme = "dark"; [localStorage.getItem("theme"), localStorage.length, Object.keys(localStorage).join(), "theme" in localStorage].join()')).toBe("dark,1,theme,true");
+      expect(w.eval('delete localStorage.theme; localStorage.getItem("theme")')).toBeNull();
+      expect(w.eval('[...new Intl.Segmenter().segment("a\u{1F44D}\u{1F3FD}b")].map((s) => s.segment).length')).toBe(3);
+      expect(w.eval('[...new Intl.Segmenter("en", { granularity: "word" }).segment("hi there!")].filter((s) => s.isWordLike).map((s) => s.segment).join()')).toBe("hi,there");
+      expect(w.eval('new Intl.PluralRules("en").select(1) + new Intl.PluralRules("en").select(2)')).toBe("oneother");
+      expect(w.eval('new Intl.ListFormat("en").format(["a", "b", "c"])')).toBe("a, b, and c");
+    } finally {
+      dom.close();
+    }
+  });
+});

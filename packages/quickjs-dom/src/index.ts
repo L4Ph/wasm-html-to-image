@@ -372,6 +372,8 @@ export function openPage(
       const hit = mapped(mapImports, name);
       if (hit) return hit;
     }
+    // a bare specifier that no import map knows is an error in a browser, not a path on the page
+    if (!/^(\.{0,2}\/|[a-z][a-z0-9+.-]*:)/i.test(name)) return name;
     try {
       // code that is not a module of a URL (an inline script, the engine's own) resolves against the page
       return new URL(name, /^https?:/.test(base) ? base : baseUrl).href;
@@ -523,6 +525,8 @@ export function openPage(
         const raw = call("__edgeNextScripts()");
         const list: { idx: number; src: string | null; text: string; module?: boolean; importmap?: boolean }[] = typeof raw === "string" ? JSON.parse(raw) : [];
         if (!list.length || remaining() <= 0 || !mode.scripts) return;
+        // module scripts are deferred: they run after the classic scripts of the document (each group in order)
+        list.sort((a, b) => (a.module ? 1 : 0) - (b.module ? 1 : 0) || a.idx - b.idx);
         // the external ones are all requested at once; they still run one by one, in document order
         const sources = list.map((s) => {
           if (!s.src || !mode.external) return undefined;
