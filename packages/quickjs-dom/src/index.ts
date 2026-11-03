@@ -23,7 +23,9 @@
 import { guestBytecode } from "../dist/edge-js-payload.js";
 import defaultQuickJSWasm from "#quickjs-wasm";
 import { createGuard, type FetchLimits } from "./limits.js";
+import { Bridge, type BridgeOptions } from "./bridge.js";
 import { QuickJSInstance } from "./runtime.js";
+export type { Bridge, BridgeOptions } from "./bridge.js";
 
 export { isPrivateHost, type FetchLimits } from "./limits.js";
 
@@ -185,6 +187,12 @@ export interface QuickJSDOM {
   setLayout(boxes: Record<number, [number, number, number, number]>): void;
   /** Options for a renderer that draws this page: `value` is the serialized DOM and `baseUrl` is this page's. */
   toOptions<T extends PageInput>(options: T): T;
+  /**
+   * The page's objects for the host's own code, synchronously: `bridge().window.document.querySelector("a").href`. Every
+   * property read or method call is a call into the page; nodes are the same objects each time, and a function you give
+   * the page (an event listener) is called back at once. Made on first use; `close()` ends it.
+   */
+  bridge(options?: BridgeOptions): Bridge;
   /** Free the QuickJS runtime. The page cannot be used afterwards. */
   close(): void;
 }
@@ -313,6 +321,9 @@ export async function createDOM(
     }
   };
 
+  // the objects of the page, for the host's own code (see dom.bridge())
+  let bridge: Bridge | undefined;
+
   // let the page's reactions to what happened run
   let pump = () => {};
   const vm = QuickJSInstance.create(
@@ -367,6 +378,7 @@ export async function createDOM(
         );
       },
       module(kind, base, name) {
+        if (kind === 2) return bridge?.callback(Number(base), name);
         if (kind === 0) return resolveModule(base, name);
         const m = modules.get(base);
         return typeof m === "string" ? m : undefined;
@@ -405,6 +417,7 @@ export async function createDOM(
   // `closed` and does nothing.
   const close = () => {
     closed = true;
+    bridge?.dispose();
   };
 
   try {
@@ -617,6 +630,10 @@ export async function createDOM(
         if (closed) throw new Error("The DOM is closed.");
         begin();
         if (!run(`__edgeSetLayout(${JSON.stringify(JSON.stringify(boxes))})`, "layout.js")) throw new Error("The QuickJS engine could not apply the layout.");
+      },
+      bridge(options?: BridgeOptions) {
+        if (closed) throw new Error("The DOM is closed.");
+        return (bridge ??= new Bridge(vm, { timeout, ...options }));
       },
       toOptions<T extends PageInput>(options: T): T {
         const { javascript: _javascript, ...rest } = options;

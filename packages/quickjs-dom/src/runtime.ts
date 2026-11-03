@@ -16,9 +16,10 @@ export interface QuickJSHost {
   fetch(id: number, target: string, method: string): void;
   /**
    * Module requests. kind 0: the specifier of `name` as imported from `base`. kind 1: the source of module `name`
-   * (`base` is the name). `undefined` when there is none.
+   * (`base` is the name). kind 2: the bridge's callback `base` (a number) with the arguments `name` (JSON); the answer
+   * is JSON too. `undefined` when there is none.
    */
-  module(kind: 0 | 1, base: string, name: string): string | undefined;
+  module(kind: 0 | 1 | 2, base: string, name: string): string | undefined;
 }
 
 /** What an evaluation produced: its type decides how `value` reads. */
@@ -41,6 +42,7 @@ interface Exports {
   qd_eval(code: number, len: number, name: number, module: number): number;
   qd_compile(code: number, len: number, name: number): number;
   qd_eval_bytecode(buf: number, len: number): number;
+  qd_rpc(req: number, len: number): number;
   qd_jobs(): number;
   qd_settle(id: number, ok: number, text: number, len: number): void;
   _initialize?(): void;
@@ -63,6 +65,8 @@ const RESULT_TYPES = ["undefined", "string", "json", "error"] as const;
 
 export class QuickJSInstance {
   private readonly x: Exports;
+  private reqPtr = 0;
+  private reqCap = 0;
 
   private constructor(x: Exports) {
     this.x = x;
@@ -89,7 +93,7 @@ export class QuickJSInstance {
           else if (op === 3) host.rejection(text(a, alen));
         },
         module(kind: number, a: number, alen: number, b: number, blen: number): number {
-          const out = host.module(kind as 0 | 1, text(a, alen), text(b, blen));
+          const out = host.module(kind as 0 | 1 | 2, text(a, alen), text(b, blen));
           if (out === undefined) return -1;
           const bytes = encoder.encode(out);
           const ptr = x.qd_scratch(bytes.length);
@@ -179,6 +183,24 @@ export class QuickJSInstance {
   /** Evaluate code (as a module when asked); a script error comes back as `{ type: "error" }`. */
   eval(code: string, name: string, module = false): EvalResult {
     return this.withString(code, (c, len) => this.withString(name, (n) => (this.x.qd_eval(c, len, n, module ? 1 : 0), this.result())));
+  }
+
+  /**
+   * Call the guest's `__rpc` (scripts/edge-js/rpc.js) with a string; the answer is a string. Unlike {@link eval} this may
+   * be called again from inside a host callback (module kind 2): the bridge's calls nest.
+   */
+  rpc(request: string): EvalResult {
+    // the request is copied into a buffer that stays; the guest reads it before it runs anything, so a call made from a
+    // callback may reuse it
+    const need = request.length * 3 + 1;
+    if (need > this.reqCap) {
+      if (this.reqPtr) this.x.qd_free(this.reqPtr);
+      this.reqCap = Math.max(4096, need * 2);
+      this.reqPtr = this.x.qd_alloc(this.reqCap);
+    }
+    const { written } = encoder.encodeInto(request, new Uint8Array(this.x.memory.buffer, this.reqPtr, this.reqCap));
+    this.x.qd_rpc(this.reqPtr, written);
+    return this.result();
   }
 
   /** Run bytecode that {@link QuickJSInstance.compile} made with this very build of QuickJS. */

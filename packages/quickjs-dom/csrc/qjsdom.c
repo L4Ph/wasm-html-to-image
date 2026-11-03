@@ -24,8 +24,9 @@ enum { RES_UNDEFINED = 0, RES_STRING = 1, RES_JSON = 2, RES_ERROR = 3, RES_BYTES
 
 /* log(level, message) / timer(id, ms) / fetch(id, target, method): see runtime.ts */
 IMPORT("call") extern void host_call(int op, int n1, int n2, const char *a, int alen, const char *b, int blen);
-/* kind 0: normalize(base, name) -> specifier; kind 1: load(name, "") -> source. The reply is put in qd_scratch();
-   returns its length, or -1 when there is none (the host has no such module). */
+/* kind 0: normalize(base, name) -> specifier; kind 1: load(name, "") -> source; kind 2: the bridge's callback(id, args) ->
+   reply (see __host.callback). The reply is put in qd_scratch(); returns its length, or -1 when there is none (the host
+   has no such module / callback). */
 IMPORT("module") extern int host_module(int kind, const char *a, int alen, const char *b, int blen);
 
 static JSRuntime *rt;
@@ -289,6 +290,24 @@ static JSValue host_fetch(JSContext *c, JSValueConst self, int argc, JSValueCons
     return promise;
 }
 
+/* __host.callback(id, args): a call into a function of the host's, answered at once (the bridge: a listener that
+   lives in Node). Both are strings; the reply is a string, or undefined when the host has none. */
+static JSValue host_callback(JSContext *c, JSValueConst self, int argc, JSValueConst *argv) {
+    (void)self;
+    if (argc < 2) return JS_UNDEFINED;
+    size_t la, lb;
+    const char *a = JS_ToCStringLen(c, &la, argv[0]);
+    const char *b = JS_ToCStringLen(c, &lb, argv[1]);
+    JSValue out = JS_UNDEFINED;
+    if (a && b) {
+        int n = host_module(2, a, (int)la, b, (int)lb);
+        if (n >= 0) out = JS_NewStringLen(c, (const char *)scratch, (size_t)n);
+    }
+    if (a) JS_FreeCString(c, a);
+    if (b) JS_FreeCString(c, b);
+    return out;
+}
+
 /* ---- __native: parts of the page's environment that are faster in C than in the interpreter ---- */
 
 #include "htmlparse.h"
@@ -312,6 +331,7 @@ EXPORT("qd_init") int qd_init(size_t memory_limit, size_t stack_limit) {
     JS_SetPropertyStr(ctx, host, "log", JS_NewCFunction(ctx, host_log, "log", 2));
     JS_SetPropertyStr(ctx, host, "timer", JS_NewCFunction(ctx, host_timer, "timer", 2));
     JS_SetPropertyStr(ctx, host, "fetch", JS_NewCFunction(ctx, host_fetch, "fetch", 2));
+    JS_SetPropertyStr(ctx, host, "callback", JS_NewCFunction(ctx, host_callback, "callback", 2));
     JS_SetPropertyStr(ctx, global, "__host", host);
     JSValue native = JS_NewObject(ctx);
     JS_SetPropertyStr(ctx, native, "parseHTML", JS_NewCFunction(ctx, native_parse_html, "parseHTML", 2));
@@ -333,6 +353,25 @@ EXPORT("qd_eval") int qd_eval(const char *code, size_t len, const char *name, in
     }
     if (module) set_result(RES_UNDEFINED, "", 0);
     else set_result_value(v);
+    JS_FreeValue(ctx, v);
+    return 0;
+}
+
+/* Call the global function __rpc (scripts/edge-js/rpc.js) with a string; its string answer is the result. This is the way in
+   for the bridge: no code to compile, and it may be called again from inside a host callback. 0: ok; 1: it threw. */
+EXPORT("qd_rpc") int qd_rpc(const char *req, size_t len) {
+    JSValue global = JS_GetGlobalObject(ctx);
+    JSValue fn = JS_GetPropertyStr(ctx, global, "__rpc");
+    JS_FreeValue(ctx, global);
+    JSValue arg = JS_NewStringLen(ctx, req, len);
+    JSValue v = JS_Call(ctx, fn, JS_UNDEFINED, 1, &arg);
+    JS_FreeValue(ctx, arg);
+    JS_FreeValue(ctx, fn);
+    if (JS_IsException(v)) {
+        set_result_error();
+        return 1;
+    }
+    set_result_value(v);
     JS_FreeValue(ctx, v);
     return 0;
 }

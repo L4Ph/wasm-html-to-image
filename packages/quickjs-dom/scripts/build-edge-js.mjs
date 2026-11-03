@@ -23,6 +23,7 @@ const parts = [
   read(streamsPath),
   read(join(here, "edge-js", "boot.js")),
   read(join(here, "edge-js", "nativedom.js")),
+  read(join(here, "edge-js", "rpc.js")),
 ];
 const source = parts.join("\n;\n");
 
