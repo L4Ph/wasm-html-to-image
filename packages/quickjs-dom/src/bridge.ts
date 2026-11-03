@@ -302,7 +302,10 @@ export class Bridge {
       case "function": {
         const cell = (v as any)[HANDLE] as Cell | undefined;
         if (cell) return { $: "h", i: cell.id };
-        const cls = (v as any)[CLASS_NAME] as string | undefined;
+        // only the generated class itself is a constructor reference: a subclass of one (a custom
+        // element class extending the page's HTMLElement) inherits CLASS_NAME through the class
+        // chain and must travel as its own function, or every subclass arrives as the base class
+        const cls = Object.prototype.hasOwnProperty.call(v, CLASS_NAME) ? ((v as any)[CLASS_NAME] as string) : undefined;
         if (cls) return { $: "c", n: cls };
         let id = this.fnIds.get(v);
         if (id === undefined) {
@@ -373,6 +376,9 @@ export class Bridge {
   private functionWrapper(cell: Cell): Function {
     const bridge = this;
     const f = function (this: unknown, ...args: unknown[]) {
+      // constructed from here (a class of the page reached as a value — window.File through
+      // defaultView, say): the page must see a construction, not a call, or its classes throw
+      if (new.target) return bridge.sendJ(["construct", cell.id, args.map((a) => bridge.encode(a))]);
       return bridge.sendJ(["apply", cell.id, bridge.encode(this), args.map((a) => bridge.encode(a))]);
     };
     Object.defineProperty(f, HANDLE, { value: cell });

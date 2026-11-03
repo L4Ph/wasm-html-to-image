@@ -279,12 +279,13 @@
     for (var i = 0; i < list.length; i++) if (list[i].handler) return;
     list.push({ handler: true, capture: false, once: false, passive: false, removed: false });
   };
-  var invoke = function (node, ev, phase) {
+  var invoke = function (node, ev, phase, seenTarget) {
     // an attribute handler claims its slot the first time a dispatch reaches its node
     if (phase !== 1 && node.nodeType === 1 && node.hasAttribute && node.hasAttribute("on" + ev.type)) ensureHandlerEntry(node, ev.type);
     var all = LISTENERS.get(node), list = all && all[ev.type];
     ev.currentTarget = node;
     ev.eventPhase = phase;
+    if (seenTarget) { ev.target = seenTarget; ev.srcElement = seenTarget; }
     var sawHandler = false;
     if (list) {
       list = list.slice();
@@ -332,16 +333,35 @@
   };
   var dispatch = function (ev) {
     if (!ev || typeof ev.type !== "string") throw new TypeError("The event provided is not an Event.");
+    // the propagation path crosses a shadow boundary only for a composed event (parentOf steps
+    // from a shadow root to its host); the last node inside the tree is where it stops otherwise
     var path = [], n = this;
-    for (; n; n = parentOf(n)) path.push(n);
+    for (; n; n = parentOf(n)) {
+      path.push(n);
+      if (n.nodeType === 11 && n.host && !ev.composed) break;
+    }
+    // what a listener sees as the target: the first node of its own tree's stretch of the path —
+    // a listener outside a shadow tree sees the host, not the node inside (the document's stretch
+    // runs on up to the window, which sees the same target as the document does)
+    var seen = [], seg = 0;
+    for (i = 0; i < path.length; i++) {
+      if (i > 0 && path[i - 1].nodeType === 11 && path[i - 1].host) seg = i;
+      seen.push(path[seg]);
+    }
     ev.target = ev.srcElement = this;
-    ev._path = path.map(function (x) { return { currentTarget: x }; });
+    ev._path = path.map(function (x, i) { return { currentTarget: x, target: seen[i] }; });
     ev.cancelBubble = false;
     ev._stopImmediatePropagationFlag = false;
     var i;
-    for (i = path.length - 1; i > 0 && !ev.cancelBubble; i--) invoke(path[i], ev, 1);
-    if (!ev.cancelBubble) invoke(this, ev, 2);
-    if (ev.bubbles) for (i = 1; i < path.length && !ev.cancelBubble; i++) invoke(path[i], ev, 3);
+    for (i = path.length - 1; i > 0 && !ev.cancelBubble; i--) invoke(path[i], ev, 1, seen[i]);
+    if (!ev.cancelBubble) invoke(this, ev, 2, this);
+    // the bubble pass: a node the event is retargeted onto (the host of a tree the event came
+    // out of) hears it even when the event does not bubble — in its own tree the host IS the
+    // target — while ordinary ancestors of a non-bubbling event hear nothing
+    for (i = 1; i < path.length && !ev.cancelBubble; i++) {
+      if (ev.bubbles || seen[i] === path[i]) invoke(path[i], ev, 3, seen[i]);
+    }
+    ev.target = ev.srcElement = this;
     ev.currentTarget = null;
     ev.eventPhase = 0;
     return !ev.defaultPrevented;
@@ -794,7 +814,7 @@
     var parts = spec.split(":");
     if (!Object.getOwnPropertyDescriptor(P.HTMLElement, parts[0])) reflectString(P.HTMLElement, parts[0], parts[1]);
   });
-  ["hidden", "disabled", "checked", "selected", "required", "readOnly:readonly", "multiple", "autofocus", "open", "async", "defer"].forEach(function (spec) {
+  ["hidden", "disabled", "required", "readOnly:readonly", "multiple", "autofocus", "open", "async", "defer"].forEach(function (spec) {
     var parts = spec.split(":");
     if (!Object.getOwnPropertyDescriptor(P.HTMLElement, parts[0])) reflectBool(P.HTMLElement, parts[0], parts[1]);
   });
@@ -847,17 +867,6 @@
     var group = radiosOf(el);
     for (var i = 0; i < group.length; i++) if (group[i] !== el) group[i][CHK] = false;
   };
-  getter(P.HTMLElement, "checked", function () {
-    if (this.localName !== "input") return this.hasAttribute("checked");
-    return this[CHK] !== undefined ? this[CHK] : this.hasAttribute("checked");
-  }, function (v) {
-    if (this.localName !== "input") { if (v) this.setAttribute("checked", ""); else this.removeAttribute("checked"); return; }
-    this[CHK] = !!v;
-    if (v && this.type === "radio") uncheckRadioGroup(this);
-  });
-  getter(P.HTMLElement, "defaultChecked", function () { return this.hasAttribute("checked"); }, function (v) {
-    if (v) this.setAttribute("checked", ""); else this.removeAttribute("checked");
-  });
   getter(P.HTMLElement, "form", function () { return this.closest("form"); });
   getter(P.HTMLElement, "isContentEditable", function () { return this.getAttribute("contenteditable") !== null && this.getAttribute("contenteditable") !== "false"; });
 
@@ -911,6 +920,17 @@
   // events leave a shadow tree through its host
   var plainParent = parentOf;
   parentOf = function (n) { return n.parentNode || (n.nodeType === 11 && n.host) || plainParent(n); };
+  // and a node of a shadow tree is connected when its host is: the native walk stops at the
+  // root, which for a shadow tree is the fragment, so the last step goes through the host
+  var nativeConnected = Object.getOwnPropertyDescriptor(P.Node, "isConnected");
+  if (nativeConnected && nativeConnected.get) {
+    var nativeGet = nativeConnected.get;
+    getter(P.Node, "isConnected", function () {
+      if (nativeGet.call(this)) return true;
+      var r = this.getRootNode ? this.getRootNode() : null;
+      return !!(r && r.nodeType === 11 && r.host && r.host.isConnected);
+    });
+  }
 
   // HTMLCollection / NodeList are live: a read-through proxy that re-reads the C answer when any tree or attribute
   // has changed since (D.version()). It is not an Array (as in a browser) but has the length, indices, item,
@@ -976,6 +996,15 @@
   });
   // type: an input without a known one is a text field, a button without one submits
   var INPUT_TYPES = ["hidden", "text", "search", "tel", "url", "email", "password", "date", "month", "week", "time", "datetime-local", "number", "range", "color", "checkbox", "radio", "file", "submit", "image", "reset", "button"];
+  getter(P.HTMLInputElement, "checked", function () {
+    return this[CHK] !== undefined ? this[CHK] : this.hasAttribute("checked");
+  }, function (v) {
+    this[CHK] = !!v;
+    if (v && this.type === "radio") uncheckRadioGroup(this);
+  });
+  getter(P.HTMLInputElement, "defaultChecked", function () { return this.hasAttribute("checked"); }, function (v) {
+    if (v) this.setAttribute("checked", ""); else this.removeAttribute("checked");
+  });
   getter(P.HTMLInputElement, "type", function () {
     var t = (this.getAttribute("type") || "").toLowerCase();
     return INPUT_TYPES.indexOf(t) >= 0 ? t : "text";
@@ -2337,7 +2366,7 @@
   };
   var focusEvent = function (type, bubbles, related) {
     var E = W.FocusEvent || W.Event;
-    return new E(type, { bubbles: bubbles, cancelable: false, relatedTarget: related || null });
+    return new E(type, { bubbles: bubbles, cancelable: false, composed: true, relatedTarget: related || null });
   };
   var activeOf = function (doc) { return focused && focused.isConnected && focused.ownerDocument === doc ? focused : doc.body; };
   getter(P.Document, "activeElement", function () { return activeOf(this); });
@@ -2386,6 +2415,9 @@
     var LABELS = Symbol("labels");
     getter(P[name], "labels", function () {
       var el = this;
+      // a hidden input is not labelable, and its labels are null, not an empty list (the spec,
+      // jsdom, and the libraries that branch on it)
+      if (name === "HTMLInputElement" && el.type === "hidden") return null;
       return el[LABELS] || Object.defineProperty(el, LABELS, { value: liveCollection(function () { return labelsOf(el); }, false, "NodeList") })[LABELS];
     });
   });

@@ -455,6 +455,8 @@ static JSValue nd_build(JSContext *c, HP *p, JSValueConst root, JSValueConst own
     memset(&b, 0, sizeof(b));
     b.c = c;
     b.owner = owner;
+    /* a fragment build (innerHTML, parseFragment) has no html/body of its own to make */
+    int fragment = nd_of(root)->type != 9;
     {
         ND *rn = nd_of(root);
         const char *rt = rn->tag ? rn->tag : "";
@@ -525,6 +527,12 @@ static JSValue nd_build(JSContext *c, HP *p, JSValueConst root, JSValueConst own
             int nattrs = ev[i + 3];
             const char *rawname = (const char *)p->extra.p + ev[i + 1];
             int rawlen = ev[i + 2];
+            /* in a fragment an <html> or <body> start tag makes no element: the standard
+               ignores the token and its content flows into the context */
+            if (fragment && rawlen == 4 && (memcmp(rawname, "html", 4) == 0 || memcmp(rawname, "body", 4) == 0)) {
+                i += 4 + (size_t)nattrs * 5;
+                break;
+            }
             BEnt *parent = &b.st[b.depth - 1];
             int parentCtx = parent->ctx;
             int isSvgRoot = rawlen == 3 && memcmp(rawname, "svg", 3) == 0;
@@ -630,6 +638,11 @@ static JSValue nd_build(JSContext *c, HP *p, JSValueConst root, JSValueConst own
         case EV_CLOSE: {
             const char *src = (const char *)p->extra.p + ev[i + 1];
             int srclen = ev[i + 2];
+            /* the close of a fragment's skipped <html>/<body> matches nothing here either */
+            if (fragment && srclen == 4 && (memcmp(src, "html", 4) == 0 || memcmp(src, "body", 4) == 0)) {
+                i += 3;
+                break;
+            }
             /* one parser element closes: pop until one tracked element has been popped,
                sweeping builder-only elements (implied wrappers, reconstructions) with it */
             int popped = 0;

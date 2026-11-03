@@ -45,6 +45,54 @@ describe("bridge: objects of the page from the host", () => {
     expect(() => new w.DOMTokenList()).toThrow(TypeError);
   });
 
+  it("keeps events inside a shadow tree unless they are composed, and retargets them at the host", async () => {
+    const out = await dom.eval(`(() => {
+      // a document of its own: focusing marks a document as focused for good (jsdom's model),
+      // and the shared page's hasFocus answer is pinned by another test
+      const d = document.implementation.createHTMLDocument("");
+      const host = d.createElement("div");
+      d.body.appendChild(host);
+      const root = host.attachShadow({ mode: "closed" });
+      const inner = d.createElement("span");
+      root.appendChild(inner);
+      const seen = [];
+      host.addEventListener("click", (e) => seen.push("click:" + (e.target === host)));
+      host.addEventListener("change", () => seen.push("change"));
+      host.addEventListener("focus", () => seen.push("focus"));
+      root.addEventListener("click", () => seen.push("root-click"));
+      inner.dispatchEvent(new Event("click", { bubbles: true, composed: true }));
+      inner.dispatchEvent(new Event("change", { bubbles: true, composed: false }));
+      const input = d.createElement("input");
+      root.appendChild(input);
+      input.focus();
+      host.remove();
+      return JSON.stringify(seen);
+    })()`);
+    expect(out).toBe(JSON.stringify(["root-click", "click:true", "focus"]));
+  });
+
+  it("constructs the page's classes reached as values, and keeps host subclasses distinct", async () => {
+    const { window } = dom.bridge();
+    const file = new window.File(["x"], "a.txt", { type: "text/plain" });
+    expect([file.name, file.size, file.type]).toEqual(["a.txt", 1, "text/plain"]);
+    // every subclass of the page's HTMLElement used to arrive in the page as the base class
+    // itself (the class marker was inherited), so the second define always threw
+    class First extends window.HTMLElement {}
+    class Second extends window.HTMLElement {}
+    window.customElements.define("x-first", First);
+    window.customElements.define("x-second", Second);
+    expect(window.customElements.get("x-first")).toBe(First);
+    expect(window.customElements.get("x-second")).toBe(Second);
+    const out = await dom.eval(`(() => {
+      const input = document.createElement("input");
+      const before = input.labels && input.labels.length;
+      input.type = "hidden";
+      const span = document.createElement("span");
+      return JSON.stringify([before, input.labels, "checked" in span, span.checked]);
+    })()`);
+    expect(out).toBe(JSON.stringify([0, null, false, undefined]));
+  });
+
   it("builds the tree the standard builds: adoption, foster parenting, tables, foreign case, XML", async () => {
     const out = await dom.eval(`(() => {
       const d = document.implementation.createHTMLDocument("");
@@ -53,6 +101,7 @@ describe("bridge: objects of the page from the host", () => {
         "<table><div>f</div><tr><td>c</td></tr></table>",
         "<a href='/x'>one<a href='/y'>two</a>",
         "<isindex prompt='what'>",
+        "<body><p>hi</p></body>",
         "<table><td>cell</td></table>",
         "<svg><foreignObject><div>x</div></foreignObject><circle r='1'/></svg>",
       ];
@@ -70,6 +119,7 @@ describe("bridge: objects of the page from the host", () => {
       "<div>f</div><table><tbody><tr><td>c</td></tr></tbody></table>",
       '<a href="/x">one</a><a href="/y">two</a>',
       '<isindex prompt="what"></isindex>',
+      "<p>hi</p>",
       "<table><tbody><tr><td>cell</td></tr></tbody></table>",
       '<svg><foreignObject><div>x</div></foreignObject><circle r="1"></circle></svg>',
       "foreignObject/svg/xhtml",
