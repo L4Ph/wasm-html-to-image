@@ -1,0 +1,1 @@
+var e=new URL(`19-mask-BPK2W8Z9.html`,import.meta.url).href;export{e as default};

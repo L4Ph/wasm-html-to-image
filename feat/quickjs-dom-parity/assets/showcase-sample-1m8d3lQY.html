@@ -1,0 +1,300 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<style>
+  /* Each @keyframes drives its target elements */
+  @keyframes page-bg {
+    0%   { background-color: #e0e7ff; }
+    50%  { background-color: #fce7f3; }
+    100% { background-color: #e0e7ff; }
+  }
+  @keyframes float-a {
+    0%   { transform: translate(0, 0); opacity: 0.7; }
+    50%  { transform: translate(0, -8px); opacity: 1; }
+    100% { transform: translate(0, 0); opacity: 0.7; }
+  }
+  @keyframes float-b {
+    0%   { transform: translate(0, -8px); opacity: 1; }
+    50%  { transform: translate(0, 0); opacity: 0.7; }
+    100% { transform: translate(0, -8px); opacity: 1; }
+  }
+  @keyframes pop {
+    0%   { transform: scale(0.9); }
+    50%  { transform: scale(1.12); }
+    100% { transform: scale(0.9); }
+  }
+  @keyframes turn {
+    from { transform: rotate(0deg); }
+    to   { transform: rotate(360deg); }
+  }
+  @keyframes ink {
+    0%   { color: #1e293b; }
+    50%  { color: #be123c; }
+    100% { color: #1e293b; }
+  }
+  @keyframes amber {
+    0%   { color: #fde68a; }
+    50%  { color: #ffffff; }
+    100% { color: #fde68a; }
+  }
+  @keyframes blink {
+    0%   { opacity: 1; }
+    50%  { opacity: 0.55; }
+    100% { opacity: 1; }
+  }
+  @keyframes glow {
+    0%   { background-color: #dcfce7; }
+    50%  { background-color: #fde68a; }
+    100% { background-color: #dcfce7; }
+  }
+  @keyframes tint {
+    0%   { background-color: #f1f5f9; }
+    50%  { background-color: #e0f2fe; }
+    100% { background-color: #f1f5f9; }
+  }
+  @keyframes slide-in {
+    0%   { transform: translate(0, 0); }
+    50%  { transform: translate(12px, 0); }
+    100% { transform: translate(0, 0); }
+  }
+  .page {
+    padding: 24px;
+    border-radius: 24px;
+    background-color: #e0e7ff;
+    animation: page-bg 3s infinite ease-in-out;
+  }
+  .card.a { animation: float-a 3s infinite ease-in-out; }
+  .card.b { animation: float-b 3s infinite ease-in-out; }
+  /* Multiple animations on one element: scale + blink */
+  .shape { animation: pop 2s infinite ease-in-out, blink 3s infinite ease-in-out; }
+  .star { animation: turn 4s infinite linear; }
+  .join { animation: amber 3s infinite ease-in-out; }
+  .vertical p { animation: ink 3s infinite ease-in-out; }
+  tfoot td { animation: glow 2s infinite ease-in-out; }
+  .clamp { animation: tint 3s infinite ease-in-out; }
+  .floated { animation: slide-in 2s infinite ease-in-out; }
+  .hero p { animation: ink 3s infinite ease-in-out, slide-in 3s infinite ease-in-out; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    padding: 16px;
+    font-family: system-ui, -apple-system, sans-serif;
+    background: #f8fafc;
+  }
+  h1 {
+    margin: 0;
+    font-size: 40px;
+    line-height: 1.2;
+    white-space: nowrap;
+    color: #fff;
+    -webkit-text-stroke: 3px #1d4ed8;
+    stroke-linejoin: round;
+    text-fit: shrink;
+  }
+  .hero {
+    width: 100%;
+    padding: 20px 24px;
+    border-radius: 20px;
+    background: linear-gradient(90deg, #6366f1, #ec4899);
+  }
+  .hero p { margin: 6px 0 0; color: #fff; font-size: 14px; }
+  .grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 16px;
+    margin-top: 16px;
+  }
+  .card {
+    background: #fff;
+    border-radius: 14px;
+    padding: 16px;
+    box-shadow: 0 6px 18px -6px rgba(0, 0, 0, 0.18);
+  }
+  .card { width: calc(50% - 8px); }
+  .card.wide { width: 100%; }
+  h2 { margin: 0 0 4px; font-size: 16px; }
+  .tag {
+    display: inline-block;
+    margin-bottom: 10px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: #e0e7ff;
+    color: #3730a3;
+    font: 11px/1.6 ui-monospace, monospace;
+  }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; }
+
+  /* corner-shape */
+  .shape {
+    width: 76px;
+    height: 76px;
+    border-radius: 28px;
+    background: linear-gradient(135deg, #14b8a6, #3b82f6);
+    color: #fff;
+    font: bold 10px/76px ui-monospace, monospace;
+    text-align: center;
+  }
+  .scoop { corner-shape: scoop; }
+  .bevel { corner-shape: bevel; }
+  .notch { corner-shape: notch; }
+  .squircle { corner-shape: squircle; }
+  .super { corner-shape: superellipse(3); }
+  .mixed { corner-top-left-shape: notch; corner-bottom-right-shape: scoop; }
+  .shadowed { corner-shape: bevel; box-shadow: 8px 8px 0 #f59e0b; }
+  .dashed {
+    corner-shape: squircle;
+    background: #fff;
+    border: 4px dashed #ef4444;
+    color: #ef4444;
+  }
+
+  /* max-lines / block-ellipsis */
+  .clamp {
+    width: 100%;
+    font-size: 13px;
+    line-height: 1.5;
+    background: #f1f5f9;
+    padding: 8px;
+    border-radius: 8px;
+    margin-bottom: 8px;
+  }
+  .clamp.two { max-lines: 2; }
+  .clamp.marker { max-lines: 2; block-ellipsis: " …read more"; }
+
+  /* flow-root */
+  .floated { float: left; width: 60px; height: 60px; margin-right: 10px; background: #f97316; border-radius: 10px; }
+  .fr { border: 2px solid #0ea5e9; padding: 6px; font-size: 12px; min-height: 80px; }
+  .fr.root { display: flow-root; }
+
+  /* clip-rule */
+  .star { width: 90px; height: 90px; background: #8b5cf6; margin: 8px; }
+  .star.nz { clip-path: polygon(50% 0%, 79% 91%, 2% 35%, 98% 35%, 21% 91%); clip-rule: nonzero; }
+  .star.eo { clip-path: polygon(50% 0%, 79% 91%, 2% 35%, 98% 35%, 21% 91%); clip-rule: evenodd; }
+
+  /* stroke-linejoin */
+  .join { font: bold 34px/1.1 sans-serif; color: #fde68a; -webkit-text-stroke: 7px #b45309; padding: 0 8px; }
+  .join.m { stroke-linejoin: miter; }
+  .join.b { stroke-linejoin: bevel; }
+  .join.r { stroke-linejoin: round; }
+
+  /* table */
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  caption { padding: 4px; font-weight: bold; background: #fef3c7; }
+  .thead { display: table-header-group; }
+  .thead th { background: #1e293b; color: #fff; padding: 6px; }
+  td { padding: 6px; border-top: 1px solid #cbd5e1; }
+  tfoot { display: table-footer-group; }
+  tfoot td { background: #dcfce7; font-weight: bold; }
+
+  /* vertical writing */
+  .vertical {
+    writing-mode: vertical-rl;
+    height: 190px;
+    font-size: 16px;
+    line-height: 1.8;
+    padding: 8px;
+    background: #fff7ed;
+    border-radius: 10px;
+    border-right: 4px solid #fb923c;
+  }
+  .vertical em { text-emphasis: filled dot #ea580c; font-style: normal; }
+  .vertical .num { text-combine-upright: all; }
+
+  /* animation */
+</style>
+</head>
+<body>
+<div class="page">
+  <div class="hero">
+    <h1>wasm-html-to-image Showcase</h1>
+    <p>Showcase page to inspect recently added CSS features, vertical writing, and animations. Set format to WebP / APNG / GIF and turn on Animation to see it move.</p>
+  </div>
+
+  <div class="grid">
+    <div class="card a wide">
+      <h2>Vertical Writing (writing-mode: vertical-rl)</h2>
+      <span class="tag">text-emphasis / text-combine-upright</span>
+      <div class="row">
+        <div class="vertical">
+          <p style="margin:0">吾輩は<em>猫</em>である。名前はまだ無い。<br>どこで生れたかとんと見当がつかぬ。<br>2026年<span class="num">10</span>月に追加。</p>
+        </div>
+        <div class="vertical" style="border-right:0;border-left:4px solid #38bdf8;background:#f0f9ff;writing-mode:vertical-lr">
+          <p style="margin:0">vertical-lr は<br>左から右へ行が進みます。</p>
+        </div>
+      </div>
+    </div>
+
+    <div class="card b wide">
+      <h2>corner-shape</h2>
+      <span class="tag">round / scoop / bevel / notch / squircle / superellipse() / longhand / box-shadow / dashed</span>
+      <div class="row">
+        <div class="shape">round</div>
+        <div class="shape scoop">scoop</div>
+        <div class="shape bevel">bevel</div>
+        <div class="shape notch">notch</div>
+        <div class="shape squircle">squircle</div>
+        <div class="shape super">super(3)</div>
+        <div class="shape mixed">longhand</div>
+        <div class="shape shadowed">shadow</div>
+        <div class="shape dashed">dashed</div>
+      </div>
+    </div>
+
+    <div class="card a">
+      <h2>max-lines + block-ellipsis</h2>
+      <span class="tag">max-lines: 2 / block-ellipsis: "…"</span>
+      <div class="clamp">Plain paragraph without clamping. Long text wraps normally and all lines are displayed. Specifying max-lines restricts the number of lines.</div>
+      <div class="clamp two">max-lines: 2. Long text is clamped at 2 lines with an ellipsis at the end. Here is long text exceeding the limit. Here is long text exceeding the limit.</div>
+      <div class="clamp marker">Custom ellipsis string can be specified via block-ellipsis. Here is long text exceeding the limit. Here is long text exceeding the limit.</div>
+    </div>
+
+    <div class="card b">
+      <h2>display: flow-root</h2>
+      <span class="tag">contains floats (no clearfix needed)</span>
+      <div class="fr root"><div class="floated"></div>with flow-root: the parent contains its floated child</div>
+    </div>
+
+    <div class="card a">
+      <h2>stroke-linejoin</h2>
+      <span class="tag">miter / bevel / round</span>
+      <div class="row">
+        <div class="join m">WMN</div>
+        <div class="join b">WMN</div>
+        <div class="join r">WMN</div>
+      </div>
+    </div>
+
+    <div class="card b">
+      <h2>clip-rule</h2>
+      <span class="tag">nonzero / evenodd</span>
+      <div class="row">
+        <div class="star nz"></div>
+        <div class="star eo"></div>
+      </div>
+    </div>
+
+    <div class="card a wide">
+      <h2>Table (table-header-group / footer-group / caption)</h2>
+      <span class="tag">thead appears at the top even if written after tfoot</span>
+      <table>
+        <caption>2026 Sales</caption>
+        <colgroup><col style="background:#eef2ff;width:120px"><col style="background:#fdf2f8"><col></colgroup>
+        <tfoot><tr><td>Total</td><td>$3,300</td><td>-</td></tr></tfoot>
+        <tbody>
+          <tr><td>Tokyo</td><td>$1,800</td><td>+12%</td></tr>
+          <tr><td>Osaka</td><td>$1,500</td><td>+8%</td></tr>
+        </tbody>
+        <thead class="thead"><tr><th>Region</th><th>Sales</th><th>YoY</th></tr></thead>
+      </table>
+    </div>
+
+    <div class="card b wide">
+      <h2>Animation (@keyframes → animated WebP / APNG / GIF)</h2>
+      <span class="tag">transform / opacity / color / background-color</span>
+      <p style="margin:0;font-size:13px">Each element on the page is animated with distinct <code>@keyframes</code> (shapes and hero text use multiple animations on a single element): card floating (opacity + translation), shape scaling, star rotation, text &amp; background color changes, float translation, and page background color.</p>
+    </div>
+  </div>
+</div>
+</body>
+</html>

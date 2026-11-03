@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <style>
+    @keyframes pulse-rotate {
+      0% {
+        transform: rotate(0deg) scale(0.85);
+        opacity: 0.6;
+        background-color: #3b82f6;
+        color: #ffffff;
+      }
+      50% {
+        transform: rotate(180deg) scale(1.1);
+        opacity: 1;
+        background-color: #ef4444;
+        color: #ffffff;
+      }
+      100% {
+        transform: rotate(360deg) scale(0.85);
+        opacity: 0.6;
+        background-color: #3b82f6;
+        color: #ffffff;
+      }
+    }
+    body {
+      font-family: system-ui, -apple-system, sans-serif;
+      margin: 0;
+      padding: 30px;
+      background: linear-gradient(135deg, #f8fafc 0%, #e2e8f0 100%);
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: 100vh;
+      box-sizing: border-box;
+    }
+    .card {
+      background: white;
+      border-radius: 16px;
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
+      padding: 32px 48px;
+      text-align: center;
+      max-width: 420px;
+    }
+    h2 {
+      margin: 0 0 8px 0;
+      color: #1e293b;
+      font-size: 22px;
+    }
+    p {
+      margin: 0 0 24px 0;
+      color: #64748b;
+      font-size: 14px;
+    }
+    .badge {
+      width: 110px;
+      height: 110px;
+      margin: 0 auto;
+      border-radius: 24px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 18px;
+      font-weight: bold;
+      animation: pulse-rotate 2s infinite ease-in-out;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h2>Animated WebP</h2>
+    <p>CSS @keyframes (transform, opacity, color)</p>
+    <div class="badge">WebP</div>
+  </div>
+</body>
+</html>

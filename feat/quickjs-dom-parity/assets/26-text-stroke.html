@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta charset="UTF-8">
+  <title>-webkit-text-stroke Test</title>
+  <style>
+    @font-face {
+      font-family: 'Roboto';
+      src: url('https://fonts.gstatic.com/s/roboto/v30/KFOmCnqEu92Fr1Mu4mxK.woff2') format('woff2');
+    }
+
+    @font-face {
+      font-family: 'Noto Sans JP';
+      font-style: normal;
+      font-weight: 400;
+      src: url(https://cdn.jsdelivr.net/npm/@fontsource/noto-sans-jp/files/noto-sans-jp-japanese-400-normal.woff2) format('woff2');
+    }
+
+    body {
+      font-family: 'Roboto', 'Noto Sans JP', sans-serif;
+      padding: 24px;
+      background: #f9fafb;
+      line-height: 1.4;
+    }
+
+    .section {
+      margin-bottom: 20px;
+      background: #fff;
+      padding: 16px 20px;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+    }
+
+    h1 {
+      margin-top: 0;
+      border-bottom: 2px solid #3b82f6;
+      padding-bottom: 5px;
+    }
+
+    h2 {
+      font-size: 16px;
+      color: #4b5563;
+      margin: 0 0 10px;
+      border-left: 4px solid #3b82f6;
+      padding-left: 10px;
+    }
+
+    .big {
+      font-size: 44px;
+      font-weight: 700;
+      line-height: 1.2;
+    }
+
+    /* transparent fill + colored stroke = outline text */
+    .outline {
+      -webkit-text-fill-color: transparent;
+      -webkit-text-stroke: 2px #ef4444;
+    }
+
+    /* solid fill + stroke, stroke shows only its outer half */
+    .fillstroke {
+      color: #111827;
+      -webkit-text-stroke: 3px #3b82f6;
+    }
+
+    /* shorthand with color first */
+    .color-first {
+      -webkit-text-fill-color: #ffffff;
+      -webkit-text-stroke: #10b981 2px;
+    }
+
+    /* longhands */
+    .longhand {
+      -webkit-text-fill-color: transparent;
+      -webkit-text-stroke-width: 1px;
+      -webkit-text-stroke-color: #7c3aed;
+    }
+
+    .thin {
+      -webkit-text-fill-color: transparent;
+      -webkit-text-stroke-width: thin;
+      -webkit-text-stroke-color: #111827;
+    }
+
+    .medium {
+      -webkit-text-fill-color: transparent;
+      -webkit-text-stroke-width: medium;
+      -webkit-text-stroke-color: #111827;
+    }
+
+    .thick {
+      -webkit-text-fill-color: transparent;
+      -webkit-text-stroke-width: thick;
+      -webkit-text-stroke-color: #111827;
+    }
+
+    .em {
+      -webkit-text-fill-color: transparent;
+      -webkit-text-stroke-width: 0.08em;
+      -webkit-text-stroke-color: #db2777;
+    }
+
+    /* text-shadow is cast from the stroke silhouette */
+    .shadowed {
+      -webkit-text-fill-color: #ffffff;
+      -webkit-text-stroke: 2px #f59e0b;
+      text-shadow: 3px 3px 2px rgba(0, 0, 0, 0.55);
+    }
+
+    .parent {
+      color: #ef4444;
+    }
+
+    /* no stroke-color -> inherits the parent's currentColor (red) */
+    .inherit {
+      -webkit-text-fill-color: transparent;
+      -webkit-text-stroke-width: 2px;
+    }
+
+    /* currentColor resolves to this element's own color (blue) */
+    .current {
+      color: #2563eb;
+      -webkit-text-fill-color: transparent;
+      -webkit-text-stroke-width: 2px;
+      -webkit-text-stroke-color: currentColor;
+    }
+
+    .ellipsis-box {
+      width: 220px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      -webkit-text-fill-color: transparent;
+      -webkit-text-stroke: 1px #ef4444;
+    }
+
+    .vertical {
+      writing-mode: vertical-rl;
+      height: 170px;
+      -webkit-text-fill-color: transparent;
+      -webkit-text-stroke: 1px #0ea5e9;
+    }
+  </style>
+</head>
+
+<body>
+  <h1>-webkit-text-stroke Test</h1>
+
+  <div class="section">
+    <h2>1. Outline / Fill + Stroke</h2>
+    <div class="big outline">Outline</div>
+    <div class="big fillstroke">Fill+Stroke</div>
+  </div>
+
+  <div class="section">
+    <h2>2. Shorthand / Longhand</h2>
+    <div class="big color-first">ColorFirst</div>
+    <div class="big longhand">Longhand</div>
+  </div>
+
+  <div class="section">
+    <h2>3. thin / medium / thick / em</h2>
+    <div class="big thin">thin</div>
+    <div class="big medium">medium</div>
+    <div class="big thick">thick</div>
+    <div class="big em">em 日本語</div>
+  </div>
+
+  <div class="section">
+    <h2>4. text-shadow + stroke</h2>
+    <div class="big shadowed">Shadowed</div>
+  </div>
+
+  <div class="section parent">
+    <h2>5. inherit / currentColor</h2>
+    <div class="big inherit">Inherit</div>
+    <div class="big current">Current</div>
+  </div>
+
+  <div class="section">
+    <h2>6. Ellipsis / Vertical</h2>
+    <div class="big ellipsis-box">VeryLongEnglishWordThatShouldBeClipped</div>
+    <div class="big vertical">縦書きストローク</div>
+  </div>
+</body>
+
+</html>

@@ -1,0 +1,1 @@
+var e=new URL(`26-text-stroke-BShHV5b6.html`,import.meta.url).href;export{e as default};
