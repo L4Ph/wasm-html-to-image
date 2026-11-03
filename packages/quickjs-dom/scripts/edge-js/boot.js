@@ -273,7 +273,7 @@
     Object.keys(docProps).forEach(function (k) {
       if (!(k in d)) Object.defineProperty(d, k, { configurable: true, writable: true, value: docProps[k] });
     });
-    [["URL", function () { return g.location.href; }], ["documentURI", function () { return g.location.href; }], ["baseURI", function () { return g.location.href; }],
+    [["location", function () { return g.location; }], ["URL", function () { return g.location.href; }], ["documentURI", function () { return g.location.href; }], ["baseURI", function () { return g.location.href; }],
      ["domain", function () { return g.location.hostname; }], ["activeElement", function () { return d.body; }],
      ["scrollingElement", function () { return d.documentElement; }], ["forms", function () { return d.getElementsByTagName("form"); }],
      ["images", function () { return d.getElementsByTagName("img"); }], ["links", function () { return d.querySelectorAll("a[href], area[href]"); }],

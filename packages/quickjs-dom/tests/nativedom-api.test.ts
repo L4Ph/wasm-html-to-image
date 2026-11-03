@@ -55,6 +55,66 @@ describe("native DOM: parsing", () => {
   });
 });
 
+describe("native DOM: addresses", () => {
+  it("document.location, and an anchor's address taken apart", async () => {
+    const out = await dom.eval(() => {
+      const a = document.createElement("a");
+      a.setAttribute("href", "https://h.test:8080/p/q?x=1#f");
+      return [document.location === window.location, a.protocol, a.host, a.hostname, a.port, a.pathname, a.search, a.hash, a.origin];
+    });
+    expect(out).toEqual([true, "https:", "h.test:8080", "h.test", "8080", "/p/q", "?x=1", "#f", "https://h.test:8080"]);
+  });
+});
+
+describe("native DOM: XPath", () => {
+  it("document.evaluate answers paths, predicates, functions and unions", async () => {
+    const out = await dom.eval(() => {
+      const d = new DOMParser().parseFromString(
+        '<ul id=l><li class="a x">one</li><li class=b>two</li><li class="a">three<b>!</b></li></ul><p title=t>hi</p>',
+        "text/html",
+      );
+      const q = (e: string) => {
+        const r = d.evaluate(e, d, null, 7, null);
+        return Array.from({ length: r.snapshotLength }, (_, i) => r.snapshotItem(i)!.textContent);
+      };
+      return [
+        q("//li"),
+        q("//li[2]"),
+        q("//li[last()]"),
+        q("//li[@class='b']"),
+        q("//li[contains(@class, 'a')]/text()"),
+        q("//ul/li[position() < 3]"),
+        q("//li | //p"),
+        q("//@title"),
+        q("//b/ancestor::li"),
+        q("//li[1]/following-sibling::li"),
+        q("//li[not(@class='b') and b]"),
+        d.evaluate("count(//li)", d, null, 1, null).numberValue,
+        d.evaluate("string(//p/@title)", d, null, 2, null).stringValue,
+        d.evaluate("//p", d, null, 9, null).singleNodeValue!.nodeName,
+        d.evaluate("//li[@class='zz']", d, null, 3, null).booleanValue,
+      ];
+    });
+    expect(out).toEqual([
+      ["one", "two", "three!"],
+      ["two"],
+      ["three!"],
+      ["two"],
+      ["one", "three"],
+      ["one", "two"],
+      ["one", "two", "three!", "hi"],
+      ["t"],
+      ["three!"],
+      ["two", "three!"],
+      ["three!"],
+      3,
+      "t",
+      "P",
+      false,
+    ]);
+  });
+});
+
 describe("native DOM: documents", () => {
   it("documentElement, head, body and doctype", async () => {
     expect(
