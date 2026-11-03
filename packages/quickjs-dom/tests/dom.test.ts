@@ -283,6 +283,14 @@ describe("javascript option, QuickJS engine: ES modules", () => {
     expect(out.html).toContain('data-o="set"');
   });
 
+  it("an import() of a computed URL fails once, is fetched, and succeeds on the page's retry", async () => {
+    const out = await runPageScriptsQuickJS(
+      { baseUrl: base, html: '<!doctype html><body><script>var n = "./" + ["b", "js"].join("."); (function t(k) { import(n + (k ? "?r=" + k : "")).then(function (m) { document.body.setAttribute("data-l", m.b + k); }, function () { setTimeout(function () { t((k || 0) + 1); }, 50); }); })(0);</script></body>' },
+      { settleMs: 800 },
+    );
+    expect(out.html).toMatch(/data-l="b[1-9]"/);
+  });
+
   it("a classic inline script can import() a module relative to the page", async () => {
     const out = await runPageScriptsQuickJS(
       { baseUrl: base, html: '<!doctype html><body><script>import("./b.js").then(function (m) { document.body.setAttribute("data-d", m.b); });</script></body>' },

@@ -280,6 +280,27 @@
         return c.signal;
       };
     }
+    if (!g.CSS) {
+      g.CSS = {
+        // the specification's serialize-an-identifier
+        escape: function (v) {
+          v = String(v);
+          var out = "";
+          for (var i = 0; i < v.length; i++) {
+            var c = v.charCodeAt(i), ch = v.charAt(i);
+            if (c === 0) out += "�";
+            else if ((c >= 1 && c <= 31) || c === 127 || (i === 0 && c >= 48 && c <= 57) || (i === 1 && c >= 48 && c <= 57 && v.charCodeAt(0) === 45)) out += "\\" + c.toString(16) + " ";
+            else if (i === 0 && c === 45 && v.length === 1) out += "\\" + ch;
+            else if (c >= 128 || c === 45 || c === 95 || (c >= 48 && c <= 57) || (c >= 65 && c <= 90) || (c >= 97 && c <= 122)) out += ch;
+            else out += "\\" + ch;
+          }
+          return out;
+        },
+        supports: function () { return true; },
+        registerProperty: function () {},
+        px: function (n) { return { value: n, unit: "px", toString: function () { return n + "px"; } }; },
+      };
+    }
     if (!g.PerformanceObserver) {
       g.PerformanceObserver = class PerformanceObserver {
         constructor(cb) { this._cb = cb; }

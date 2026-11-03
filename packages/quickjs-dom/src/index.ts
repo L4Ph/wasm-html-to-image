@@ -83,7 +83,7 @@ export interface EdgeJavaScriptEngine {
 const DEFAULT_TIMEOUT = 10000;
 const DEFAULT_SETTLE_MS = 1000;
 const MEMORY_LIMIT = 256 * 1024 * 1024;
-const MAX_MODULES = 300;
+const MAX_MODULES = 1000;
 const MAX_LOGS = 1000;
 
 // a fetched body crosses into the page as base64, so binary data survives
@@ -332,6 +332,10 @@ export function openPage(
   // ES modules: QuickJS loads them synchronously, so the host fetches a module's whole import graph first
   // (static imports and `import("literal")`), then serves the sources from memory
   const modules = new Map<string, string | Error>();
+  // modules a page asked for that were not prefetched (import() of a computed URL): fetched after the failed attempt,
+  // so that the page's own retry finds them
+  const lazyModules: string[] = [];
+  const lazyAsked = new Set<string>();
   // import maps (`<script type="importmap">`): specifier prefixes and scopes, with every address resolved against the page
   const mapImports: [string, string][] = [];
   const mapScopes: [string, [string, string][]][] = [];
@@ -376,7 +380,8 @@ export function openPage(
     if (!/^(\.{0,2}\/|[a-z][a-z0-9+.-]*:)/i.test(name)) return name;
     try {
       // code that is not a module of a URL (an inline script, the engine's own) resolves against the page
-      return new URL(name, /^https?:/.test(base) ? base : baseUrl).href;
+      // (a loader's retry marks the URL with ?r=N: it is the same module)
+      return new URL(name, /^https?:/.test(base) ? base : baseUrl).href.replace(/[?&]r=\d+$/, "");
     } catch {
       return name;
     }
@@ -443,7 +448,12 @@ export function openPage(
         if (kind === 2) return bridge?.callback(Number(base), name);
         if (kind === 0) return resolveModule(base, name);
         const m = modules.get(base);
-        return typeof m === "string" ? m : undefined;
+        if (typeof m === "string") return m;
+        if (/^https?:/.test(base) && !lazyAsked.has(base) && lazyAsked.size < MAX_MODULES) {
+          lazyAsked.add(base);
+          lazyModules.push(base);
+        }
+        return undefined;
       },
     },
     MEMORY_LIMIT,
@@ -496,7 +506,7 @@ export function openPage(
       for (const m of code.matchAll(imports)) {
         if (/[,;(){}<>=]/.test(m[2])) continue; // a string of the code that only looks like a specifier
         const target = resolveModule(name, m[2]);
-        if (/^https?:/.test(target) && !modules.has(target) && modules.size < MAX_MODULES) {
+        if (/^https?:/.test(target) && !target.endsWith("/") && !modules.has(target) && modules.size < MAX_MODULES) {
           modules.set(target, new Error(`could not load module ${target}`));
           pending.push(target);
         }
@@ -567,6 +577,20 @@ export function openPage(
       }
     };
     // timers that are due, scripts that were added, then a short sleep
+    // the modules the page asked for and did not get: fetched now, for the retry it makes (see lazyModules)
+    const loadLazyModules = async () => {
+      const wanted = lazyModules.splice(0).filter((u) => typeof modules.get(u) !== "string");
+      await Promise.all(
+        wanted.map(async (target) => {
+          try {
+            const res = await loggedFetch(target, { signal: AbortSignal.timeout(Math.max(1, remaining())) });
+            if (res.ok) await prefetchModules(await text(res), target);
+          } catch {
+            // the page's retry fails the same way
+          }
+        }),
+      );
+    };
     const step = async (fresh = false) => {
       if (fresh) begin(); // a page that lives on gets a fresh budget each time
       pump();
@@ -576,6 +600,7 @@ export function openPage(
         timers.splice(timers.indexOf(t), 1);
         call(`__fire(${t.id})`);
       }
+      if (lazyModules.length) await loadLazyModules();
       await runScripts();
     };
     const tick = async () => {
