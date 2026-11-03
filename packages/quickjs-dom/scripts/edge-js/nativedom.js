@@ -798,30 +798,66 @@
     var parts = spec.split(":");
     if (!Object.getOwnPropertyDescriptor(P.HTMLElement, parts[0])) reflectBool(P.HTMLElement, parts[0], parts[1]);
   });
-  // value: a textarea's is its text, a select's the selected option's, the others' the attribute
+  // value: a control's value is state of its own, seeded by its default (the value attribute for
+  // an input, the text for a textarea) and parting from it once set — the dirty flag the spec
+  // keeps. Before, value and the attribute were one thing, so form.reset() had nothing to
+  // restore and a late attribute write moved a value the page had already typed over.
+  var VAL = Symbol("value");
+  var sanitizeValue = function (el, v) {
+    var type = el.localName === "input" ? el.type : "";
+    if (type === "number") return /^-?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(v) ? v : "";
+    if (/^(text|search|tel|url|email|password)$/.test(type)) return v.replace(/[\r\n]/g, "");
+    return v;
+  };
   var valueDesc = Object.getOwnPropertyDescriptor(P.HTMLElement, "value");
   if (!valueDesc) {
-    var VAL = Symbol("value");
     getter(P.HTMLElement, "value", function () {
       var tag = this.localName;
-      if (tag === "textarea") return this.textContent;
+      if (tag === "textarea") return this[VAL] !== undefined ? this[VAL] : this.textContent;
       if (tag === "select") {
-        var o = this.querySelector("option[selected]") || this.querySelector("option");
-        return o ? o.value : "";
+        var opts = this.querySelectorAll("option");
+        for (var i = 0; i < opts.length; i++) if (opts[i].selected) return opts[i].value;
+        return "";
       }
       if (tag === "option") { var v = this.getAttribute("value"); return v === null ? this.textContent : v; }
       if (this[VAL] !== undefined) return this[VAL];
       var a = this.getAttribute("value");
-      return a === null ? "" : a;
+      return tag === "input" ? sanitizeValue(this, a === null ? "" : a) : a === null ? "" : a;
     }, function (v) {
       var tag = this.localName;
-      if (tag === "textarea") this.textContent = String(v);
+      if (tag === "textarea") this[VAL] = String(v);
       else if (tag === "select") {
         var opts = this.querySelectorAll("option");
-        for (var i = 0; i < opts.length; i++) { if (opts[i].value === String(v)) opts[i].setAttribute("selected", ""); else opts[i].removeAttribute("selected"); }
-      } else this.setAttribute("value", String(v));
+        for (var i = 0; i < opts.length; i++) opts[i].selected = opts[i].value === String(v);
+      } else if (tag === "input") this[VAL] = sanitizeValue(this, String(v));
+      else this.setAttribute("value", String(v));
     });
   }
+  getter(P.HTMLElement, "defaultValue", function () {
+    if (this.localName === "textarea") return this.textContent;
+    var a = this.getAttribute("value");
+    return a === null ? "" : a;
+  }, function (v) {
+    if (this.localName === "textarea") this.textContent = String(v);
+    else this.setAttribute("value", String(v));
+  });
+  // checkedness is state too, seeded by the checked attribute; checking a radio unchecks its group
+  var CHK = Symbol("checked");
+  var uncheckRadioGroup = function (el) {
+    var group = radiosOf(el);
+    for (var i = 0; i < group.length; i++) if (group[i] !== el) group[i][CHK] = false;
+  };
+  getter(P.HTMLElement, "checked", function () {
+    if (this.localName !== "input") return this.hasAttribute("checked");
+    return this[CHK] !== undefined ? this[CHK] : this.hasAttribute("checked");
+  }, function (v) {
+    if (this.localName !== "input") { if (v) this.setAttribute("checked", ""); else this.removeAttribute("checked"); return; }
+    this[CHK] = !!v;
+    if (v && this.type === "radio") uncheckRadioGroup(this);
+  });
+  getter(P.HTMLElement, "defaultChecked", function () { return this.hasAttribute("checked"); }, function (v) {
+    if (v) this.setAttribute("checked", ""); else this.removeAttribute("checked");
+  });
   getter(P.HTMLElement, "form", function () { return this.closest("form"); });
   getter(P.HTMLElement, "isContentEditable", function () { return this.getAttribute("contenteditable") !== null && this.getAttribute("contenteditable") !== "false"; });
 
@@ -956,16 +992,30 @@
   });
   getter(P.HTMLOptionElement, "text", function () { return this.textContent.replace(/[ \t\n\f\r]+/g, " ").trim(); }, function (v) { this.textContent = String(v); });
 
-  // an option that is selected deselects the others of a single select
-  getter(P.HTMLOptionElement, "selected", function () { return this.hasAttribute("selected"); }, function (v) {
+  // an option's selectedness is state of its own, seeded by the selected attribute (its
+  // defaultSelected): before, the two were one attribute, so a select could not hold a
+  // deselected state (selectedIndex = -1 read back 0) and reset had no defaults to return to.
+  // An untouched single select shows its first option, as browsers and jsdom do.
+  var SEL = Symbol("selectedness");
+  var optionSelected = function (o) {
+    if (o[SEL] !== undefined) return o[SEL];
+    if (o.hasAttribute("selected")) return true;
+    var select = o.closest("select");
+    if (!select || select.hasAttribute("multiple")) return false;
+    var opts = select.querySelectorAll("option");
+    if (opts[0] !== o) return false;
+    for (var i = 0; i < opts.length; i++) if (opts[i][SEL] || opts[i].hasAttribute("selected")) return false;
+    return true;
+  };
+  getter(P.HTMLOptionElement, "selected", function () { return optionSelected(this); }, function (v) {
+    this[SEL] = !!v;
     if (v) {
       var select = this.closest("select");
       if (select && !select.hasAttribute("multiple")) {
         var all = select.querySelectorAll("option");
-        for (var i = 0; i < all.length; i++) if (all[i] !== this) all[i].removeAttribute("selected");
+        for (var i = 0; i < all.length; i++) if (all[i] !== this) all[i][SEL] = false;
       }
-      this.setAttribute("selected", "");
-    } else this.removeAttribute("selected");
+    }
   });
   getter(P.HTMLOptionElement, "defaultSelected", function () { return this.hasAttribute("selected"); }, function (v) { if (v) this.setAttribute("selected", ""); else this.removeAttribute("selected"); });
 
@@ -1046,18 +1096,16 @@
   });
   getter(P.HTMLSelectElement, "selectedIndex", function () {
     var opts = this.querySelectorAll("option");
-    for (var i = 0; i < opts.length; i++) if (opts[i].hasAttribute("selected")) return i;
-    return opts.length && !this.hasAttribute("multiple") ? 0 : -1;
+    for (var i = 0; i < opts.length; i++) if (optionSelected(opts[i])) return i;
+    return -1;
   }, function (v) {
     var opts = this.querySelectorAll("option");
-    for (var i = 0; i < opts.length; i++) { if (i === Number(v)) opts[i].setAttribute("selected", ""); else opts[i].removeAttribute("selected"); }
+    for (var i = 0; i < opts.length; i++) opts[i][SEL] = i === Number(v);
   });
   getter(P.HTMLSelectElement, "selectedOptions", function () {
     var select = this;
     return liveCollection(function () {
-      var chosen = Array.prototype.filter.call(select.querySelectorAll("option"), function (o) { return o.hasAttribute("selected"); });
-      if (!chosen.length && !select.hasAttribute("multiple")) { var first = select.querySelector("option"); if (first) chosen = [first]; }
-      return chosen;
+      return Array.prototype.filter.call(select.querySelectorAll("option"), function (o) { return optionSelected(o); });
     });
   });
   getter(P.HTMLOptionElement, "index", function () {
@@ -1065,9 +1113,18 @@
     return select ? Array.prototype.indexOf.call(select.querySelectorAll("option"), this) : 0;
   });
   def(P.HTMLFormElement, "reset", function () {
+    // the event goes first and can cancel the reset; the reset itself returns every control to
+    // its defaults by clearing the state that parted from them (value, checkedness, selectedness)
+    if (!this.dispatchEvent(new W.Event("reset", { bubbles: true, cancelable: true }))) return;
     var controls = this.querySelectorAll(CONTROLS);
-    for (var i = 0; i < controls.length; i++) { var c = controls[i]; if (c.localName === "input") c.value = c.getAttribute("value") || ""; }
-    this.dispatchEvent(new W.Event("reset", { bubbles: true, cancelable: true }));
+    for (var i = 0; i < controls.length; i++) {
+      var c = controls[i];
+      if (c.localName === "input" || c.localName === "textarea") { c[VAL] = undefined; if (c.localName === "input") c[CHK] = undefined; }
+      else if (c.localName === "select") {
+        var opts = c.querySelectorAll("option");
+        for (var j = 0; j < opts.length; j++) opts[j][SEL] = undefined;
+      }
+    }
   });
   def(P.HTMLFormElement, "requestSubmit", function () {
     if (this.dispatchEvent(new W.Event("submit", { bubbles: true, cancelable: true }))) { /* navigation: none here */ }

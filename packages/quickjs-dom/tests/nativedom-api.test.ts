@@ -482,7 +482,7 @@ describe("native DOM: style, forms and shadow roots", () => {
         var $ = function (id) { return doc.getElementById(id); };
         $("i").value = "b"; $("t").value = "bye"; $("s").value = "x"; $("c").checked = false; $("i").disabled = true;
         return [$("i").value, $("i").getAttribute("value"), $("t").value, $("t").textContent, $("s").value, $("c").checked, $("i").disabled, $("i").form === $("f")];`),
-    ).toEqual(["b", "b", "bye", "bye", "x", false, true, true]);
+    ).toEqual(["b", "a", "bye", "hi", "x", false, true, true]);
   });
 
   it("attachShadow: the root belongs to the host, not to the tree, and events go through the host", async () => {

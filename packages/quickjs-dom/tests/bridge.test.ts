@@ -45,6 +45,31 @@ describe("bridge: objects of the page from the host", () => {
     expect(() => new w.DOMTokenList()).toThrow(TypeError);
   });
 
+  it("keeps form state apart from its defaults: dirty values, radio groups, deselection, reset", async () => {
+    const out = await dom.eval(`(() => {
+      const d = document.implementation.createHTMLDocument("");
+      d.body.innerHTML = '<form id="f"><input id="t" value="dv"><input id="c" type="checkbox" checked>'
+        + '<input id="r1" type="radio" name="g" value="1"><input id="r2" type="radio" name="g" value="2" checked>'
+        + '<select id="s"><option value="a">A</option><option value="b" selected>B</option><option>C</option></select>'
+        + '<input id="n" type="number"></form>';
+      const $ = (id) => d.getElementById(id);
+      const log = [];
+      $("r1").checked = true;
+      log.push("radio:" + $("r1").checked + "," + $("r2").checked + "/" + $("r2").defaultChecked);
+      $("s").selectedIndex = -1;
+      log.push("desel:" + $("s").selectedIndex + ":" + JSON.stringify($("s").value));
+      $("t").value = "typed"; $("t").setAttribute("value", "attr2");
+      log.push("dirty:" + JSON.stringify($("t").value) + "/" + JSON.stringify($("t").defaultValue));
+      $("n").value = "abc";
+      log.push("num:" + JSON.stringify($("n").value));
+      $("c").checked = false; $("s").selectedIndex = 0;
+      $("f").reset();
+      log.push("reset:" + $("c").checked + "/" + $("s").selectedIndex + "/" + JSON.stringify($("t").value));
+      return JSON.stringify(log);
+    })()`);
+    expect(out).toBe(JSON.stringify(["radio:true,false/true", "desel:-1:\"\"", "dirty:\"typed\"/\"attr2\"", "num:\"\"", "reset:true/1/\"attr2\""]));
+  });
+
   it("clones a range's partial ancestors, and refuses cross-tree comparisons", async () => {
     const out = await dom.eval(`(() => {
       const d = document.implementation.createHTMLDocument("");
