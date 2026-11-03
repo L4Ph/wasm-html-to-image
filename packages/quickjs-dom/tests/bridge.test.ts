@@ -45,6 +45,15 @@ describe("bridge: objects of the page from the host", () => {
     expect(() => new w.DOMTokenList()).toThrow(TypeError);
   });
 
+  it("exposes Location for the location", async () => {
+    expect(
+      await dom.eval(`JSON.stringify([
+        typeof Location, location instanceof Location, location instanceof URL, location.constructor.name,
+        location.pathname, (() => { try { new Location(); return "no error"; } catch (e) { return e.name; } })(),
+      ])`),
+    ).toBe(JSON.stringify(["function", true, true, "Location", "blank", "TypeError"]));
+  });
+
   it("exposes DOMStringMap for dataset", async () => {
     expect(typeof w.DOMStringMap).toBe("function");
     expect(

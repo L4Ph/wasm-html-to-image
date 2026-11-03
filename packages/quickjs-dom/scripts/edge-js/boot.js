@@ -56,7 +56,12 @@
       Object.defineProperty(g, k, { configurable: true, writable: true, value: g });
     });
 
+    // the location is a URL with the navigation methods tacked on; a Location prototype is inserted
+    // between it and URL's, so it is an instance of both and the URL accessors keep working
+    g.Location = function Location() { throw new TypeError("Illegal constructor"); };
     var loc = new g.URL(url);
+    Object.setPrototypeOf(g.Location.prototype, Object.getPrototypeOf(loc));
+    Object.setPrototypeOf(loc, g.Location.prototype);
     loc.assign = loc.replace = loc.reload = function () {};
     g.location = loc;
     // The window's singleton objects carry their interface prototypes, so instanceof and constructor lookups work
