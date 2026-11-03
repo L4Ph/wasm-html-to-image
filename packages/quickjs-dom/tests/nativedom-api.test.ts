@@ -776,3 +776,24 @@ describe("streams and constructable sheets", () => {
     ).toBe(JSON.stringify(["a", "b", true, "héllo", 2, "a", 1]));
   });
 });
+
+describe("custom elements with private fields; canvas value classes", () => {
+  it("a constructor runs once per element however the element is made", async () => {
+    const page = await createDOM({ html: "<my-b id=up datetime=1></my-b>" }, { settleMs: 0 });
+    try {
+      expect(
+        await page.eval(`(function () {
+          var runs = 0;
+          class B extends HTMLElement { #t; constructor() { super(); runs++; this.#t = 5; } get t() { return this.#t; } }
+          customElements.define("my-b", B);
+          var made = document.createElement("my-b"), by = new B();
+          document.body.innerHTML = "<my-b id=z></my-b>";
+          return JSON.stringify([document.getElementById("z").t, made.t, by.t, document.querySelector("#up") === null, runs,
+            typeof Path2D, new ImageData(2, 2).data.length, typeof OffscreenCanvas, typeof document.createElement("div").attachShadow({ mode: "open" }).adoptedStyleSheets]);
+        })()`),
+      ).toBe(JSON.stringify([5, 5, 5, true, 4, "function", 16, "function", "object"]));
+    } finally {
+      page.close();
+    }
+  });
+});

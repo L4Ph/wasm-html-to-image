@@ -514,7 +514,7 @@
   // `class X extends HTMLElement` reaches the element through the HTMLElement below, which hands out the node being
   // upgraded); connected / disconnected / attributeChanged callbacks follow insertion, removal and attribute writes.
   // Hooks are installed on the first define(), so a page without custom elements pays nothing.
-  var defs = new Map(), byClass = new Map(), waiting = new Map(), UPGRADED = Symbol("upgraded"), pending = null, ceOn = false;
+  var defs = new Map(), byClass = new Map(), waiting = new Map(), UPGRADED = Symbol("upgraded"), pending = null, byHand = false, ceOn = false;
   var report = function (e) {
     if (typeof globalThis.reportError === "function") globalThis.reportError(e);
     else if (globalThis.console) globalThis.console.error(e);
@@ -611,7 +611,7 @@
     wrap(P.Document, "createElement", function (orig) {
       return function (name) {
         var el = orig.apply(this, arguments);
-        if (defs.size && defOf(el)) upgrade(el);
+        if (defs.size && !byHand && defOf(el)) upgrade(el);
         return el;
       };
     });
@@ -634,7 +634,9 @@
       // `new X()` by hand: make the element the class was defined for
       var d_ = byClass.get(new.target);
       if (!d_) throw new TypeError("Illegal constructor");
-      el = globalThis.document.createElement(d_.extend || d_.name);
+      byHand = true;
+      try { el = globalThis.document.createElement(d_.extend || d_.name); } finally { byHand = false; }
+      Object.defineProperty(el, UPGRADED, { value: true }); // the constructor that called us is the upgrade
       Object.setPrototypeOf(el, new.target.prototype);
     }
     pending = null;
@@ -2833,6 +2835,11 @@
   ShadowRoot.prototype = Object.create(P.DocumentFragment, { constructor: { value: ShadowRoot, writable: true, configurable: true } });
   Object.defineProperty(ShadowRoot, Symbol.hasInstance, { value: function (x) { return !!x && x.nodeType === 11 && !!x.host; } });
   W.ShadowRoot = ShadowRoot;
+  // adopted sheets are kept (a shadow root is a native fragment, so the property lives there)
+  [P.DocumentFragment, P.Document].forEach(function (proto) {
+    if (Object.getOwnPropertyDescriptor(proto, "adoptedStyleSheets")) return;
+    getter(proto, "adoptedStyleSheets", function () { return this.__adopted || (this.__adopted = []); }, function (v) { this.__adopted = Array.prototype.slice.call(v); });
+  });
   // a shadow root has an innerHTML like an element's
   if (!Object.getOwnPropertyDescriptor(P.DocumentFragment, "innerHTML")) {
     getter(P.DocumentFragment, "innerHTML", function () { return D.serialize(this); }, function (html) {

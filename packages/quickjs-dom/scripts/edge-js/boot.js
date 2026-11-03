@@ -506,7 +506,30 @@
       return { rangeCount: 0, isCollapsed: true, anchorNode: null, focusNode: null, type: "None", toString: function () { return ""; },
         removeAllRanges: function () {}, addRange: function () {}, getRangeAt: function () { return d.createRange(); }, collapse: function () {}, empty: function () {} };
     };
-    // canvas has no drawing here: a context is not available, which is what code feature-checks for
+    // canvas has no drawing here: a context is not available, which is what code feature-checks for; the value classes exist
+    if (!g.Path2D) {
+      g.Path2D = class Path2D {
+        constructor(d) { this._d = d instanceof Path2D ? d._d : typeof d === "string" ? d : ""; }
+        addPath(p) { this._d += " " + p._d; }
+      };
+      ["moveTo", "lineTo", "bezierCurveTo", "quadraticCurveTo", "arc", "arcTo", "ellipse", "rect", "roundRect", "closePath"].forEach(function (m) { g.Path2D.prototype[m] = function () {}; });
+    }
+    if (!g.ImageData) {
+      g.ImageData = class ImageData {
+        constructor(a, b, c) {
+          if (typeof a === "number") { this.width = a; this.height = b; this.data = new Uint8ClampedArray(a * b * 4); }
+          else { this.data = a; this.width = b; this.height = c || a.length / 4 / b; }
+          this.colorSpace = "srgb";
+        }
+      };
+    }
+    if (!g.OffscreenCanvas) {
+      g.OffscreenCanvas = class OffscreenCanvas {
+        constructor(w, h) { this.width = w; this.height = h; }
+        getContext() { return null; }
+        convertToBlob() { return Promise.reject(new Error("OffscreenCanvas has no drawing here")); }
+      };
+    }
     var canvasProto = g.__native.dom.protos.HTMLCanvasElement;
     if (canvasProto) {
       Object.defineProperty(canvasProto, "getContext", { configurable: true, writable: true, value: function () { return null; } });
