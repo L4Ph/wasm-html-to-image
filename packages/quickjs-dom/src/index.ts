@@ -34,6 +34,7 @@ import type {
 export type {
   PageLogEntry,
   JavaScriptOptions,
+  HappyDOMSettings,
   ScriptedPage,
   CreateDOMOptions,
   QuickJSDOM,
@@ -43,7 +44,9 @@ export type {
 } from "./types.js";
 
 export { openPage } from "./page.js";
-export type { Bridge, BridgeOptions, DOMWindow } from "./bridge.js";
+export { installWindow, registerGlobals, unregisterGlobals, isGlobalsRegistered } from "./globals.js";
+export { BatchRef } from "./bridge.js";
+export type { BatchOp, BatchTree, Bridge, BridgeOptions, DOMWindow, SequenceEvent } from "./bridge.js";
 export { CookieJar, type Cookie, type CookieJarLike } from "./cookies.js";
 export { isPrivateHost, type FetchLimits } from "./limits.js";
 export { decodeHtml, sniffCharset } from "./decode.js";

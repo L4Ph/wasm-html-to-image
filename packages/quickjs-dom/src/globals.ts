@@ -33,10 +33,13 @@ export function installWindow(global: Record<string, any>, win: Record<string, a
   const saved = new Map<string, PropertyDescriptor | undefined>();
   const define = (key: string, descriptor: PropertyDescriptor) => {
     const before = Object.getOwnPropertyDescriptor(global, key);
-    if (before && !before.configurable) return;
-    saved.set(key, before);
+    if (!saved.has(key) && before && !before.configurable) return;
+    // a name defined twice in one call (document, window, ... below are also the page's own) keeps the descriptor of
+    // its first definition as the one to restore: saving the second would leave the page's getter installed after
+    // the uninstaller ran.
+    if (!saved.has(key)) saved.set(key, before);
     Object.defineProperty(global, key, { configurable: true, enumerable: false, ...descriptor });
-    defined.push(key);
+    if (!defined.includes(key)) defined.push(key);
   };
   const keys: string[] = typeof (win as any)[WIN_KEYS] === "function" ? (win as any)[WIN_KEYS]() : Object.getOwnPropertyNames(win);
   for (const key of keys) {
@@ -72,4 +75,43 @@ export function installWindow(global: Record<string, any>, win: Record<string, a
       else delete global[key];
     }
   };
+}
+
+// The environment registered for the process, as happy-dom's GlobalRegistrator keeps one. `installWindow` itself is
+// reentrant; this singleton is only for the `register()` / `unregister()` pair (src/jsdom.ts), which cannot return
+// the uninstaller to its caller.
+let current: { global: Record<string, any>; uninstall: () => void } | undefined;
+
+/**
+ * Install a page's globals as the process environment (a happy-dom `GlobalRegistrator` style singleton): the
+ * previously registered window, if any, is taken off first. The returned function uninstalls this one and is a
+ * no-op once {@link registerGlobals} has been called again.
+ */
+export function registerGlobals(global: Record<string, any>, win: Record<string, any>): () => void {
+  if (current) {
+    const previous = current;
+    current = undefined;
+    previous.uninstall();
+  }
+  const uninstall = installWindow(global, win);
+  const entry = { global, uninstall };
+  current = entry;
+  return () => {
+    if (current !== entry) return;
+    current = undefined;
+    uninstall();
+  };
+}
+
+/** Take the window registered by {@link registerGlobals} off its global (no-op when none is registered). */
+export function unregisterGlobals(global: Record<string, any> = globalThis as unknown as Record<string, any>): void {
+  if (!current || current.global !== global) return;
+  const { uninstall } = current;
+  current = undefined;
+  uninstall();
+}
+
+/** Whether a window is currently registered as the process globals. */
+export function isGlobalsRegistered(): boolean {
+  return current !== undefined;
 }

@@ -141,7 +141,7 @@ const dom2 = await JSDOM.fromURL(url, options);
 最適化の柱:
 - **キャッシュ**: `nodeType`、`nodeName`、`localName`、`namespaceURI` は不変なのでハンドルと一緒に返す。`parentNode` などは、変更の世代番号 `N.version()` を見て無効化する。
 - **一括返却**: `childNodes`、`children`、`attributes`、`classList` は、長さと要素のハンドルをまとめて返す。
-- **一括実行**: `dom.batch(() => { ... })` のように、書き込みの列をまとめて 1 回で送る任意の API(テストコードの標準経路には載せない)。
+- **一括実行**: 書き込みの列を 1 回で送る任意の API(テストコードの標準経路には載せない)。実装は `bridge.batch([ops])` で、`["tree", parent, { tag, attrs, text, children }]` がホスト側レンダラの持つ木を 1 往復で作り、`["call"]` / `["set"]` / `["new"]` を同じ配列に混ぜられる。既に文字列の HTML がある場合は、ノードをホストで組み立てず `innerHTML` を 1 回代入する方が短い(パーサが C 側で一括生成する)。
 - **ゲスト側の関数**: `@testing-library/dom` の `queries` を、ゲストの中で動かせるように同梱(任意)。
 
 **性能基準(P5)**: テストの標準的な例(React の小さなアプリ 100 本)の総実行時間が jsdom の 2 倍以内。それを超える場合は、遅い順に原因を調べる。
@@ -170,3 +170,35 @@ const dom2 = await JSDOM.fromURL(url, options);
 1. `host.callback` と再入を入れ、`o.a` 相当の往復が 2 µs 以下になるか測る。
 2. `Element` / `Node` / `Document` だけのスキーマを生成し、`document.body.appendChild(document.createElement("div"))` が Node 側から動くようにする。
 3. 小さな React アプリ(カウンター)を `react-dom` で描画し、jsdom と時間を比べる。ここで 2 倍を大きく超えるなら、§11 の最適化を先に設計し直す。
+
+## 15. happy-dom 互換の設定表 (P1)
+
+`JSDOMOptions` は happy-dom の4つの資源トグルを、トップレベルまたは `settings` オブジェクトで受ける
+(トップレベルが優先)。既定はすべて `true` で、quickjs の挙動を変えない。トグルは拒否権であり、
+資源を要求する jsdom 側のスイッチ(`resources: "usable"`、`runScripts: "dangerously"`)はそのまま必要。
+
+| happy-dom | `JSDOMOptions` | 既定 | この実装での効果 |
+|---|---|---|---|
+| `settings.enableCSSFileLoading` | `enableCSSFileLoading` | `true` | `<link rel="stylesheet">` の取得は `resources: "usable"` のときだけ。`false` はその取得を止める。`<style>` と `style` 属性は常にカスケードする |
+| `settings.enableJavaScriptEvaluation` | `enableJavaScriptEvaluation` | `true` | `false` は `runScripts: "dangerously"` でもページのスクリプト(inline / external)を実行しない。`"outside-only"` の `window.eval` はホスト駆動なので残る |
+| `settings.enableImageFileLoading` | `enableImageFileLoading` | `true` | 受理のみ。DOM は画像を取得しない(描画側が `setImageResource()` で公開する)ため効果なし |
+| `settings.enableIframePageLoading` | `enableIframePageLoading` | `true` | 受理のみ。入れ子の閲覧コンテキストを読み込まない(`srcdoc` は空文書の種)ため効果なし |
+
+JS / CSS の既定値の対応:
+
+| 項目 | jsdom | happy-dom | `wasm-quickjs-dom/jsdom` |
+|---|---|---|---|
+| ページスクリプトの既定 | なし(`runScripts` 未指定) | 評価 ON | なし。`runScripts: "dangerously"` が必要。`enableJavaScriptEvaluation: false` が拒否権 |
+| 外部 `<script src>` | `resources: "usable"` | `enableJavaScriptFileLoading` ON | `runScripts: "dangerously"` + `resources: "usable"` + 評価 ON |
+| 外部 CSS | `resources: "usable"` | `enableCSSFileLoading` ON | `resources: "usable"` + `enableCSSFileLoading` |
+| `<style>` / `style` 属性 | カスケード | カスケード | 常にカスケード(`stylesheets: false` は外部ファイルだけに効く) |
+| 画像 | jsdom が取得 | 取得 | DOM は取得しない(描画側が所有) |
+| iframe | 資源とともに読む | `enableIframePageLoading` | 中身は読まない |
+| タイマー | ホストのタイマー | 自前の時計 | 実タイマーはホスト経由。fake timers は**移植しない**(known-gaps §1) |
+| viewport 幅 | 1024 | 設定可 | `engine.width`(既定 800)= `window.innerWidth` |
+| viewport 高さ | 768 | 設定可 | オプションなし。`innerHeight = round(width * 0.75)` |
+
+`register()` / `unregister()` は happy-dom の `GlobalRegistrator` 相当(`src/jsdom.ts`)。
+`dom.goto(url)` は `JSDOM.fromURL`(`file:` は `JSDOM.fromFile`)+ `await dom.ready` の薄いラッパで、
+現在のページをその場で遷移させず、閉じもしない。`dom.waitUntilComplete()` は `await dom.ready`。
+`Browser` 全体(履歴、その場の遷移、フレーム遷移)は再現しない。

@@ -1,6 +1,6 @@
 import { JSDOM } from "jsdom";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createDOM, type Bridge, type QuickJSDOM } from "../src/index.js";
+import { BatchRef, createDOM, type Bridge, type QuickJSDOM } from "../src/index.js";
 import { side, type Trace } from "./lockstep.js";
 
 // The bridge: the page's DOM used from Node, synchronously. The same random programs that tests/nativedom.test.ts runs
@@ -35,6 +35,23 @@ describe("bridge: objects of the page from the host", () => {
     expect(Array.from(a.childNodes).map((n: any) => n.nodeName)).toEqual(["#text", "B"]);
     expect(w.Node.ELEMENT_NODE).toBe(1);
     expect(a.ELEMENT_NODE).toBe(1);
+  });
+
+  it("batch builds a subtree in one call and keeps wrapper identity", () => {
+    const d = w.document;
+    const root = new BatchRef(0);
+    const p = new BatchRef(1);
+    const out = bridge.batch([
+      ["call", d, "createElement", ["div"]],
+      ["call", d, "createElement", ["p"]],
+      ["set", p, "textContent", "batched"],
+      ["call", root, "appendChild", [p]],
+      ["call", d.body, "appendChild", [root]],
+    ]);
+    expect((out[0] as any).tagName).toBe("DIV");
+    expect((out[0] as any).textContent).toBe("batched");
+    expect(d.body.lastElementChild).toBe(out[0]);
+    (out[0] as any).remove();
   });
 
   it("exposes DOMTokenList for classList", () => {
@@ -764,6 +781,51 @@ describe("bridge: functions of the host called by the page", () => {
     expect(ev.defaultPrevented).toBe(true);
     expect(order).toEqual(["a", "body 3"]);
     d.body.removeEventListener("go", body);
+  });
+
+  it("fireSequence dispatches a run of events in one call, as dispatching them one by one does", () => {
+    const d = w.document;
+    const host = d.createElement("div");
+    const child = d.createElement("span");
+    host.appendChild(child);
+    d.body.appendChild(host);
+    const log: string[] = [];
+    const capture = (e: any) => log.push("capture:" + e.eventPhase + ":" + (e.target === child));
+    const target = (e: any) => {
+      log.push("target:" + e.eventPhase + ":" + (e.target === child) + ":" + (e.currentTarget === child));
+      e.preventDefault();
+    };
+    const bubble = (e: any) => log.push("bubble:" + e.eventPhase + ":" + (e.currentTarget === host));
+    const quiet = () => log.push("quiet");
+    host.addEventListener("ping", capture, true);
+    child.addEventListener("ping", target);
+    host.addEventListener("ping", bubble);
+    host.addEventListener("quiet", quiet);
+    const events = [
+      { type: "ping", init: { bubbles: true, cancelable: true } },
+      { type: "quiet", init: {} }, // does not bubble: the ancestor must not hear it
+      { type: "ping", ctor: "MouseEvent", init: { bubbles: true, cancelable: true } },
+    ] as const;
+    const batched = bridge.fireSequence(child, events.map((e) => ({ ...e, init: { ...e.init } })));
+    const batchedLog = log.splice(0);
+    // the same events, one bridge call each
+    const one = [
+      child.dispatchEvent(new w.Event("ping", { bubbles: true, cancelable: true })),
+      child.dispatchEvent(new w.Event("quiet", {})),
+      child.dispatchEvent(new w.MouseEvent("ping", { bubbles: true, cancelable: true })),
+    ];
+    expect(batched).toEqual([false, true, false]);
+    expect(batched).toEqual(one);
+    expect(batchedLog).toEqual(log.splice(0));
+    expect(batchedLog).toEqual([
+      "capture:1:true", "target:2:true:true", "bubble:3:true",
+      "capture:1:true", "target:2:true:true", "bubble:3:true",
+    ]);
+    host.removeEventListener("ping", capture, true);
+    host.removeEventListener("ping", bubble);
+    host.removeEventListener("quiet", quiet);
+    child.removeEventListener("ping", target);
+    host.remove();
   });
 
   it("a listener may call back into the page, several levels deep", () => {

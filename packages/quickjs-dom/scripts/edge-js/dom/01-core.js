@@ -341,25 +341,29 @@
       if (n.nodeType === 11 && n.host && !ev.composed) break;
     }
     // what a listener sees as the target: the first node of its own tree's stretch of the path —
-    // a listener outside a shadow tree sees the host, not the node inside (the document's stretch
-    // runs on up to the window, which sees the same target as the document does)
-    var seen = [], seg = 0;
-    for (i = 0; i < path.length; i++) {
-      if (i > 0 && path[i - 1].nodeType === 11 && path[i - 1].host) seg = i;
-      seen.push(path[seg]);
+    // a listener outside a shadow tree sees the host, not the node inside. Without a shadow boundary
+    // every listener sees the dispatch target itself, so no second array is made.
+    var seen = null, hasShadow = false;
+    for (var i = 0; i < path.length; i++) if (path[i].nodeType === 11 && path[i].host) { hasShadow = true; break; }
+    if (hasShadow) {
+      seen = [];
+      var seg = 0;
+      for (i = 0; i < path.length; i++) {
+        if (i > 0 && path[i - 1].nodeType === 11 && path[i - 1].host) seg = i;
+        seen.push(path[seg]);
+      }
     }
     ev.target = ev.srcElement = this;
-    ev._path = path.map(function (x, i) { return { currentTarget: x, target: seen[i] }; });
+    eventPaths.set(ev, path);
     ev.cancelBubble = false;
-    ev._stopImmediatePropagationFlag = false;
-    var i;
-    for (i = path.length - 1; i > 0 && !ev.cancelBubble; i--) invoke(path[i], ev, 1, seen[i]);
+    if (ev._stopImmediatePropagationFlag) Object.defineProperty(ev, "_stopImmediatePropagationFlag", { value: false, configurable: true });
+    for (i = path.length - 1; i > 0 && !ev.cancelBubble; i--) invoke(path[i], ev, 1, seen ? seen[i] : this);
     if (!ev.cancelBubble) invoke(this, ev, 2, this);
     // the bubble pass: a node the event is retargeted onto (the host of a tree the event came
     // out of) hears it even when the event does not bubble — in its own tree the host IS the
     // target — while ordinary ancestors of a non-bubbling event hear nothing
     for (i = 1; i < path.length && !ev.cancelBubble; i++) {
-      if (ev.bubbles || seen[i] === path[i]) invoke(path[i], ev, 3, seen[i]);
+      if (ev.bubbles || (seen && seen[i] === path[i])) invoke(path[i], ev, 3, seen ? seen[i] : this);
     }
     ev.target = ev.srcElement = this;
     ev.currentTarget = null;

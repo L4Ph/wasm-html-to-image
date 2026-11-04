@@ -37,6 +37,11 @@ interface Cell {
   g?: string;
   /** childNodes and children of this node, as the host has made them (one object each, so it is the same every time). */
   cols?: Record<string, object>;
+  /** namespaceURI of an element: never changes, so it is read once and kept with the handle. */
+  u?: string;
+  /** defaultView of a document: fixed when the document is made. `dvSet` tells "null" from "not read yet". */
+  dv?: unknown;
+  dvSet?: boolean;
 }
 
 /** A handle as the guest sends it. */
@@ -116,6 +121,43 @@ export interface BridgeOptions {
 
 /** The page's `window`: every property is looked up in the page when read. */
 export type DOMWindow = Window & typeof globalThis & Record<string, any>;
+
+/**
+ * A result of an earlier operation in {@link Bridge.batch}, usable by the operations after it (the index is the
+ * position of that operation's answer in the batch). It stands for the object there, not for its number.
+ */
+export class BatchRef {
+  constructor(readonly index: number) {}
+}
+
+/**
+ * One operation of {@link Bridge.batch}. Its answer is placed at the operation's index in the result list.
+ *
+ * `["call", target, method, args]` calls a method, `["set", target, key, value]` writes a property, and
+ * `["new", className, args]` constructs a page interface. A target or an argument may be a {@link BatchRef}
+ * (the answer of an earlier operation) or a wrapper; everything else crosses as a value.
+ */
+export type BatchOp =
+  | ["call", object | BatchRef, string, unknown[]?]
+  | ["set", object | BatchRef, string, unknown]
+  | ["new", string, unknown[]?]
+  | ["tree", object | BatchRef, BatchTree];
+
+/** A tree built by one `["tree", parent, tree]` operation: one bridge call for the whole subtree. */
+export interface BatchTree {
+  tag: string;
+  attrs?: Record<string, string>;
+  text?: string;
+  children?: (BatchTree | string)[];
+}
+
+/** One event of {@link Bridge.fireSequence}: the type, the init dictionary and, if not `Event`, the interface. */
+export interface SequenceEvent {
+  type: string;
+  init?: Record<string, unknown>;
+  /** The window interface to construct (`MouseEvent`, `KeyboardEvent`, ...); `Event` when omitted. */
+  ctor?: string;
+}
 
 /** Internal symbol to read window property names without Proxy descriptor traversal. */
 export const WIN_KEYS = Symbol("winKeys");
@@ -226,6 +268,39 @@ export class Bridge {
     this.sendReleases();
   }
 
+  /**
+   * Run several operations in the page with one call, in order, answering their results in the same order.
+   *
+   * A host that builds a subtree node by node pays one bridge call per operation (`createElement`, `setAttribute`,
+   * `appendChild`, ...). This makes that whole build one call: a created node is a {@link BatchRef} for the operations
+   * after it. The page sees ordinary DOM operations, so custom elements, mutation records and invalidation behave as
+   * they do when the same calls are made one by one. If an operation throws, the operations before it have already
+   * happened (there is no rollback); the error is thrown here.
+   */
+  batch(ops: BatchOp[]): unknown[] {
+    const encode = (v: unknown): unknown => {
+      if (v instanceof BatchRef) return { $: "r", i: v.index };
+      if (Array.isArray(v)) return v.map(encode);
+      return this.encode(v);
+    };
+    const list = ops.map((op) => (op[0] === "tree" ? ["tree", encode(op[1]), op[2]] : op.map(encode)));
+    return this.sendJ(["batch", list]) as unknown[];
+  }
+
+  /**
+   * Dispatch several events at one target in one call, in order: the guest builds each event from `{ type, init }`
+   * and runs the ordinary dispatch (capture, target, bubble, `preventDefault`, activation, listeners of the host
+   * called back synchronously), then answers whether each was not canceled. This is the same work as calling
+   * `target.dispatchEvent(new Event(...))` one by one, with one bridge round trip for the sequence instead of two
+   * per event; a host that must read or change the page between events should dispatch them itself.
+   */
+  fireSequence(target: object, events: SequenceEvent[]): boolean[] {
+    const cell = target && (target as any)[HANDLE] as Cell | undefined;
+    if (!cell) throw new TypeError("fireSequence: the target is not an object of the page.");
+    const list = events.map((e) => ({ type: e.type, ctor: e.ctor, init: this.encode(e.init ?? {}) }));
+    return this.sendJ(["fire", cell.id, list]) as boolean[];
+  }
+
   // ---- calls into the guest ----
 
   /** The number of functions of the host that the page may still call (for tests that look for leaks). */
@@ -262,10 +337,11 @@ export class Bridge {
 
   /** An operation in the form of a JSON array: [op, ...]. */
   private sendJ(request: unknown[]): unknown {
-    // a function of the page that is called, or an object made, may change anything
-    const runs = request[0] === "apply" || request[0] === "new" || request[0] === "del";
+    // a function of the page that is called, an object made, or a batch run, may change anything
+    const runs = request[0] === "apply" || request[0] === "new" || request[0] === "del" || request[0] === "batch" || request[0] === "fire";
     if (runs) {
-      this.invalidate();
+      // only after: what the host had read is still valid while the operation runs (it is dropped below, before
+      // the host sees the answer), and a call that changes nothing then pays no re-read
       if (this.timeout > 0) this.vm.setDeadline(Date.now() + this.timeout);
     }
     const value = this.send("J" + JSON.stringify(request), request[0] === "release");
@@ -348,6 +424,25 @@ export class Bridge {
   }
 
   private get(cell: Cell, key: string): unknown {
+    // These never change for the object they belong to, so they avoid a call every time they are read. The
+    // interface has them as accessors, so they must not answer from anywhere else (an element's namespaceURI,
+    // a document's defaultView).
+    if (key === "namespaceURI" && cell.t === 1) {
+      if (cell.u !== undefined) return cell.u;
+      const value = this.send("g" + cell.id + "\u0001" + key);
+      cell.u = value as string;
+      return value;
+    }
+    if (key === "defaultView" && cell.t === 9) {
+      if (cell.dvSet) return cell.dv;
+      const value = this.send("g" + cell.id + "\u0001" + key);
+      cell.dv = value;
+      cell.dvSet = true;
+      return value;
+    }
+    // React asks every event target for this one (getEventTarget); only an SVG <use> has it, and for anything
+    // else the property does not exist. Answering it here is the same answer the page would give, without a call.
+    if (key === "correspondingUseElement" && cell.t === 1 && cell.l !== "use") return undefined;
     const k = cell.id + "\u0001" + key;
     if (this.reads.has(k)) return this.reads.get(k);
     const value = this.send("g" + cell.id + "\u0001" + key);
@@ -364,6 +459,18 @@ export class Bridge {
     const cell = a && typeof a === "object" ? ((a as any)[HANDLE] as Cell | undefined) : undefined;
     if (cell) return "h" + cell.id;
     return null;
+  }
+
+  /** The id the page knows `fn` by, registering it the first time (the same numbering `encode` uses). */
+  private functionId(fn: Function): number {
+    let id = this.fnIds.get(fn);
+    if (id === undefined) {
+      id = this.nextFn++;
+      this.fnIds.set(fn, id);
+      this.fnById.set(id, fn);
+    }
+    this.fnUsed.add(id);
+    return id;
   }
 
   private set(cell: Cell, key: string, value: unknown): void {
@@ -408,9 +515,10 @@ export class Bridge {
     }
     const encoded = this.encodeArgs(args);
     if (!PURE_CALLS.has(key)) {
-      this.invalidate();
+      // the drop after is what makes the calls that follow see the page's new state; dropping before as well
+      // only threw away reads that were still good, so it is not done
       const value = this.send("c" + cell.id + "\u0001" + key + "\u0001" + encoded);
-      this.invalidate(); // what it ran may have changed anything
+      this.invalidate();
       return value;
     }
     const k = cell.id + "\u0001" + key + "\u0001" + encoded;
@@ -442,14 +550,7 @@ export class Bridge {
         // chain and must travel as its own function, or every subclass arrives as the base class
         const cls = Object.prototype.hasOwnProperty.call(v, CLASS_NAME) ? ((v as any)[CLASS_NAME] as string) : undefined;
         if (cls) return { $: "c", n: cls };
-        let id = this.fnIds.get(v);
-        if (id === undefined) {
-          id = this.nextFn++;
-          this.fnIds.set(v, id);
-          this.fnById.set(id, v);
-        }
-        this.fnUsed.add(id);
-        return { $: "f", i: id };
+        return { $: "f", i: this.functionId(v as Function) };
       }
       default: {
         if (v === null) return null;
@@ -681,24 +782,71 @@ export class Bridge {
   // ---- calls from the guest ----
 
   /**
-   * The page calls a function of the host's (`id`, as `encode` numbered it) with `args` (JSON: [this, [arguments]]);
-   * the answer is JSON: `{ v }` or `{ x }`.
+   * The page calls a function of the host's (`id`, as `encode` numbered it) with `args`; the answer is a token
+   * string or JSON: `{ v }` or `{ x }`. A callback whose arguments and answer are handles, strings and primitives
+   * (an event listener, almost always) goes as the compact token form: no JSON on either side.
    */
   callback(id: number, args: string): string | undefined {
     const fn = this.fnById.get(id);
     if (!fn) return undefined;
+    // the page may have changed anything since the host last read (the guest sets the event's currentTarget and
+    // eventPhase before each listener, and a listener of the page's may have touched the tree)
     this.invalidate();
     this.depth++;
     try {
-      const [self, list] = JSON.parse(args) as [unknown, unknown[]];
-      const value = fn.apply(this.decode(self), list.map((a) => this.decode(a)));
-      return JSON.stringify({ v: this.encode(value) });
+      let self: unknown;
+      let list: unknown[];
+      if (args.charCodeAt(0) === 5) {
+        const tokens = args.slice(1).split("\u0002");
+        self = this.decodeToken(tokens[0]);
+        list = tokens.slice(1).map((t) => this.decodeToken(t));
+      } else {
+        const parsed = JSON.parse(args) as [unknown, unknown[]];
+        self = this.decode(parsed[0]);
+        list = parsed[1].map((a) => this.decode(a));
+      }
+      const value = fn.apply(self, list);
+      const token = this.tokenOf(value);
+      return token !== null ? "\u0006" + token : JSON.stringify({ v: this.encode(value) });
     } catch (e) {
       const err = e instanceof Error ? e : new Error(String(e));
       return JSON.stringify({ x: { n: err.name, m: err.message, s: err.stack } });
     } finally {
+      // no invalidation here: a write the listener made has already dropped the cache, and dropping reads that
+      // were taken after it would only make the next listener read them again
       this.depth--;
-      this.invalidate();
+    }
+  }
+
+  /** A value in the compact callback form: `U` undefined, `N` null, `T`/`F`, `n<number>`, `s<string>`, `h<id>`. */
+  private tokenOf(v: unknown): string | null {
+    if (v === undefined) return "U";
+    if (v === null) return "N";
+    if (typeof v === "boolean") return v ? "T" : "F";
+    if (typeof v === "number" && Number.isFinite(v) && !Object.is(v, -0)) return "n" + v;
+    if (typeof v === "string") return v.includes("\u0001") || v.includes("\u0002") ? null : "s" + v;
+    const cell = v && typeof v === "object" ? ((v as any)[HANDLE] as Cell | undefined) : undefined;
+    return cell ? "h" + cell.id : null;
+  }
+
+  private decodeToken(t: string): unknown {
+    switch (t.charCodeAt(0)) {
+      case 85: // U
+        return undefined;
+      case 78: // N
+        return null;
+      case 84: // T
+        return true;
+      case 70: // F
+        return false;
+      case 110: // n
+        return Number(t.slice(1));
+      case 115: // s
+        return t.slice(1);
+      case 104: // h
+        return this.handleOf(t.slice(1));
+      default:
+        return undefined;
     }
   }
 }

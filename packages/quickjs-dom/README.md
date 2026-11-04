@@ -242,10 +242,48 @@ dom.window.close();
 | `dom.reconfigure({ url })` | |
 | `dom.serialize()`, `dom.close()`, `dom.window.close()` | |
 | `await dom.ready` (waits for external scripts and the `load` event) | |
+| happy-dom `enableCSSFileLoading` / `enableJavaScriptEvaluation` / `enableImageFileLoading` / `enableIframePageLoading` | |
+| `register()` / `unregister()` / `GlobalRegistrator` (happy-dom style process globals) | |
+| `dom.goto(url)` / `dom.waitUntilComplete()` (thin wrappers, see below) | |
 
 > [!NOTE]
 > - **Timers & Lifecycle:** The page's timers and `load` event run behind the constructor and do not keep the Node process alive; `await dom.ready` waits for external scripts and the `load` event.
 > - **Cookies:** `document.cookie`, the cookies of the page's requests and the `Set-Cookie` headers of its responses all go through the page's jar, with RFC 6265 domain/path scoping, `Secure` and `HttpOnly` (hidden from the page) honoured. Without a `cookieJar` option each page gets a fresh jar of this package's own (`dom.cookieJar`, as in jsdom); pass one — this package's `CookieJar`, or a tough-cookie jar, whose synchronous surface is what is used — to share cookies between pages or to seed them. The engine's `createDOM` / `openPage` take the same option; a page opened without it keeps a small per-page jar of its own.
+
+### happy-dom Compatibility (P1)
+
+A happy-dom configuration can be reused. The four `settings` toggles are accepted directly on `JSDOMOptions` or in a nested `settings` object (a top-level field wins). They default to `true`, so the quickjs behaviour is unchanged; they are vetoes, and the jsdom switch that requests a subresource still decides whether any work happens.
+
+| happy-dom setting | `JSDOMOptions` | Default | Effect here |
+| :--- | :--- | :--- | :--- |
+| `settings.enableCSSFileLoading` | `enableCSSFileLoading` | `true` | Linked CSS is fetched only with `resources: "usable"`; `false` skips those requests even then. `<style>` and `style` attributes cascade either way. |
+| `settings.enableJavaScriptEvaluation` | `enableJavaScriptEvaluation` | `true` | `false` vetoes page scripts even with `runScripts: "dangerously"` (inline and external). `window.eval` with `"outside-only"` is host-driven and stays available. |
+| `settings.enableImageFileLoading` | `enableImageFileLoading` | `true` | Accepted for compatibility; the DOM never fetches image bytes (the renderer publishes them with `setImageResource()`), so it changes nothing yet. |
+| `settings.enableIframePageLoading` | `enableIframePageLoading` | `true` | Accepted for compatibility; nested browsing contexts are not loaded, so it changes nothing yet. |
+
+| Concern | jsdom | happy-dom | `wasm-quickjs-dom/jsdom` |
+| :--- | :--- | :--- | :--- |
+| Page scripts by default | none (`runScripts` unset) | evaluation on | none unless `runScripts: "dangerously"`; `enableJavaScriptEvaluation: false` vetoes |
+| External `<script src>` | `resources: "usable"` | `enableJavaScriptFileLoading` on | `runScripts: "dangerously"` + `resources: "usable"` + evaluation on |
+| Linked CSS (`<link rel="stylesheet">`) | `resources: "usable"` | `enableCSSFileLoading` on | `resources: "usable"` + `enableCSSFileLoading` |
+| `<style>` and `style=""` | cascaded | cascaded | cascaded always (`stylesheets: false` affects only linked files) |
+| Images | fetched by jsdom | fetched | never fetched by the DOM; the renderer owns the request |
+| Iframes | loaded with resources | `enableIframePageLoading` | contents not loaded (`srcdoc` seeds a blank document only) |
+| Timers | host timers | own clock | real timers run through the host; fake timers are **not** ported into the page clock (see [`docs/known-gaps.md`](./docs/known-gaps.md) §1) |
+| Viewport width | 1024 | configurable | `engine.width` (default 800), also `window.innerWidth` |
+| Viewport height | 768 | configurable | no option: `innerHeight` is `round(width * 0.75)` |
+
+`register()` / `unregister()` stand in for happy-dom's `GlobalRegistrator`:
+
+```ts
+import { register, unregister } from "wasm-quickjs-dom/jsdom";
+
+register({ url: "http://localhost/", runScripts: "dangerously" });
+// document / window / HTMLElement ... now point at the page
+unregister(); // globals restored, page closed
+```
+
+`dom.goto(url)` is a thin `JSDOM.fromURL` (a `file:` URL goes through `JSDOM.fromFile`) followed by `await dom.ready`; it returns the new page and does **not** navigate the current page in place or close it. `dom.waitUntilComplete()` is `await dom.ready`. They are also reachable as `dom.happyDOM.goto()` / `dom.happyDOM.waitUntilComplete()` for code written against happy-dom. A full happy-dom `Browser` (history, in-place navigation, frame navigation) is not reproduced.
 
 ---
 
@@ -304,6 +342,8 @@ module.exports = {
 
 > [!TIP]
 > **Performance in Tests:** Every DOM call from the host crosses the WebAssembly bridge (~3 µs). Typical component tests run as fast as `jsdom` or faster, while tests that traverse thousands of nodes repeatedly from the host (such as broad `getByRole` queries on huge trees) may take slightly longer.
+>
+> **Building a subtree from the host:** `bridge.batch([["tree", parent, tree]])` builds the whole tree in one call (`tree` is `{ tag, attrs?, text?, children? }`). If the markup is already a string, assigning it to `innerHTML` once is still the shortest path: the C parser builds it in the page without a host round trip. Use `batch` for the virtual tree a host renderer already has, and `innerHTML` for markup it already has.
 
 ---
 

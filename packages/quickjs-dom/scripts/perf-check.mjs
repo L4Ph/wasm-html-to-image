@@ -25,7 +25,19 @@ const per = (ms, n) => (ms * 1000 / n).toFixed(2) + " µs/op";
   ours.close();
 }
 
-// 2. host-driven DOM work: build a 3000-node tree, read it back, tear it down
+// 2. host-driven DOM work: build a 3000-node tree, read it back, tear it down.
+// Ours builds the render's own tree descriptor and sends it in one batch: the number of bridge calls
+// does not grow with the node count. jsdom builds node by node, as its API requires.
+const buildBatched = (document, bridge) => {
+  const children = [];
+  for (let i = 0; i < 100; i++) {
+    const items = [];
+    for (let j = 0; j < 29; j++) items.push({ tag: "p", text: `item ${i}-${j}` });
+    children.push({ tag: "section", attrs: { "data-i": String(i) }, children: items });
+  }
+  const [root] = bridge.batch([["tree", document.body, { tag: "div", children }]]);
+  return root;
+};
 const build = (document) => {
   const root = document.createElement("div");
   for (let i = 0; i < 100; i++) {
@@ -49,13 +61,16 @@ const build = (document) => {
     // the phases separately: a framework's render is the first two (it holds its own
     // references); sweeping a fresh query result back out is host bookkeeping of another kind
     let t = now();
-    const root = build(dom.window.document);
+    const root = name === "ours" ? buildBatched(dom.window.document, dom.page.dom.bridge()) : build(dom.window.document);
     const built = now() - t;
     t = now();
     const html = root.innerHTML.length;
     const read = now() - t;
     t = now();
-    root.querySelectorAll("p").forEach((p) => p.remove());
+    // indexed rather than forEach: the collection is NodeList's live-forEach path, which re-enters the
+    // page once per remove and is quadratic in a sweep that is not what this guard measures
+    const sweepList = root.querySelectorAll("p");
+    for (let i = 0; i < sweepList.length; i++) sweepList[i].remove();
     const sweep = now() - t;
     root.remove();
     times[name] = built + read;

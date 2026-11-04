@@ -16,7 +16,9 @@ import { openPage, type CreateDOMOptions, type OpenedPage, type PageLogEntry } f
 import { decodeHtml } from "./decode.js";
 import { createGuard } from "./limits.js";
 import { CookieJar, type CookieJarLike } from "./cookies.js";
+import { registerGlobals } from "./globals.js";
 import type { DOMWindow } from "./bridge.js";
+import type { HappyDOMSettings } from "./types.js";
 
 export type { DOMWindow };
 export { CookieJar, type Cookie, type CookieJarLike } from "./cookies.js";
@@ -39,9 +41,14 @@ export interface ResourcesOptions {
   [option: string]: unknown;
 }
 
-export interface JSDOMOptions {
+export interface JSDOMOptions extends HappyDOMSettings {
   /** The page's URL (what `location` and relative addresses use). Default `about:blank`. */
   url?: string;
+  /**
+   * happy-dom's `settings` object, accepted as a nested form of {@link HappyDOMSettings}. A top-level field wins
+   * over the same field here, and every field defaults to `true` (the quickjs behaviour).
+   */
+  settings?: HappyDOMSettings;
   /**
    * What `document.referrer` reports. `JSDOM.fromURL` also sends it as the request's `Referer` header.
    */
@@ -115,6 +122,11 @@ export class JSDOM {
   readonly ready: Promise<void>;
 
   constructor(html?: string | Uint8Array, options: JSDOMOptions = {}) {
+    const settings = options.settings ?? {};
+    // happy-dom's toggles are vetoes over the jsdom switches (which stay in charge of asking for a subresource):
+    // a top-level field wins over the nested `settings` form, and both default to true.
+    const cssFileLoading = options.enableCSSFileLoading ?? settings.enableCSSFileLoading ?? true;
+    const javascriptEvaluation = options.enableJavaScriptEvaluation ?? settings.enableJavaScriptEvaluation ?? true;
     this.virtualConsole = options.virtualConsole === null ? new VirtualConsole() : (options.virtualConsole ?? new VirtualConsole().sendTo(console));
     // jsdom's object form of `resources` (a custom ResourceLoader) cannot be honoured: only the string "usable" is.
     // Say so on the virtual console rather than ignoring the option silently.
@@ -149,7 +161,15 @@ export class JSDOM {
         ? engine.beforeScripts
         : [`Object.defineProperty(document, "referrer", { value: ${JSON.stringify(referrer)}, configurable: true });`, ...[engine.beforeScripts ?? []].flat()];
     this.cookieJar = options.cookieJar ?? engine.cookieJar ?? new CookieJar();
-    this.page = openPage(decodeHtml(html, options.contentType), url, engine.quickjsWasm ?? defaultWasm(), { ...engine, beforeScripts, cookieJar: this.cookieJar, onLog: report, stylesheets: options.resources === "usable", visual: options.pretendToBeVisual ?? false });
+    this.page = openPage(decodeHtml(html, options.contentType), url, engine.quickjsWasm ?? defaultWasm(), {
+      ...engine,
+      beforeScripts,
+      cookieJar: this.cookieJar,
+      onLog: report,
+      // CSS files follow jsdom's subresource switch, and enableCSSFileLoading can veto them within it
+      stylesheets: options.resources === "usable" && cssFileLoading,
+      visual: options.pretendToBeVisual ?? false,
+    });
     const bridge = this.page.dom.bridge({ timeout: engine.timeout });
     this.bridgeWindow = bridge.window;
     // the page's `window.close()` ends the page
@@ -169,7 +189,7 @@ export class JSDOM {
     options.beforeParse?.(this.bridgeWindow);
     // the inline scripts run before start() returns its promise; the rest (fetched scripts, load events, timers)
     // goes on behind the caller
-    const scripts = options.runScripts === "dangerously";
+    const scripts = options.runScripts === "dangerously" && javascriptEvaluation;
     this.ready = this.page
       .start({ scripts, external: scripts && options.resources === "usable", settle: false })
       .catch((error) => {
@@ -213,6 +233,29 @@ export class JSDOM {
     if (options.windowTop) {
       this.bridgeWindow.top = options.windowTop;
     }
+  }
+
+  /**
+   * happy-dom's `goto()`, reduced to a new page: `JSDOM.fromURL` (`file:` URLs go through `JSDOM.fromFile`) and
+   * then `await ready`. One JSDOM is one QuickJS realm, so the current page is not navigated in place and is left
+   * open for the caller (`dom.close()`); the returned page is the one that loaded.
+   */
+  async goto(url: string, options: JSDOMOptions = {}): Promise<JSDOM> {
+    const next = /^file:/i.test(url)
+      ? await JSDOM.fromFile((await import("node:url")).fileURLToPath(url), options)
+      : await JSDOM.fromURL(url, options);
+    await next.ready;
+    return next;
+  }
+
+  /** happy-dom's `waitUntilComplete()`, reduced to waiting for `dom.ready` (external scripts and the `load` event). */
+  waitUntilComplete(): Promise<void> {
+    return this.ready;
+  }
+
+  /** happy-dom's `window.happyDOM` calls, reduced to the two this facade offers. */
+  get happyDOM(): { goto: (url: string, options?: JSDOMOptions) => Promise<JSDOM>; waitUntilComplete: () => Promise<void> } {
+    return { goto: (url, options) => this.goto(url, options), waitUntilComplete: () => this.waitUntilComplete() };
   }
 
   /** Parse HTML into a DocumentFragment using a shared synchronous JSDOM context. */
@@ -264,3 +307,49 @@ export class JSDOM {
     return new JSDOM(readFileSync(file), { ...options, url: options.url ?? pathToFileURL(file).href });
   }
 }
+
+/** Options of {@link register}: {@link JSDOMOptions} plus the markup of the registered page. */
+export interface RegisterOptions extends JSDOMOptions {
+  /** The markup of the page (default `<!DOCTYPE html>`). */
+  html?: string;
+}
+
+let registered: { dom: JSDOM; uninstall: () => void } | undefined;
+
+/**
+ * happy-dom's `GlobalRegistrator.register()`: make a page the process globals (`document`, `window`, `HTMLElement`,
+ * ...). The page is a fresh {@link JSDOM}; registering again replaces (and closes) the previous one.
+ * `unregister()` takes the globals off again and closes the page.
+ *
+ * ```ts
+ * import { register, unregister } from "wasm-quickjs-dom/jsdom";
+ * register({ url: "http://localhost/", runScripts: "dangerously" });
+ * // ... tests use document / window ...
+ * unregister();
+ * ```
+ */
+export function register(options: RegisterOptions = {}): JSDOM {
+  const { html = "<!DOCTYPE html>", ...rest } = options;
+  unregister();
+  const dom = new JSDOM(html, rest);
+  const uninstall = registerGlobals(globalThis as unknown as Record<string, any>, dom.window as unknown as Record<string, any>);
+  registered = { dom, uninstall };
+  return dom;
+}
+
+/** Take the globals registered by {@link register} off `globalThis` and close the page (no-op when none is). */
+export function unregister(): void {
+  const current = registered;
+  if (!current) return;
+  registered = undefined;
+  current.uninstall();
+  current.dom.close();
+}
+
+/** Whether {@link register} currently owns the process globals. */
+export function isRegistered(): boolean {
+  return registered !== undefined;
+}
+
+/** happy-dom's `GlobalRegistrator` object: the same three functions, for a config written against it. */
+export const GlobalRegistrator = { register, unregister, isRegistered } as const;

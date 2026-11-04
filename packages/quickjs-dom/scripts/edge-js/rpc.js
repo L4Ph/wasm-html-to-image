@@ -6,7 +6,7 @@
   // handle table: arrays by id (a Map keyed by small integers is slow in QuickJS), ids of let-go objects are reused
   var byId = [undefined], sent = [0], free = [], live = 0, byObj = new Map();
   var callbacks = new Map(); // id of a function of the host's -> the function that calls it from here
-  var protoNames = null, ctorNames = null, interfaces = null;
+  var protoNames = null, ctorNames = null, ctorByName = null, interfaces = null;
 
   // The language's and the runtime's own globals. They are non-enumerable like the page's defineProperty-installed
   // ones, so the scan of g below must know them by name: they are values of the language, not interfaces of the page.
@@ -32,11 +32,11 @@
     "SVGPreserveAspectRatio", "SVGAnimatedPreserveAspectRatio"].forEach(function (k) { UNBRIDGED[k] = 1; });
 
   var collect = function () {
-    protoNames = new Map(); ctorNames = new Map(); interfaces = [];
+    protoNames = new Map(); ctorNames = new Map(); ctorByName = new Map(); interfaces = [];
     var add = function (name, C) {
       if (typeof C !== "function" || !C.prototype || typeof C.prototype !== "object" || !/^[A-Z]/.test(name)) return; // window.getSelection is a function, not an interface
       if (protoNames.has(C.prototype)) { ctorNames.set(C, protoNames.get(C.prototype)); return; } // a shim of an interface is that interface
-      protoNames.set(C.prototype, name); ctorNames.set(C, name); interfaces.push([name, C]);
+      protoNames.set(C.prototype, name); ctorNames.set(C, name); ctorByName.set(name, C); interfaces.push([name, C]);
     };
     Object.keys(D.ctors).forEach(function (k) { add(k, D.ctors[k]); });
     Object.keys(D.window).forEach(function (k) { add(k, D.window[k]); });
@@ -100,9 +100,8 @@
   };
   var infos = []; // id -> the handle in the string form of an answer (see reply)
   var SEP = "\u0001";
-  var infoOf = function (v, id) {
-    var cls = classOf(v);
-    if (!cls) return null;
+  var infoOf = function (v, id, cls) {
+    if (cls === undefined && (cls = classOf(v)) === null) return null;
     var nt = v.nodeType;
     if (typeof nt === "number") {
       if (nt === 1) {
@@ -121,8 +120,10 @@
       return "h" + id;
     }
     if (v === g || typeof v === "function") return null;
+    var cls = classOf(v);
+    if (cls === null) return null;
     id = idFor(v);
-    var s = infoOf(v, id);
+    var s = infoOf(v, id, cls);
     if (s === null) {
       sent[id]--;
       if (sent[id] === 0) { byObj.delete(v); byId[id] = undefined; free.push(id); live--; }
@@ -183,11 +184,47 @@
   };
 
   var callHost = function (id, self, args) {
-    var reply = g.__host.callback(String(id), JSON.stringify([enc(self), Array.prototype.map.call(args, enc)]));
+    var selfEnc = enc(self), list = Array.prototype.map.call(args, enc);
+    // A callback whose values are all handles, strings, numbers, booleans or null/undefined (an event listener)
+    // goes as compact tokens; anything else falls back to the JSON form both sides already understand.
+    var toks = tokenOf(selfEnc);
+    if (toks !== null) {
+      toks = [toks];
+      for (var i = 0; i < list.length; i++) {
+        var t = tokenOf(list[i]);
+        if (t === null) { toks = null; break; }
+        toks.push(t);
+      }
+    }
+    var reply = g.__host.callback(String(id), toks ? "\u0005" + toks.join("\u0002") : JSON.stringify([selfEnc, list]));
     if (reply === undefined) throw new Error("the host has no function " + id);
+    if (reply.charCodeAt(0) === 6) return tokenValue(reply.slice(1));
     var r = JSON.parse(reply);
     if (r.x) throw rebuild(r.x);
     return dec(r.v);
+  };
+  var tokenOf = function (e) {
+    switch (typeof e) {
+      case "undefined": return "U";
+      case "boolean": return e ? "T" : "F";
+      case "number": return e === e && e !== Infinity && e !== -Infinity && !(e === 0 && 1 / e < 0) ? "n" + e : null;
+      case "string": return e.indexOf(SEP) < 0 && e.indexOf("\u0002") < 0 ? "s" + e : null;
+      default:
+        if (e === null) return "N";
+        return e.$ === "h" ? "h" + e.i : null;
+    }
+  };
+  var tokenValue = function (t) {
+    switch (t.charCodeAt(0)) {
+      case 85: return undefined; // U
+      case 78: return null; // N
+      case 84: return true; // T
+      case 70: return false; // F
+      case 110: return +t.slice(1); // n
+      case 115: return t.slice(1); // s
+      case 104: return target(+t.slice(1)); // h
+      default: return undefined;
+    }
   };
   var hostFunction = function (id) {
     var ref = callbacks.get(id), f = ref && ref.deref();
@@ -222,8 +259,11 @@
     return o;
   };
   var ctorOf = function (name) {
-    if (!protoNames) collect();
-    for (var i = 0; i < interfaces.length; i++) if (interfaces[i][0] === name) return interfaces[i][1];
+    if (!ctorByName) collect();
+    var C = ctorByName.get(name);
+    if (C) return C;
+    // a name the schema does not know (a late global): search the interfaces once, then remember it
+    for (var i = 0; i < interfaces.length; i++) if (interfaces[i][0] === name) { C = interfaces[i][1]; ctorByName.set(name, C); return C; }
     throw new Error("no interface " + name);
   };
   var decAll = function (list) { return list.map(dec); };
@@ -283,6 +323,59 @@
     kids: function (r) {
       var out = [], n = target(r[1]);
       for (var c = n.firstChild; c; c = c.nextSibling) if (!r[2] || c.nodeType === 1) out.push(c);
+      return out;
+    },
+    // Several operations in one call, in order: ["call", target, method, args], ["set", target, key, value],
+    // ["new", interface, args], ["tree", parent, descriptor]. A target or argument that is {$:"r", i} is the
+    // answer of operation i (a node a previous operation made), so a host can build a subtree without a bridge
+    // call per node. The tree descriptor is the shape a host-side render has anyway: {tag, attrs, text, children}.
+    batch: function (r) {
+      var list = r[1], out = [];
+      var value = function (x) {
+        if (x !== null && typeof x === "object") {
+          if (x.$ === "r") return out[x.i];
+          if (Array.isArray(x)) return x.map(value);
+        }
+        return dec(x);
+      };
+      var build = function (doc, d) {
+        if (typeof d === "string") return doc.createTextNode(d);
+        var el = doc.createElement(d.tag), k;
+        if (d.attrs) for (k in d.attrs) el.setAttribute(k, d.attrs[k]);
+        if (d.text !== undefined) el.textContent = d.text;
+        if (d.children) for (var i = 0; i < d.children.length; i++) el.appendChild(build(doc, d.children[i]));
+        return el;
+      };
+      for (var i = 0; i < list.length; i++) {
+        var o = list[i], kind = o[0], t, res;
+        if (kind === "call") {
+          t = value(o[1]);
+          res = t[o[2]].apply(t, value(o[3] || []));
+        } else if (kind === "set") {
+          t = value(o[1]);
+          res = t[o[2]] = value(o[3]);
+        } else if (kind === "new") {
+          res = Reflect.construct(ctorOf(o[1]), value(o[2] || []));
+        } else if (kind === "tree") {
+          t = value(o[1]);
+          res = build(t.ownerDocument || t, o[2]);
+          if (t && t.nodeType !== 9) t.appendChild(res);
+        } else {
+          throw new Error("batch: unknown operation " + kind);
+        }
+        out.push(res);
+      }
+      return out;
+    },
+    // A sequence of events at one target in one call: the guest makes each one and runs the ordinary dispatch,
+    // so bubbling, cancelation, activation and listeners (the host's included) behave exactly as when the host
+    // dispatches them itself.
+    fire: function (r) {
+      var t = target(r[1]), evs = r[2], out = [];
+      for (var i = 0; i < evs.length; i++) {
+        var e = evs[i], C = e.ctor ? g[e.ctor] : g.Event;
+        out.push(t.dispatchEvent(new (typeof C === "function" ? C : g.Event)(e.type, dec(e.init || {}))));
+      }
       return out;
     },
     release: function (r) {

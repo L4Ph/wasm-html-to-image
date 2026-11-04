@@ -13,6 +13,37 @@ export type PageLogEntry =
   /** A request the page made (`fetch`, `XMLHttpRequest`, scripts, modules, the page itself), with its outcome. */
   | { type: "request"; method: string; url: string; status?: number; error?: string };
 
+/**
+ * happy-dom's resource / evaluation toggles, accepted so a happy-dom `settings` object can be reused.
+ *
+ * All of them default to `true`: the quickjs behaviour stays on unless a caller turns one off. They are vetoes,
+ * not switches that enable work on their own — a resource still needs the jsdom option that requests it (such as
+ * `resources: "usable"`), and page scripts still need `runScripts: "dangerously"`.
+ */
+export interface HappyDOMSettings {
+  /**
+   * Fetch `<link rel="stylesheet">` sheets (default true). It only applies with `resources: "usable"`, which is the
+   * jsdom switch that loads subresources; `false` skips those requests even then. `<style>` elements and `style`
+   * attributes are cascaded either way.
+   */
+  enableCSSFileLoading?: boolean;
+  /**
+   * Accepted for happy-dom compatibility (default true). Nested browsing contexts are not implemented, so iframe
+   * contents (scripts, styles, images) are never loaded and this value currently changes nothing.
+   */
+  enableIframePageLoading?: boolean;
+  /**
+   * Accepted for happy-dom compatibility (default true). The DOM never fetches image bytes: the renderer owns that
+   * fetch and publishes the state through `setImageResource()`, so this value currently changes nothing.
+   */
+  enableImageFileLoading?: boolean;
+  /**
+   * Run the page's own scripts (default true). `false` vetoes them even with `runScripts: "dangerously"`; inline and
+   * external scripts are both skipped. Host-driven `window.eval` with `runScripts: "outside-only"` still works.
+   */
+  enableJavaScriptEvaluation?: boolean;
+}
+
 /** Options of the script phase. */
 export interface JavaScriptOptions {
   /** Upper bound for the script phase in ms (default 10000). */

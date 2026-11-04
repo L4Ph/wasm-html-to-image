@@ -20,8 +20,6 @@
     this.target = this.currentTarget = this.srcElement = null;
     this.isTrusted = false;
     this.timeStamp = typeof performance !== "undefined" ? performance.now() : Date.now();
-    Object.defineProperty(this, "_stopImmediatePropagationFlag", { value: false, writable: true });
-    Object.defineProperty(this, "_path", { value: [], writable: true });
   };
   [["NONE", 0], ["CAPTURING_PHASE", 1], ["AT_TARGET", 2], ["BUBBLING_PHASE", 3]].forEach(function (c) {
     Object.defineProperty(Event, c[0], { value: c[1] });
@@ -29,8 +27,11 @@
   });
   def(Event.prototype, "preventDefault", function () { if (this.cancelable) this.defaultPrevented = true; });
   def(Event.prototype, "stopPropagation", function () { this.cancelBubble = true; });
-  def(Event.prototype, "stopImmediatePropagation", function () { this.cancelBubble = true; this._stopImmediatePropagationFlag = true; });
-  def(Event.prototype, "composedPath", function () { return this._path.map(function (p) { return p.currentTarget; }); });
+  // stopImmediatePropagation is rare: the flag is made (non-enumerable) when it is used, so no event pays for it
+  def(Event.prototype, "stopImmediatePropagation", function () { this.cancelBubble = true; Object.defineProperty(this, "_stopImmediatePropagationFlag", { value: true, configurable: true }); });
+  // the propagation path of the running dispatch, kept out of the event's own properties (see dispatch)
+  var eventPaths = new WeakMap();
+  def(Event.prototype, "composedPath", function () { var p = eventPaths.get(this); return p ? p.slice() : []; });
   def(Event.prototype, "initEvent", function (type, bubbles, cancelable) { this.type = String(type); this.bubbles = !!bubbles; this.cancelable = !!cancelable; });
   getter(Event.prototype, "returnValue", function () { return !this.defaultPrevented; }, function (v) { if (!v) this.preventDefault(); });
   W.Event = Event;
@@ -147,6 +148,14 @@
   })();
 
   // more element interfaces (the plain ones that have no members of their own here)
+  // the tags each of the plain interfaces owns (a slot must be an HTMLSlotElement, not a generic one)
+  var PLAIN_TAGS = {
+    HTMLOptGroupElement: ["optgroup"], HTMLSlotElement: ["slot"], HTMLBaseElement: ["base"], HTMLDListElement: ["dl"],
+    HTMLEmbedElement: ["embed"], HTMLMapElement: ["map"], HTMLParamElement: ["param"], HTMLPictureElement: ["picture"],
+    HTMLProgressElement: ["progress"], HTMLQuoteElement: ["blockquote", "q"], HTMLTimeElement: ["time"], HTMLTrackElement: ["track"],
+    HTMLMeterElement: ["meter"], HTMLLegendElement: ["legend"], HTMLDataElement: ["data"], HTMLModElement: ["ins", "del"],
+    HTMLAreaElement: ["area"], HTMLFontElement: ["font"], HTMLMenuElement: ["menu"],
+  };
   ["HTMLUnknownElement", "HTMLMediaElement", "HTMLOptGroupElement", "HTMLSlotElement", "HTMLBaseElement", "HTMLDListElement",
    "HTMLEmbedElement", "HTMLMapElement", "HTMLObjectElement", "HTMLOutputElement", "HTMLParamElement", "HTMLPictureElement",
    "HTMLProgressElement", "HTMLQuoteElement", "HTMLTimeElement", "HTMLTrackElement", "HTMLMeterElement", "HTMLLegendElement",
@@ -156,6 +165,164 @@
     C.prototype = Object.create(P.HTMLElement, { constructor: { value: C, writable: true, configurable: true } });
     Object.setPrototypeOf(C, D.ctors.HTMLElement);
     W[name] = C;
+    // these interfaces are also constructors of the native layer's schema: register the proto and
+    // class so instanceof and the bridge see the same objects the window exposes
+    D.ctors[name] = C;
+    P[name] = C.prototype;
+    (PLAIN_TAGS[name] || []).forEach(function (tag) { D.setTagProto(tag, C.prototype); });
+  });
+
+  // ---- unknown elements, dialog, slot distribution -------------------------------------------
+  // The C layer gives every tag without an interface the plain HTMLElement prototype. The
+  // HTMLUnknownElement distinction is therefore made after creation (the parser, createElement,
+  // cloneNode and importNode all pass through the two helpers below): a tag the HTML spec does not
+  // define, and that is not a valid custom-element name, answers HTMLUnknownElement as in browsers.
+  // Declarative shadow DOM stays out of scope (a <template shadowrootmode> is a plain template).
+  var XHTML_NS = "http://www.w3.org/1999/xhtml";
+  var KNOWN_HTML_TAGS = Object.create(null);
+  ("a abbr acronym address applet area article aside audio b base basefont bdi bdo big blockquote body br button canvas caption " +
+   "center cite code col colgroup data datalist dd del details dfn dialog dir div dl dt em embed fieldset figcaption figure font " +
+   "footer form frame frameset h1 h2 h3 h4 h5 h6 head header hgroup hr html i iframe image img input ins isindex kbd keygen label " +
+   "legend li link listing main map mark marquee menu menuitem meta meter nav nobr noembed noframes noscript object ol optgroup " +
+   "option output p param picture plaintext pre progress q rb rp rt rtc ruby s samp script search section select slot small source " +
+   "spacer span strike strong style sub summary sup table tbody td template textarea tfoot th thead time title tr track tt u ul " +
+   "var video wbr xmp").split(" ").forEach(function (n) { KNOWN_HTML_TAGS[n] = true; });
+  var isUnknownElement = function (el) {
+    return el && el.nodeType === 1 && el.namespaceURI === XHTML_NS &&
+      !KNOWN_HTML_TAGS[el.localName] && el.localName.indexOf("-") < 0 &&
+      Object.getPrototypeOf(el) === P.HTMLElement;
+  };
+  var fixUnknown = function (root) {
+    if (!root) return;
+    if (root.nodeType === 1 && isUnknownElement(root)) Object.setPrototypeOf(root, P.HTMLUnknownElement);
+    // createElement makes a childless element: there is nothing below it to classify, and asking for
+    // its descendants would be a scan per created node (the host-driven build's shape)
+    if (!root.firstChild || !root.getElementsByTagName) return;
+    var all = root.getElementsByTagName("*");
+    for (var i = 0; i < all.length; i++) {
+      var el = all[i], name = el.localName;
+      if (KNOWN_HTML_TAGS[name] || name.indexOf("-") >= 0) continue;
+      if (isUnknownElement(el)) Object.setPrototypeOf(el, P.HTMLUnknownElement);
+    }
+  };
+  var rawCreateElement = P.Document.createElement;
+  def(P.Document, "createElement", function () {
+    var el = rawCreateElement.apply(this, arguments);
+    fixUnknown(el);
+    return el;
+  });
+  var rawCreateElementNS = P.Document.createElementNS;
+  def(P.Document, "createElementNS", function (ns, name) {
+    var el = rawCreateElementNS.apply(this, arguments);
+    if (!ns || ns === XHTML_NS) fixUnknown(el);
+    // createElementNS runs the plain factory first, so a foreign unknown tag would have been
+    // classified as HTML: it is a generic Element in SVG/MathML.
+    else if (Object.getPrototypeOf(el) === P.HTMLUnknownElement) Object.setPrototypeOf(el, P.Element);
+    return el;
+  });
+  var rawCloneNode = P.Node.cloneNode;
+  def(P.Node, "cloneNode", function () {
+    var node = rawCloneNode.apply(this, arguments);
+    fixUnknown(node);
+    return node;
+  });
+  var rawImportNode = P.Document.importNode;
+  def(P.Document, "importNode", function () {
+    var node = rawImportNode.apply(this, arguments);
+    fixUnknown(node);
+    return node;
+  });
+  // the element innerHTML setter is native (01-core.js only wraps its raw-text branch), so its
+  // parsed children need the same pass
+  var rawInnerHTML = Object.getOwnPropertyDescriptor(P.Element, "innerHTML");
+  if (rawInnerHTML && rawInnerHTML.set) {
+    getter(P.Element, "innerHTML", rawInnerHTML.get, function (v) {
+      rawInnerHTML.set.call(this, v);
+      fixUnknown(this);
+    });
+  }
+
+  // Slot distribution: the assignment is computed from the flat tree as it is now (it is not
+  // cached), so appending a child, changing its slot attribute or adding a slot is visible at once.
+  var MANUAL_SLOT = new WeakMap();
+  var isSlottable = function (n) { return !!n && (n.nodeType === 1 || n.nodeType === 3); };
+  var slotNameOf = function (slot) { return slot.getAttribute ? (slot.getAttribute("name") || "") : ""; };
+  var slotsIn = function (root) { return root && root.querySelectorAll ? root.querySelectorAll("slot") : []; };
+  var assignedSlotOf = function (node) {
+    if (!isSlottable(node)) return null;
+    var host = node.parentNode;
+    if (!host || host.nodeType !== 1) return null;
+    var root = host[SHADOW];
+    if (!root || root.mode !== "open") return null;
+    var slots = slotsIn(root), i, list;
+    // an explicit HTMLSlotElement.assign() wins over the slot name
+    for (i = 0; i < slots.length; i++) {
+      list = MANUAL_SLOT.get(slots[i]);
+      if (list && list.indexOf(node) >= 0) return slots[i];
+    }
+    var wanted = node.nodeType === 1 ? (node.getAttribute("slot") || "") : "";
+    for (i = 0; i < slots.length; i++) if (slotNameOf(slots[i]) === wanted) return slots[i];
+    return null;
+  };
+  var assignedNodesOf = function (slot, flatten) {
+    var out = [], manual = MANUAL_SLOT.get(slot), n;
+    if (manual) out = manual.slice();
+    else {
+      var root = slot.getRootNode ? slot.getRootNode() : null;
+      var host = root && root.host;
+      if (host) for (n = host.firstChild; n; n = n.nextSibling) if (isSlottable(n) && assignedSlotOf(n) === slot) out.push(n);
+    }
+    if (flatten && out.length === 0) {
+      for (n = slot.firstChild; n; n = n.nextSibling) {
+        if (n.nodeType === 1 && n.localName === "slot") out = out.concat(assignedNodesOf(n, true));
+        else out.push(n);
+      }
+    }
+    return out;
+  };
+  reflectString(P.HTMLSlotElement, "name", "name");
+  def(P.HTMLSlotElement, "assignedNodes", function (options) { return assignedNodesOf(this, !!(options && options.flatten)); });
+  def(P.HTMLSlotElement, "assignedElements", function (options) {
+    return assignedNodesOf(this, !!(options && options.flatten)).filter(function (n) { return n.nodeType === 1; });
+  });
+  def(P.HTMLSlotElement, "assign", function () {
+    var nodes = Array.prototype.slice.call(arguments);
+    for (var i = 0; i < nodes.length; i++) {
+      if (!isSlottable(nodes[i])) throw domError("HierarchyRequestError", "The node provided is not a slottable node.");
+    }
+    MANUAL_SLOT.set(this, nodes);
+    try { this.dispatchEvent(new Event("slotchange")); } catch (e) {}
+  });
+
+  // HTMLDialogElement: the open/returnValue state and the show/showModal/close family. The close
+  // event is dispatched synchronously, as the spec's close() does.
+  var DIALOG_RETURN = new WeakMap();
+  var dialogReturn = function (el) { return DIALOG_RETURN.get(el) || ""; };
+  reflectBool(P.HTMLDialogElement, "open", "open");
+  getter(P.HTMLDialogElement, "returnValue", function () { return dialogReturn(this); }, function (v) { DIALOG_RETURN.set(this, String(v)); });
+  getter(P.HTMLDialogElement, "closedBy", function () {
+    var v = (this.getAttribute("closedby") || "").toLowerCase();
+    return v === "closerequest" || v === "any" || v === "none" ? v : "none";
+  }, function (v) { this.setAttribute("closedby", String(v)); });
+  def(P.HTMLDialogElement, "show", function () { if (!this.hasAttribute("open")) this.setAttribute("open", ""); });
+  def(P.HTMLDialogElement, "showModal", function () {
+    if (this.hasAttribute("open")) throw domError("InvalidStateError", "Failed to execute 'showModal' on 'HTMLDialogElement': The dialog is already open.");
+    this.setAttribute("open", "");
+    this.__modal = true;
+  });
+  def(P.HTMLDialogElement, "close", function (value) {
+    if (!this.hasAttribute("open")) return;
+    if (value !== undefined) DIALOG_RETURN.set(this, String(value));
+    this.removeAttribute("open");
+    this.__modal = false;
+    this.dispatchEvent(new Event("close"));
+  });
+  def(P.HTMLDialogElement, "requestClose", function (value) {
+    if (!this.hasAttribute("open")) return;
+    if (value !== undefined) DIALOG_RETURN.set(this, String(value));
+    this.removeAttribute("open");
+    this.__modal = false;
+    this.dispatchEvent(new Event("close"));
   });
 
   // NodeIterator and TreeWalker (document order, live: they read the tree as it is when asked)
@@ -328,7 +495,15 @@
   D.parse = function (markup) {
     var doc = rawParse(markup);
     fixStructure(doc);
+    fixUnknown(doc);
     return doc;
+  };
+  // innerHTML, insertAdjacentHTML and the other fragment parses use this path too
+  var rawParseFragment = D.parseFragment;
+  D.parseFragment = function (markup, doc) {
+    var frag = rawParseFragment(markup, doc);
+    fixUnknown(frag);
+    return frag;
   };
   var DOMParser = function DOMParser() {};
   // A small strict XML parser for DOMParser's XML types. The HTML parser cannot serve them (it
@@ -702,15 +877,38 @@
   // doc.open()/write()/close(). This is what renderers such as modern-screenshot expect from
   // iframe.contentDocument; the page's own document is never touched. contentWindow is the small
   // window-like object carrying that document (document.defaultView points back at it).
-  var FRAME_DOC = Symbol("frameDocument"), FRAME_SRC = Symbol("frameSrcdoc"), FRAME_WIN = Symbol("frameWindow");
+  // opt-in: iframe "navigation" is off by default, so the blank-document behaviour above stays
+  // exactly as it was. With the flag on, an iframe with a src but no srcdoc gives its frame window
+  // the resolved URL (still no fetch and no scripts: the document remains the blank one).
+  D.iframeEnabled = false;
+  D.setIframeEnabled = function (on) { D.iframeEnabled = !!on; };
+  var FRAME_DOC = Symbol("frameDocument"), FRAME_SRC = Symbol("frameSrcdoc"), FRAME_URL = Symbol("frameUrl"), FRAME_WIN = Symbol("frameWindow");
+  var frameURL = function (el) {
+    if (!D.iframeEnabled || el.localName !== "iframe" || el.getAttribute("srcdoc") !== null) return null;
+    var src = el.getAttribute("src");
+    if (!src) return null;
+    try { return new URL(src, (el.ownerDocument && el.ownerDocument.baseURI) || (globalThis.location && globalThis.location.href) || "about:blank").href; }
+    catch (e) { return src; }
+  };
+  var frameLocation = function (el) {
+    var href = el[FRAME_URL] || frameURL(el) || "about:blank";
+    try {
+      var u = new URL(href);
+      return { href: u.href, origin: u.origin, protocol: u.protocol, host: u.host, hostname: u.hostname, pathname: u.pathname, search: u.search, hash: u.hash };
+    } catch (e) {
+      return { href: "about:blank", origin: "null", protocol: "about:", host: "", hostname: "", pathname: "blank", search: "", hash: "" };
+    }
+  };
   var frameDocumentOf = function (el) {
     var src = el.localName === "iframe" ? el.getAttribute("srcdoc") : null;
+    var url = frameURL(el);
     var cached = el[FRAME_DOC];
-    if (!cached || el[FRAME_SRC] !== src) {
+    if (!cached || el[FRAME_SRC] !== src || el[FRAME_URL] !== url) {
       cached = D.parse(src === null ? "<!doctype html><html><head></head><body></body></html>" : String(src));
       if (W.HTMLDocument) Object.setPrototypeOf(cached, W.HTMLDocument.prototype);
       Object.defineProperty(el, FRAME_DOC, { value: cached, configurable: true });
       Object.defineProperty(el, FRAME_SRC, { value: src, configurable: true, writable: true });
+      Object.defineProperty(el, FRAME_URL, { value: url, configurable: true, writable: true });
       Object.defineProperty(cached, "defaultView", { get: function () { return frameWindowOf(el); }, configurable: true });
     }
     return cached;
@@ -719,6 +917,11 @@
     var win = el[FRAME_WIN];
     if (!win) {
       win = {};
+      var location = {};
+      ["href", "origin", "protocol", "host", "hostname", "pathname", "search", "hash"].forEach(function (k) {
+        Object.defineProperty(location, k, { get: function () { return frameLocation(el)[k]; }, enumerable: true });
+      });
+      Object.defineProperty(location, "toString", { value: function () { return this.href; } });
       Object.defineProperties(win, {
         document: { get: function () { return frameDocumentOf(el); }, enumerable: true },
         window: { value: win, enumerable: true },
@@ -727,7 +930,7 @@
         top: { value: win, enumerable: true },
         parent: { value: win, enumerable: true },
         frameElement: { value: el, enumerable: true },
-        location: { value: { href: "about:blank", origin: "null", protocol: "about:", host: "", hostname: "", pathname: "blank", search: "", hash: "", toString: function () { return this.href; } }, enumerable: true },
+        location: { value: location, enumerable: true },
       });
       Object.defineProperty(el, FRAME_WIN, { value: win, configurable: true });
     }
@@ -772,7 +975,7 @@
     for (n = this.nextSibling; n && n.nodeType === 3; n = n.nextSibling) out += n.data;
     return out;
   });
-  getter(P.Text, "assignedSlot", function () { return null; });
+  getter(P.Text, "assignedSlot", function () { return assignedSlotOf(this); });
   // CharacterData is a child node too: the element siblings skip non-elements
   var elemSibling = function (node, dir) {
     for (var n = node[dir]; n; n = n[dir]) if (n.nodeType === 1) return n;

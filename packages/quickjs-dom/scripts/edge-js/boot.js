@@ -625,6 +625,32 @@
     g.performance.toJSON = function () { return {}; };
   }
 
+  // Canvas injection point (ICanvasAdapter-shaped, default null).
+  // Nothing is drawn here. A host that does have a canvas implementation can install an adapter:
+  //   { getContext(canvas, type, attributes), toDataURL(canvas, type, quality),
+  //     toBlob(canvas, callback, type, quality), convertToBlob(canvas, options) }
+  // Every method is optional; without one the existing stub answer (and its one-time warning) is used.
+  // With no adapter installed the behaviour is exactly the old one.
+  var canvasAdapter = null;
+  var setCanvasAdapter = function (adapter) {
+    canvasAdapter = adapter || null;
+    N.canvasAdapter = canvasAdapter;
+  };
+  N.canvasAdapter = null;
+  N.setCanvasAdapter = setCanvasAdapter;
+  g.__edgeSetCanvasAdapter = setCanvasAdapter;
+  g.__edgeCanvasAdapter = function () { return canvasAdapter; };
+  var canvasCall = function (name, args) {
+    if (!canvasAdapter) return undefined;
+    var fn = canvasAdapter[name];
+    return typeof fn === "function" ? fn.apply(canvasAdapter, args) : undefined;
+  };
+
+  // iframe enablement flag: opt-in, default off. The guest keeps the blank-document behaviour in
+  // either state; with the flag on a src without srcdoc is exposed on the frame window's location.
+  g.__edgeSetIframeEnabled = function (on) { if (N.setIframeEnabled) N.setIframeEnabled(on); };
+  g.__edgeIframeEnabled = function () { return !!(N && N.iframeEnabled); };
+
   // Canvas stubs
   // A canvas here has no backing store: getContext hands back null and toDataURL an empty data: URL.
   // Both are silent data loss in a snapshot, so each canvas says so once, in the page log.
@@ -657,24 +683,38 @@
   if (!g.OffscreenCanvas) {
     g.OffscreenCanvas = class OffscreenCanvas {
       constructor(w, h) { this.width = w; this.height = h; }
-      getContext() {
+      getContext(type, attributes) {
+        var got = canvasCall("getContext", [this, type, attributes]);
+        if (got !== undefined) return got;
         warnCanvasOnce(this, "getContext", "OffscreenCanvas.getContext: 2D canvas is not available in wasm-quickjs-dom; the call returns null");
         return null;
       }
-      convertToBlob() { return Promise.reject(new Error("OffscreenCanvas has no drawing here")); }
+      convertToBlob(options) {
+        var got = canvasCall("convertToBlob", [this, options]);
+        if (got !== undefined) return got;
+        return Promise.reject(new Error("OffscreenCanvas has no drawing here"));
+      }
     };
   }
   var canvasProto = N.protos && N.protos.HTMLCanvasElement;
   if (canvasProto) {
-    Object.defineProperty(canvasProto, "getContext", { configurable: true, writable: true, value: function () {
+    Object.defineProperty(canvasProto, "getContext", { configurable: true, writable: true, value: function (type, attributes) {
+      var got = canvasCall("getContext", [this, type, attributes]);
+      if (got !== undefined) return got;
       warnCanvasOnce(this, "getContext", "HTMLCanvasElement.getContext: 2D canvas is not available in wasm-quickjs-dom; the call returns null");
       return null;
     } });
-    Object.defineProperty(canvasProto, "toDataURL", { configurable: true, writable: true, value: function () {
+    Object.defineProperty(canvasProto, "toDataURL", { configurable: true, writable: true, value: function (type, quality) {
+      var got = canvasCall("toDataURL", [this, type, quality]);
+      if (got !== undefined) return String(got);
       warnCanvasOnce(this, "toDataURL", "HTMLCanvasElement.toDataURL: there is no canvas drawing to encode; the call returns \"data:,\"");
       return "data:,";
     } });
-    Object.defineProperty(canvasProto, "toBlob", { configurable: true, writable: true, value: function (cb) { if (typeof cb === "function") g.setTimeout(function () { cb(null); }, 0); } });
+    Object.defineProperty(canvasProto, "toBlob", { configurable: true, writable: true, value: function (cb, type, quality) {
+      var got = canvasCall("toBlob", [this, cb, type, quality]);
+      if (got !== undefined) return got;
+      if (typeof cb === "function") g.setTimeout(function () { cb(null); }, 0);
+    } });
     ["width", "height"].forEach(function (k, i) {
       Object.defineProperty(canvasProto, k, {
         configurable: true,

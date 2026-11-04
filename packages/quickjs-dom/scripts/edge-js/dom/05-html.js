@@ -544,7 +544,7 @@
       getter(P[n], "relList", function () { return this[RL] || Object.defineProperty(this, RL, { value: new TokenList(relProxy(this)) })[RL]; });
     });
     // members every element has
-    getter(P.Element, "assignedSlot", function () { return null; });
+    getter(P.Element, "assignedSlot", function () { return assignedSlotOf(this); });
     getter(P.HTMLElement, "offsetParent", function () { return null; });
     getter(P.Element, "clientTop", function () { return 0; });
     getter(P.Element, "clientLeft", function () { return 0; });

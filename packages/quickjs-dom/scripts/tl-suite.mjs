@@ -69,7 +69,8 @@ if (problems.length) {
 }
 
 const run = (cmd, args, cwd) => {
-  const r = spawnSync(cmd, args, { cwd, stdio: "inherit" });
+  // npx/npm are .cmd shims on Windows: spawnSync only finds them through the shell
+  const r = spawnSync(cmd, args, { cwd, stdio: "inherit", shell: process.platform === "win32" });
   if (r.status !== 0 && cmd !== "npx") throw new Error(`${cmd} ${args.join(" ")} failed`);
   return r.status;
 };
