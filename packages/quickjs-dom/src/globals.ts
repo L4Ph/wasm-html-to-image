@@ -23,6 +23,8 @@ const LANGUAGE = new Set([
 ]);
 const isDomName = (key: string) => /^[A-Z]/.test(key) && !LANGUAGE.has(key);
 
+import { WIN_KEYS } from "./bridge.js";
+
 /** Define the page's globals on `global`; the result takes them off again. */
 export function installWindow(global: Record<string, any>, win: Record<string, any>): () => void {
   const defined: string[] = [];
@@ -34,7 +36,8 @@ export function installWindow(global: Record<string, any>, win: Record<string, a
     Object.defineProperty(global, key, { configurable: true, enumerable: false, ...descriptor });
     defined.push(key);
   };
-  for (const key of Object.getOwnPropertyNames(win)) {
+  const keys: string[] = typeof (win as any)[WIN_KEYS] === "function" ? (win as any)[WIN_KEYS]() : Object.getOwnPropertyNames(win);
+  for (const key of keys) {
     if (key.startsWith("__") || KEEP.has(key) || key === "close") continue;
     // what Node has under the same name (the language's own: Object, Array, Promise, ...) stays
     if (key in global && !/^[A-Z]/.test(key)) continue;

@@ -9,7 +9,7 @@
  */
 import { readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "node:util";
-import { createDOM, type CreateDOMOptions, type FetchLimits, type PageLogEntry } from "./index.js";
+import { createDOM, decodeHtml, type CreateDOMOptions, type FetchLimits, type PageLogEntry } from "./index.js";
 
 export interface CliIO {
   /** Everything of standard input (read only when the input is `-`). */
@@ -38,6 +38,7 @@ Running
       --timeout <ms>       upper limit for the scripts (default 10000)
       --width <px>         window width of the page (default 800)
       --base-url <url>     the page's URL, for file and standard input
+      --stylesheets        fetch <link rel="stylesheet"> sheets for cascading in getComputedStyle
 
 Limits (set these for pages you do not control)
       --protocol <p>       allowed protocol such as https: (repeatable)
@@ -101,6 +102,7 @@ export async function run(argv: string[], io: CliIO, version = "0.0.0"): Promise
         timeout: { type: "string" },
         width: { type: "string" },
         "base-url": { type: "string" },
+        stylesheets: { type: "boolean" },
         protocol: { type: "string", multiple: true },
         "allow-host": { type: "string", multiple: true },
         "block-host": { type: "string", multiple: true },
@@ -152,6 +154,7 @@ export async function run(argv: string[], io: CliIO, version = "0.0.0"): Promise
     timeout: n.timeout,
     waitFor: values.wait,
     width: n.width,
+    stylesheets: values.stylesheets,
     limits,
     beforeScripts: (values.before ?? []).map((f) => readFileSync(f, "utf8")),
     skip: skips.length ? (url) => skips.some((s) => url.includes(s)) : undefined,
@@ -161,7 +164,7 @@ export async function run(argv: string[], io: CliIO, version = "0.0.0"): Promise
   let source: { url?: string; html?: string; baseUrl?: string };
   try {
     if (/^https?:\/\//i.test(input)) source = { url: input };
-    else source = { html: input === "-" ? await io.stdin() : readFileSync(input, "utf8"), baseUrl: values["base-url"] };
+    else source = { html: input === "-" ? await io.stdin() : decodeHtml(readFileSync(input)), baseUrl: values["base-url"] };
   } catch (error) {
     return fail(io, `cannot read ${input}: ${(error as Error).message}`);
   }

@@ -14,6 +14,7 @@ import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { openPage, type CreateDOMOptions, type OpenedPage, type PageLogEntry } from "./index.js";
 import { decodeHtml } from "./decode.js";
+import { createGuard } from "./limits.js";
 import type { DOMWindow } from "./bridge.js";
 
 export type { DOMWindow };
@@ -72,6 +73,8 @@ const classified = (error: unknown, type: string): Error => {
   e.type = type;
   return e;
 };
+
+let sharedFragmentDom: JSDOM | undefined;
 
 export class JSDOM {
   readonly virtualConsole: VirtualConsole;
@@ -155,10 +158,10 @@ export class JSDOM {
     }
   }
 
-  /** Parse HTML into a DocumentFragment using a lightweight synchronous JSDOM context. */
+  /** Parse HTML into a DocumentFragment using a shared synchronous JSDOM context. */
   static fragment(html = ""): any {
-    const dom = new JSDOM("");
-    return dom.window.document.createRange().createContextualFragment(html);
+    sharedFragmentDom ??= new JSDOM("");
+    return sharedFragmentDom.window.document.createRange().createContextualFragment(html);
   }
 
   // The page's timers and requests go on after the constructor returns, and after every call the host makes into it.
@@ -182,9 +185,15 @@ export class JSDOM {
 
   /** Fetch a page and make it a JSDOM (the scripts load and run behind, as in the constructor). */
   static async fromURL(url: string, options: JSDOMOptions = {}): Promise<JSDOM> {
-    const res = await fetch(url, { headers: options.referrer ? { referer: options.referrer } : undefined });
-    const body = new Uint8Array(await res.arrayBuffer());
-    return new JSDOM(body, { ...options, url: res.url || url, contentType: options.contentType ?? res.headers.get("content-type") ?? undefined });
+    const guard = createGuard(options.engine?.limits);
+    const timeout = options.engine?.timeout ?? 10000;
+    const fetchPromise = guard.fetch(url, { headers: options.referrer ? { referer: options.referrer } : undefined });
+    const res = await Promise.race([
+      fetchPromise,
+      new Promise<Response>((_, reject) => setTimeout(() => reject(new Error(`Timed out loading ${url} (${timeout} ms).`)), timeout)),
+    ]);
+    const body = await guard.bytes(res);
+    return new JSDOM(body, { ...options, url: res.url || url, contentType: options.contentType ?? res.headers?.get?.("content-type") ?? undefined });
   }
 
   /** Read a file and make it a JSDOM, with a `file:` URL unless one is given. */

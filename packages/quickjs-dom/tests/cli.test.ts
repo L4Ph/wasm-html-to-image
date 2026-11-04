@@ -122,4 +122,9 @@ describe("wasm-quickjs-dom command", () => {
     expect(r.code).toBe(1);
     expect(r.err).toMatch(/fetch failed|ECONNREFUSED/);
   });
+
+  it("--stylesheets enables fetching linked stylesheets", async () => {
+    const r = await cli([`${origin}/`, "--stylesheets", "--settle", "0"]);
+    expect(r.code).toBe(0);
+  });
 });

@@ -74,6 +74,9 @@ export interface BridgeOptions {
 /** The page's `window`: every property is looked up in the page when read. */
 export type DOMWindow = Window & typeof globalThis & Record<string, any>;
 
+/** Internal symbol to read window property names without Proxy descriptor traversal. */
+export const WIN_KEYS = Symbol("winKeys");
+
 export class Bridge {
   /** The page's `window`: the global object of the guest. */
   readonly window: DOMWindow;
@@ -455,6 +458,7 @@ export class Bridge {
     return new Proxy(target, {
       get: (t, k) => {
         if (k === HANDLE) return cell;
+        if (k === WIN_KEYS) return () => this.sendJ(["keys", cell.id]) as string[];
         if (typeof k === "symbol") {
           if (k === Symbol.iterator && this.sendJ(["has", cell.id, "length"])) return () => (this.sendJ(["array", cell.id]) as unknown[])[Symbol.iterator]();
           return undefined;
