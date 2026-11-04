@@ -198,6 +198,12 @@ export default {
         },
         textDiff,
         htmlDiff,
+        options: {
+          settle: settleMs,
+          wait: waitFor,
+          timeout,
+          trackers,
+        },
       };
 
       // 5. Respond with JSON or UI Viewer

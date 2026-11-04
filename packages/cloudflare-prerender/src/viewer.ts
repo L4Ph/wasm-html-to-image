@@ -13,6 +13,12 @@ export interface ViewerData {
     text: { noJsChars: number; withJsChars: number };
     html: { noJsChars: number; withJsChars: number };
   };
+  options?: {
+    settle?: number;
+    wait?: string;
+    timeout?: number;
+    trackers?: boolean;
+  };
 }
 
 function escapeHtml(str: string): string {
@@ -495,16 +501,32 @@ export function renderViewer(data: ViewerData): string {
       display: flex;
       gap: 0.5rem;
       flex: 1;
-      max-width: 650px;
+      max-width: 820px;
+      flex-wrap: wrap;
     }
     .url-input {
-      flex: 1;
+      flex: 2;
+      min-width: 240px;
       background: var(--bg);
       border: 1px solid var(--border);
       border-radius: 6px;
       color: var(--text);
       padding: 0.4rem 0.75rem;
       font-size: 0.875rem;
+    }
+    .opt-input {
+      flex: 1;
+      min-width: 120px;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      color: var(--text);
+      padding: 0.4rem 0.65rem;
+      font-size: 0.8125rem;
+    }
+    .opt-num {
+      max-width: 90px;
+      flex: 0 0 90px;
     }
     .btn {
       background: var(--btn-bg);
@@ -669,7 +691,9 @@ export function renderViewer(data: ViewerData): string {
         <span class="badge">wasm-quickjs</span>
       </h1>
       <form class="url-form" method="GET" action="/">
-        <input class="url-input" type="url" name="url" value="${escapeHtml(data.url)}" placeholder="https://example.com" required>
+        <input class="url-input" type="url" name="url" value="${escapeHtml(data.url)}" placeholder="https://example.com" required title="検証対象のURL">
+        <input class="opt-input" type="text" name="wait" value="${escapeHtml(data.options?.wait || "")}" placeholder="wait: table, #app" title="待機セレクタ: 指定した要素が出現するまで待機">
+        <input class="opt-input opt-num" type="number" name="settle" value="${data.options?.settle ?? 1000}" min="0" max="5000" step="500" placeholder="settle" title="待機時間 (ms)">
         <button class="btn" type="submit">比較</button>
       </form>
     </div>
