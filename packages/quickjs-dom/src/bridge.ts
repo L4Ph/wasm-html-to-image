@@ -10,7 +10,7 @@ import type { EvalResult } from "./runtime.js";
 
 /** What the bridge needs of a QuickJS instance. */
 export interface BridgeVM {
-  rpc(request: string): EvalResult;
+  rpc(request: string): EvalResult & { jobs?: boolean };
   jobs(): number;
   setDeadline(ms: number): void;
 }
@@ -103,6 +103,7 @@ export class Bridge {
     this.vm = vm;
     this.timeout = options.timeout ?? 10000;
     this.onCall = options.onCall;
+    if (this.timeout > 0) this.vm.setDeadline(Date.now() + this.timeout);
     this.registry = new FinalizationRegistry<Cell>((cell) => {
       this.released.push([cell.id, cell.count]);
       const ref = this.wrappers.get(cell.id);
@@ -174,7 +175,10 @@ export class Bridge {
   private sendJ(request: unknown[]): unknown {
     // a function of the page that is called, or an object made, may change anything
     const runs = request[0] === "apply" || request[0] === "new" || request[0] === "del";
-    if (runs) this.invalidate();
+    if (runs) {
+      this.invalidate();
+      if (this.timeout > 0) this.vm.setDeadline(Date.now() + this.timeout);
+    }
     const value = this.send("J" + JSON.stringify(request), request[0] === "release");
     if (runs) this.invalidate();
     return value;
@@ -187,11 +191,10 @@ export class Bridge {
     if (this.fnById.size >= this.fnLimit) this.pruneFunctions();
     const outer = this.depth === 0;
     this.depth++;
-    let result: EvalResult;
+    let result: EvalResult & { jobs?: boolean };
     try {
       result = this.vm.rpc(request);
-      // promise reactions (mutation observers, awaited work of the page) run when the host's call is over
-      if (outer && this.vm.jobs() > 0) this.invalidate();
+      if (outer && result.jobs) this.invalidate();
     } finally {
       this.depth--;
     }
@@ -254,12 +257,27 @@ export class Bridge {
     return value;
   }
 
+  private encodeToken(a: unknown): string | null {
+    if (a === null) return "N";
+    if (typeof a === "boolean") return a ? "T" : "F";
+    if (typeof a === "number" && Number.isFinite(a) && !Object.is(a, -0)) return "n" + a;
+    if (typeof a === "string" && !a.includes("\u0002") && !a.includes("\u0001")) return "s" + a;
+    const cell = a && typeof a === "object" ? ((a as any)[HANDLE] as Cell | undefined) : undefined;
+    if (cell) return "h" + cell.id;
+    return null;
+  }
+
   private set(cell: Cell, key: string, value: unknown): void {
     this.invalidate();
     if (typeof value === "string" && !value.includes("\u0001") && !value.includes("\u0002")) {
       this.send("s" + cell.id + "\u0001" + key + "\u0001\u0003" + value);
     } else {
-      this.send("s" + cell.id + "\u0001" + key + "\u0001" + JSON.stringify(this.encode(value)));
+      const tok = this.encodeToken(value);
+      if (tok !== null) {
+        this.send("s" + cell.id + "\u0001" + key + "\u0001\u0004" + tok);
+      } else {
+        this.send("s" + cell.id + "\u0001" + key + "\u0001" + JSON.stringify(this.encode(value)));
+      }
     }
   }
 
@@ -274,30 +292,13 @@ export class Bridge {
       }
     }
     if (strings) return "\u0003" + args.join("\u0002");
-    // Check if arguments are all simple (strings, numbers, booleans, null, or handles)
-    let simple = true;
     const parts: string[] = [];
     for (const a of args) {
-      if (a === null) {
-        parts.push("N");
-      } else if (typeof a === "boolean") {
-        parts.push(a ? "T" : "F");
-      } else if (typeof a === "number" && Number.isFinite(a) && !Object.is(a, -0)) {
-        parts.push("n" + a);
-      } else if (typeof a === "string" && !a.includes("\u0002") && !a.includes("\u0001")) {
-        parts.push("s" + a);
-      } else {
-        const cell = a && typeof a === "object" ? ((a as any)[HANDLE] as Cell | undefined) : undefined;
-        if (cell) {
-          parts.push("h" + cell.id);
-        } else {
-          simple = false;
-          break;
-        }
-      }
+      const tok = this.encodeToken(a);
+      if (tok === null) return JSON.stringify(args.map((x) => this.encode(x)));
+      parts.push(tok);
     }
-    if (simple) return "\u0004" + parts.join("\u0002");
-    return JSON.stringify(args.map((a) => this.encode(a)));
+    return "\u0004" + parts.join("\u0002");
   }
 
   private call(cell: Cell, key: string, args: unknown[]): unknown {

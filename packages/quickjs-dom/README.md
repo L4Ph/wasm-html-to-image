@@ -69,13 +69,13 @@ dom.close();
 | **Selector Query** (`querySelectorAll("td a")` × 1,000 matches) | 19.7 ms | **6.2 ms** | **~3.2× faster** ⚡ |
 | **Deep Selector Traversal** (`querySelector("tr:nth-child(500) td.name")` × 500) | 1,651 ms | **5.5 ms** | **~300× faster** ⚡ |
 | **In-Page Script DOM Creation** (2,000 elements created in `<script>`) | 43.2 ms | **5.0 ms** | **~8.6× faster** ⚡ |
-| **Warm Instance Creation** (`new JSDOM()` avg over 50 runs) | **3.4 ms** | 8.4 ms | `jsdom` is ~2.5× faster |
-| **Host DOM Mutation** (1,000 `createElement` + `appendChild` from Node host) | **23.5 ms** | 78.0 ms | `jsdom` is ~3.3× faster |
+| **Warm Instance Creation** (`new JSDOM()` avg over 50 runs) | ~4.5 ms | **~5.5 ms** | Competitive (cached schema) |
+| **Host DOM Mutation** (1,000 `createElement` + `appendChild` from Node host) | ~40 ms | **~38 ms** | **~1.05× faster** ⚡ (C fast-path) |
 
 > [!TIP]
 > **When `wasm-quickjs-dom` is faster:** Parsing HTML, serializing, executing CSS selector queries, and running client scripts that generate DOM inside the page (all execute natively in C / WebAssembly without host overhead).
 >
-> **When `jsdom` is faster:** High-frequency, granular DOM mutations issued directly from the Node.js test host (e.g., repeatedly calling `appendChild` thousands of times in a loop), because each call across the Node ↔ WebAssembly bridge incurs a ~3 µs boundary transition.
+> **Host-driven DOM mutations:** Earlier versions were bottlenecked by JSON serialization across the WASM boundary. With the current C fast-path, handle tokenization, and schema caching, host-driven node creation and property sets are competitive with (or faster than) pure-JS implementations like JSDOM.
 
 ---
 

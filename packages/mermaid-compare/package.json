@@ -11,19 +11,19 @@
     "notation-diff": "node scripts/notation-diff.mjs --check"
   },
   "dependencies": {
-    "mermaid": "^12.2.0",
+    "mermaid": "^12.3.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "wasm-html-to-image": "workspace:*"
   },
   "devDependencies": {
-    "@tailwindcss/vite": "^4.3.3",
+    "@tailwindcss/vite": "^4.3.4",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.1.2",
-    "tailwindcss": "^4.3.3",
+    "@vitejs/plugin-react": "^6.2.1",
+    "tailwindcss": "^4.3.4",
     "typescript": "^7.0.2",
     "vite": "^8.3.5",
-    "vitest": "^5.0.5"
+    "vitest": "^5.1.0"
   }
 }

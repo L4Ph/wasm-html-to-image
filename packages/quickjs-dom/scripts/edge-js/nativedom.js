@@ -1455,7 +1455,7 @@
   var elementName = function (el) {
     var ln = el.localName;
     var d = el.ownerDocument;
-    if (el.namespaceURI === NS.html && d && !(typeof XMLDocument !== "undefined" && d instanceof XMLDocument)) return ln.replace(/[a-z]/g, function (ch) { return ch.toUpperCase(); });
+    if (el.namespaceURI === NS.html && d && !(typeof XMLDocument !== "undefined" && d instanceof XMLDocument)) return ln.toUpperCase();
     return ln;
   };
   getter(P.Element, "tagName", function () { return elementName(this); });

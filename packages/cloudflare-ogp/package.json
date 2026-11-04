@@ -10,14 +10,14 @@
     "test": "node scripts/smoke.mjs"
   },
   "dependencies": {
-    "preact": "^11.0.1",
+    "preact": "^11.1.1",
     "wasm-html-to-image": "workspace:*"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^5.20261023.1",
-    "@types/node": "26.6.5",
-    "cf": "1.0.0-beta.20",
+    "@cloudflare/workers-types": "^5.20261103.1",
+    "@types/node": "26.6.6",
+    "cf": "1.0.0-beta.27",
     "typescript": "^7.0.2",
-    "wrangler": "^4.152.0"
+    "wrangler": "^4.157.0"
   }
 }

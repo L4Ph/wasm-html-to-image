@@ -69,12 +69,15 @@
   var infoOf = function (v, id) {
     var cls = classOf(v);
     if (!cls) return null;
-    var s = "h" + id + SEP + cls + SEP;
-    if (typeof v.nodeType === "number") {
-      s += v.nodeType + SEP + v.nodeName;
-      if (v.nodeType === 1) s += SEP + v.localName + SEP + v.tagName;
+    var nt = v.nodeType;
+    if (typeof nt === "number") {
+      if (nt === 1) {
+        var tn = v.tagName;
+        return "h" + id + SEP + cls + SEP + "1" + SEP + tn + SEP + v.localName + SEP + tn;
+      }
+      return "h" + id + SEP + cls + SEP + nt + SEP + v.nodeName;
     }
-    return s;
+    return "h" + id + SEP + cls + SEP;
   };
   // the handle of an object whose class is known, as a string; null for anything else
   var handleString = function (v) {
@@ -307,7 +310,22 @@
       if (c === 115) { // s
         j = s.indexOf(SEP, i + 1);
         var valStr = s.slice(j + 1);
-        var val = valStr.charCodeAt(0) === 3 ? valStr.slice(1) : dec(JSON.parse(valStr));
+        var val;
+        var vc = valStr.charCodeAt(0);
+        if (vc === 3) {
+          val = valStr.slice(1);
+        } else if (vc === 4) {
+          var tok = valStr.slice(1), tc = tok.charCodeAt(0);
+          if (tc === 78) val = null;
+          else if (tc === 84) val = true;
+          else if (tc === 70) val = false;
+          else if (tc === 110) val = +tok.slice(1);
+          else if (tc === 115) val = tok.slice(1);
+          else if (tc === 104) val = target(+tok.slice(1));
+          else val = undefined;
+        } else {
+          val = dec(JSON.parse(valStr));
+        }
         target(+s.slice(1, i))[s.slice(i + 1, j)] = val;
         return "N";
       }

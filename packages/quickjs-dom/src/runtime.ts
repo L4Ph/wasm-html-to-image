@@ -189,7 +189,7 @@ export class QuickJSInstance {
    * Call the guest's `__rpc` (scripts/edge-js/rpc.js) with a string; the answer is a string. Unlike {@link eval} this may
    * be called again from inside a host callback (module kind 2): the bridge's calls nest.
    */
-  rpc(request: string): EvalResult {
+  rpc(request: string): EvalResult & { jobs?: boolean } {
     // the request is copied into a buffer that stays; the guest reads it before it runs anything, so a call made from a
     // callback may reuse it
     const need = request.length * 3 + 1;
@@ -199,8 +199,10 @@ export class QuickJSInstance {
       this.reqPtr = this.x.qd_alloc(this.reqCap);
     }
     const { written } = encoder.encodeInto(request, new Uint8Array(this.x.memory.buffer, this.reqPtr, this.reqCap));
-    this.x.qd_rpc(this.reqPtr, written);
-    return this.result();
+    const rc = this.x.qd_rpc(this.reqPtr, written);
+    const res = this.result() as EvalResult & { jobs?: boolean };
+    if (rc & 2) res.jobs = true;
+    return res;
   }
 
   /** Run bytecode that {@link QuickJSInstance.compile} made with this very build of QuickJS. */

@@ -33,6 +33,39 @@ static JSRuntime *rt;
 static JSContext *ctx;
 static double deadline_ms;
 
+static JSValue cached_rpc_fn = JS_UNDEFINED;
+static JSValue cached_reply_fn = JS_UNDEFINED;
+static JSValue cached_error_fn = JS_UNDEFINED;
+static JSValue cached_byid = JS_UNDEFINED;
+static JSContext *cached_ctx = NULL;
+
+static void reset_rpc_cache(void) {
+    if (cached_ctx) {
+        if (!JS_IsUndefined(cached_rpc_fn)) JS_FreeValue(cached_ctx, cached_rpc_fn);
+        if (!JS_IsUndefined(cached_reply_fn)) JS_FreeValue(cached_ctx, cached_reply_fn);
+        if (!JS_IsUndefined(cached_error_fn)) JS_FreeValue(cached_ctx, cached_error_fn);
+        if (!JS_IsUndefined(cached_byid)) JS_FreeValue(cached_ctx, cached_byid);
+    }
+    cached_rpc_fn = JS_UNDEFINED;
+    cached_reply_fn = JS_UNDEFINED;
+    cached_error_fn = JS_UNDEFINED;
+    cached_byid = JS_UNDEFINED;
+    cached_ctx = NULL;
+}
+
+static void update_rpc_cache(void) {
+    if (cached_ctx != ctx || JS_IsUndefined(cached_rpc_fn)) {
+        reset_rpc_cache();
+        cached_ctx = ctx;
+        JSValue global = JS_GetGlobalObject(ctx);
+        cached_rpc_fn = JS_GetPropertyStr(ctx, global, "__rpc");
+        cached_reply_fn = JS_GetPropertyStr(ctx, global, "__reply");
+        cached_error_fn = JS_GetPropertyStr(ctx, global, "__rpcError");
+        cached_byid = JS_GetPropertyStr(ctx, global, "__byId");
+        JS_FreeValue(ctx, global);
+    }
+}
+
 static uint8_t *scratch;
 static size_t scratch_cap;
 
@@ -317,6 +350,7 @@ static JSValue host_callback(JSContext *c, JSValueConst self, int argc, JSValueC
 
 /* memory_limit: bytes QuickJS may allocate; stack_limit: bytes of C stack a script may use */
 EXPORT("qd_init") int qd_init(size_t memory_limit, size_t stack_limit) {
+    reset_rpc_cache();
     rt = JS_NewRuntime();
     if (!rt) return -1;
     JS_SetMemoryLimit(rt, memory_limit);
@@ -424,12 +458,11 @@ static int rpc_answer(JSValue v, JSValueConst reply_fn) {
 }
 
 EXPORT("qd_rpc") int qd_rpc(const char *req, size_t len) {
-    JSValue global = JS_GetGlobalObject(ctx);
-    JSValue fn = JS_GetPropertyStr(ctx, global, "__rpc");
-    JSValue reply_fn = JS_GetPropertyStr(ctx, global, "__reply");
-    JSValue error_fn = JS_GetPropertyStr(ctx, global, "__rpcError");
-    JSValue byid = JS_GetPropertyStr(ctx, global, "__byId");
-    JS_FreeValue(ctx, global);
+    update_rpc_cache();
+    JSValue fn = cached_rpc_fn;
+    JSValue reply_fn = cached_reply_fn;
+    JSValue error_fn = cached_error_fn;
+    JSValue byid = cached_byid;
     int rc = -1;
     if (len > 3 && (req[0] == 'g' || req[0] == 'c' || req[0] == 's') && JS_IsFunction(ctx, reply_fn) && JS_IsFunction(ctx, error_fn) && JS_IsObject(byid)) {
         const char *sep1 = memchr(req + 1, 1, len - 1);
@@ -449,12 +482,36 @@ EXPORT("qd_rpc") int qd_rpc(const char *req, size_t len) {
                 size_t keylen = (size_t)((req[0] == 'g' ? req + len : sep2) - key);
 
                 if (req[0] == 's') {
-                    /* Property set: s<id>\1<key>\1\3<string> */
-                    if (sep2 + 1 < req + len && sep2[1] == 3) {
-                        const char *val = sep2 + 2;
-                        size_t vallen = (size_t)(req + len - val);
+                    /* Property set: s<id>\1<key>\1\3<string> or \4<token> */
+                    if (sep2 + 1 < req + len && (sep2[1] == 3 || sep2[1] == 4)) {
+                        JSValue v = JS_UNDEFINED;
+                        if (sep2[1] == 3) {
+                            const char *val = sep2 + 2;
+                            size_t vallen = (size_t)(req + len - val);
+                            v = JS_NewStringLen(ctx, val, vallen);
+                        } else {
+                            const char *tok = sep2 + 2;
+                            size_t toklen = (size_t)(req + len - tok);
+                            if (toklen > 0) {
+                                char tc = tok[0];
+                                if (tc == 'N') v = JS_NULL;
+                                else if (tc == 'T') v = JS_TRUE;
+                                else if (tc == 'F') v = JS_FALSE;
+                                else if (tc == 's') v = JS_NewStringLen(ctx, tok + 1, toklen - 1);
+                                else if (tc == 'n') {
+                                    char buf[32];
+                                    size_t copylen = toklen - 1 < sizeof(buf) - 1 ? toklen - 1 : sizeof(buf) - 1;
+                                    memcpy(buf, tok + 1, copylen);
+                                    buf[copylen] = 0;
+                                    v = JS_NewFloat64(ctx, strtod(buf, NULL));
+                                } else if (tc == 'h') {
+                                    uint32_t hid = 0;
+                                    for (size_t k = 1; k < toklen; k++) hid = hid * 10 + (uint32_t)(tok[k] - '0');
+                                    v = JS_GetPropertyUint32(ctx, byid, hid);
+                                }
+                            }
+                        }
                         JSAtom atom = JS_NewAtomLen(ctx, key, keylen);
-                        JSValue v = JS_NewStringLen(ctx, val, vallen);
                         int set_res = JS_SetProperty(ctx, obj, atom, v);
                         JS_FreeAtom(ctx, atom);
                         JS_FreeValue(ctx, obj);
@@ -591,10 +648,20 @@ EXPORT("qd_rpc") int qd_rpc(const char *req, size_t len) {
     }
 slow:
     if (rc < 0) rc = rpc_slow(fn, req, len);
-    JS_FreeValue(ctx, fn);
-    JS_FreeValue(ctx, reply_fn);
-    JS_FreeValue(ctx, error_fn);
-    JS_FreeValue(ctx, byid);
+    if (rc == 0 && JS_IsJobPending(rt)) {
+        int jobs_ran = 0;
+        for (;;) {
+            JSContext *c;
+            int r = JS_ExecutePendingJob(rt, &c);
+            if (r == 0) break;
+            jobs_ran++;
+            if (r < 0) {
+                JSValue e = JS_GetException(c);
+                JS_FreeValue(c, e);
+            }
+        }
+        if (jobs_ran > 0) rc |= 2;
+    }
     return rc;
 }
 
