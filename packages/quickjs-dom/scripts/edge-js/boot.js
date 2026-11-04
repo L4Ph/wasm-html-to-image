@@ -730,9 +730,9 @@
     //   { status: "idle" | "loading" | "loaded" | "error", width, height, promise }
     // __edgeImageSettle (05-html.js) turns a settled record into the load/error event of every
     // <img> showing the URL and settles the decode() waiters.
-    // TODO(onload): both the event and the decode() promise are synthesized from this registry;
-    // once the resource_manager bridge knows the timing they should be shared with its onload
-    // transition instead of fired here.
+    // Timing: the host publishes the renderer's real transition with QuickJSDOM.setImageResource (wired by
+    // measureLayout). The event itself still fires here because the DOM is the one place that knows which
+    // <img> elements show the URL; the transition it fires from is the renderer's, not a local guess.
     g.__edgeImageResources = new Map();
     g.__edgeImageResource = function (url, record) {
       url = String(url);

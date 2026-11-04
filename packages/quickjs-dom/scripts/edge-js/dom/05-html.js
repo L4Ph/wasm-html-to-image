@@ -233,10 +233,10 @@
       var src = imageSource(this);
       if (!src) return Promise.reject(imageError());
       var record = imageRecord(src);
-      // TODO(onload): decoding belongs to the renderer's resource_manager. Once it owns image
-      // loading, this promise should settle with the record's own promise and a "loaded" record
-      // should make naturalWidth/naturalHeight readable; the load event and this promise should
-      // both come from that same renderer transition (__edgeImageSettle synthesizes them now).
+      // Decoding belongs to the renderer's resource_manager: the host publishes its real transition with
+      // QuickJSDOM.setImageResource, and this function turns that transition into the load/error event and
+      // the decode() result. TODO(size): the record's width/height are still missing (no engine binding
+      // exposes the decoded size), so naturalWidth/naturalHeight stay 0 for now.
       if (record && record.promise && typeof record.promise.then === "function") return Promise.resolve(record.promise).then(function () {});
       return imageWait(src, record);
     });

@@ -37,6 +37,7 @@ export type {
   ScriptedPage,
   CreateDOMOptions,
   QuickJSDOM,
+  ImageResourceRecord,
   OpenedPage,
   EdgeJavaScriptEngine,
 } from "./types.js";

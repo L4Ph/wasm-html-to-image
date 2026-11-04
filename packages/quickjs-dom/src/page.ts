@@ -509,6 +509,17 @@ export function openPage(
         begin();
         if (!run(`__edgeSetLayout(${JSON.stringify(JSON.stringify(boxes))})`, "layout.js")) throw new Error("The QuickJS engine could not apply the layout.");
       },
+      setImageResource(url, record) {
+        if (closed) throw new Error("The DOM is closed.");
+        begin();
+        // The renderer owns the fetch of every image URL: it publishes that one transition here, and
+        // boot.js/05-html.js turn it into complete/naturalWidth, the load|error event and decode().
+        // Nothing in the page fetches the image, so the renderer's fetch is the only one.
+        const value = record === null ? "null" : JSON.stringify({ status: record.status, width: record.width, height: record.height });
+        if (!run(`__edgeImageResource(${JSON.stringify(url)}, ${value})`, "image-resource.js")) {
+          throw new Error("The QuickJS engine could not publish the image resource.");
+        }
+      },
       bridge(options?: BridgeOptions) {
         if (closed) throw new Error("The DOM is closed.");
         return (bridge ??= new Bridge(vm, { timeout, onCall: () => bridgeActivity(), ...options }));

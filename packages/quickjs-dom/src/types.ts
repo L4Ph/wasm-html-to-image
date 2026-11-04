@@ -44,6 +44,22 @@ export interface ScriptedPage {
   baseUrl: string;
 }
 
+/**
+ * What the renderer's image resource manager knows about one image source, as the page sees it.
+ *
+ * The DOM never fetches image bytes itself: the renderer fetches a URL once and publishes the state here
+ * ({@link QuickJSDOM.setImageResource}), so `img.complete`, `naturalWidth` / `naturalHeight`, `decode()` and the
+ * `load` / `error` event all follow that one fetch instead of a second one in the page.
+ */
+export interface ImageResourceRecord {
+  /** `"loading"` / `"idle"` keep `complete` false and `decode()` waiting; `"loaded"` / `"error"` settle both. */
+  status: "idle" | "loading" | "loaded" | "error";
+  /** Intrinsic width in CSS px, once the renderer has decoded the image. */
+  width?: number;
+  /** Intrinsic height in CSS px, once the renderer has decoded the image. */
+  height?: number;
+}
+
 /** What {@link QuickJSDOM.toOptions} reads and writes of an options object (render options fit). */
 export interface PageInput {
   url?: string;
@@ -161,6 +177,17 @@ export interface QuickJSDOM {
    * downstream is expected to resolve those values against the page; they are not pixels here.
    */
   setLayout(boxes: Record<number, [number, number, number, number]>): void;
+  /**
+   * Publish the renderer's state for one image source: `"loading"` before it fetches, then `"loaded"` (with the
+   * decoded size when known) or `"error"`. This is the only image loading the page sees: the renderer owns the
+   * fetch, so there is exactly one request per URL, and the page's `load` / `error` events and `decode()` settle
+   * from this transition. `null` forgets the record (the next publish starts over).
+   *
+   * Pair it with a render of the serialized page while this DOM is open (as `measureLayout()` does). The script
+   * phase itself has no renderer running, so it publishes no records: there the page's images are complete with
+   * no load to wait for, as in a browser before the image request starts.
+   */
+  setImageResource(url: string, record: ImageResourceRecord | null): void;
   /** Options for a renderer that draws this page: `value` is the serialized DOM and `baseUrl` is this page's. */
   toOptions<T extends PageInput>(options: T): T;
   /**

@@ -96,6 +96,7 @@ export interface Orchestration {
   onDiagnostics: HtmlToImageOptions["onDiagnostics"];
   onLayout: HtmlToImageOptions["onLayout"];
   layoutInline: boolean;
+  onImageResource: HtmlToImageOptions["onImageResource"];
   fitContent: HtmlToImageOptions["fitContent"];
   resolveResource: ResolveResourceHook | undefined;
   mediaType: "screen" | "print";
@@ -175,6 +176,7 @@ export function createOrchestration(
     onDiagnostics,
     onLayout,
     layoutInline = false,
+    onImageResource,
     fitContent,
     resolveResource,
     mediaType = "screen",
@@ -303,6 +305,7 @@ export function createOrchestration(
     fonts: preloadFonts,
     limits,
     resolveResource,
+    onImageResource,
     diag,
     usage: { resourceCount: 0, totalResourceBytes: 0, fontsSkippedByCount: 0 },
     t0,
@@ -356,6 +359,7 @@ export function createOrchestration(
     onDiagnostics,
     onLayout,
     layoutInline,
+    onImageResource,
     fitContent,
     resolveResource,
     mediaType,

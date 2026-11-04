@@ -15,12 +15,12 @@
  * `createDOM()` keeps the page open (a small JSDOM): `await dom.eval("document.title")`, `dom.serialize()`,
  * `dom.toOptions({ format: "png" })`.
  */
-import { runPageScriptsQuickJS, type EdgeJavaScriptEngine, type QuickJSDOM } from "wasm-quickjs-dom";
+import { runPageScriptsQuickJS, type EdgeJavaScriptEngine, type ImageResourceRecord, type QuickJSDOM } from "wasm-quickjs-dom";
 import type { HtmlToImageOptions, LayoutBox } from "./core.js";
 import { applyScripted } from "./js-apply.js";
 
 export { createDOM, runPageScriptsQuickJS } from "wasm-quickjs-dom";
-export type { CreateDOMOptions, EdgeJavaScriptEngine, QuickJSDOM } from "wasm-quickjs-dom";
+export type { CreateDOMOptions, EdgeJavaScriptEngine, ImageResourceRecord, QuickJSDOM } from "wasm-quickjs-dom";
 export type { JavaScriptOptions, ScriptedPage } from "./js-apply.js";
 
 /**
@@ -39,6 +39,10 @@ export function applyJavaScript<T extends HtmlToImageOptions>(options: T, engine
  * `render` is the `render` of the entry you use (`wasm-html-to-image/workerd`, `/single`, ...); only its layout pass
  * runs, nothing is drawn or encoded. `options` are the render options that shape the layout (`width`, `height`,
  * `css`, `fontMap`, `mediaType`, ...). The layout is a snapshot: measure again after the page changed.
+ *
+ * The page stays open through that pass, so it also gets the renderer's real image timing: as resources are fetched
+ * the records reach the DOM (`setImageResource`), and a page listener on an `<img>` fires its `load` / `error` at the
+ * moment the renderer owns the bytes, from that one fetch (the page does not fetch images itself).
  *
  * An inline element (`<span>`, `<a>`, ...) gets the box that encloses all the line fragments it is broken into.
  *
@@ -72,6 +76,13 @@ export async function measureLayout(
         }
         measured = true;
         throw new Error("layout measured"); // the boxes are all that is wanted: skip drawing and encoding
+      },
+      onImageResource(url: string, record: ImageResourceRecord) {
+        // The DOM is still open here: hand it the renderer's actual image transition. One fetch covers both
+        // the page (events/decode/natural size) and the draw; the page never requests the bytes itself.
+        dom.setImageResource(url, record);
+        // `HtmlToImageOptions` has an index signature, so `Omit` flattens its properties to `unknown`.
+        (options as { onImageResource?: (u: string, r: ImageResourceRecord) => void }).onImageResource?.(url, record);
       },
     } as HtmlToImageOptions);
   } catch (error) {

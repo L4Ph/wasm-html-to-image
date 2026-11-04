@@ -6,6 +6,23 @@
 import type { FetchLimits } from "wasm-quickjs-dom";
 import type { HtmlToImageOptions } from "./core.js";
 
+/**
+ * Image fetching policy of the script phase: the DOM never fetches image bytes.
+ *
+ * A page's `<img>` takes `complete`, natural size, load/error events and `decode()` from the renderer's
+ * resource manager (`QuickJSDOM.setImageResource`), so the render that follows is the one request per
+ * URL. Preloading images here would fetch them a second time in the render, and would spend the script
+ * timeout on bytes the render fetches anyway, so none is done.
+ *
+ * The timing therefore reaches the page only while a render runs with the DOM still open
+ * (`measureLayout()` does this). `applyScripted` serializes the page and closes the DOM, so an
+ * `img.decode()` awaited by a script cannot observe the renderer's fetch; the records start at the render.
+ *
+ * `<link rel=stylesheet>` is the one resource the script phase does fetch (so `getComputedStyle` sees the
+ * cascade while the scripts run); the render fetches that sheet again. Images get no such pre-pass: one
+ * fetch in the render is the whole policy.
+ */
+
 /** Options of the `javascript` render option. */
 export interface JavaScriptOptions {
   /** Upper bound for the whole script phase in ms (default 10000). The page is rendered as it is when it expires. */

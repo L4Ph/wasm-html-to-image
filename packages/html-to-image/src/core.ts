@@ -1,4 +1,5 @@
 import type { HtmlToImageModule } from "./loader.js";
+import type { ImageResourceRecord } from "wasm-quickjs-dom";
 import { buildFullSatoruOptions } from "./encode-args.js";
 import { renderMermaidInput, type MermaidInput } from "./mermaid.js";
 import { imageBytesFromUnknown, isImageInput, sniffImageFormat } from "./input.js";
@@ -216,6 +217,14 @@ export interface HtmlToImageOptions extends RenderOptions {
    * line fragments. Off by default, since a reference browser's walk skips them. `measureLayout()` turns it on.
    */
   layoutInline?: boolean;
+  /**
+   * Called as the renderer's resource pass changes an image's state: `"loading"` before its fetch, then
+   * `"loaded"` (the engine has the bytes) or `"error"`. It is how a live QuickJS page learns the real
+   * timing (`QuickJSDOM.setImageResource`); the renderer fetches the URL once and the page never fetches
+   * it again, so `img` load/error events and `decode()` follow this one request. `measureLayout()` wires
+   * it for you.
+   */
+  onImageResource?: (url: string, record: ImageResourceRecord) => void;
   /**
    * Override hook for resource resolution, applied to every fetch path
    * (discovery fetches, fallback-font URLs, HTML `url` fetch). Return

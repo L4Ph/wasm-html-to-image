@@ -7,6 +7,7 @@
  * both the loop and the orchestration/pipeline layer share them.
  */
 import { importNode, type HtmlToImageModule } from "./loader.js";
+import type { ImageResourceRecord } from "wasm-quickjs-dom";
 import { dataUrlToBytes, toBytes } from "./input.js";
 import {
   DIAGNOSTIC_CODES,
@@ -303,6 +304,12 @@ export interface ResolveContext {
   fonts?: { name: string; data: Uint8Array }[];
   limits: RenderLimits;
   resolveResource?: ResolveResourceHook;
+  /**
+   * Publish an image's fetch state to a live page (the QuickJS registry). `loading` goes out before the
+   * fetch, then `loaded` once the bytes are in the engine, or `error`. The renderer is the only fetch:
+   * the page learns the result from this hook instead of requesting the image a second time.
+   */
+  onImageResource?: (url: string, record: ImageResourceRecord) => void;
   diag: DiagState | null;
   usage: ResourceUsage;
   t0: number;
@@ -557,6 +564,25 @@ export async function resolveHtmlResources(
       // Non-fatal; timings simply miss the C++ breakdown.
     }
   }
+  // The page and the render share one fetch per image: the renderer fetches here and publishes the
+  // transition to a live QuickJS page (`onImageResource` -> `QuickJSDOM.setImageResource`), which fires
+  // that page's load/error event and settles decode(). The page never fetches image bytes itself, so this
+  // request is not repeated there. `imageStates` is the last state published per URL: an image the engine
+  // asks for again in a later round does not fire the same event twice.
+  // TODO(size): the decoded width/height are not available from the engine yet (no binding exposes them),
+  // so a loaded record leaves naturalWidth/naturalHeight at 0. Add them here once the engine reports them;
+  // the timing (this hook) is what the bridge shares today.
+  const imageStates = new Map<string, ImageResourceRecord["status"]>();
+  const publishImage = (url: string, status: ImageResourceRecord["status"]): void => {
+    const publish = ctx.onImageResource;
+    if (!publish || imageStates.get(url) === status) return;
+    imageStates.set(url, status);
+    try {
+      publish(url, { status });
+    } catch {
+      // A listener's failure must not fail the render.
+    }
+  };
   for (let round = 0; round < 10; round++) {
     ctx.checkTimeout();
     // One wasm call covers every page: the C++ side lays each page out in turn and
@@ -621,6 +647,7 @@ export async function resolveHtmlResources(
         }
         const blocked = checkResourceAllowed(r.url, ctx.limits);
         if (blocked) {
+          if (r.type === "image") publishImage(r.url, "error");
           skipWithError(limitCodeForReason(blocked), blocked);
           return;
         }
@@ -632,10 +659,12 @@ export async function resolveHtmlResources(
         ) {
           const message = `Maximum resource count (${ctx.limits.maxResourceCount}) exceeded`;
           if (r.type === "font") ctx.usage.fontsSkippedByCount++;
+          if (r.type === "image") publishImage(r.url, "error");
           skipWithError(DIAGNOSTIC_CODES.LIMIT_RESOURCE_COUNT, message);
           return;
         }
         ctx.usage.resourceCount++;
+        if (r.type === "image") publishImage(r.url, "loading");
         const bytes = await fetchResourceBytes(
           r.url,
           baseUrl,
@@ -646,6 +675,7 @@ export async function resolveHtmlResources(
         );
         if (!bytes) {
           ctx.usage.resourceCount--;
+          if (r.type === "image") publishImage(r.url, "error");
           settle("failed");
           const message = `Failed to fetch resource: ${r.url}`;
           diag?.warnings.push({
@@ -664,6 +694,7 @@ export async function resolveHtmlResources(
             `Resource size (${bytes.length} bytes) exceeds limit ` +
             `(${ctx.limits.maxResourceBytes})`;
           ctx.usage.resourceCount--;
+          if (r.type === "image") publishImage(r.url, "error");
           skipWithError(DIAGNOSTIC_CODES.LIMIT_RESOURCE_SIZE, message);
           return;
         }
@@ -675,6 +706,7 @@ export async function resolveHtmlResources(
         ) {
           const message = `Total resource size exceeds limit (${ctx.limits.maxTotalResourceBytes})`;
           ctx.usage.resourceCount--;
+          if (r.type === "image") publishImage(r.url, "error");
           skipWithError(DIAGNOSTIC_CODES.LIMIT_TOTAL_SIZE, message);
           return;
         }
@@ -690,6 +722,9 @@ export async function resolveHtmlResources(
           r.type === "image" ? 2 : 1,
           bytes,
         )) as unknown;
+        // The engine now owns the bytes: the page's image is "loaded" from this real transition, not a
+        // synthetic one. No second fetch happens in the page.
+        if (r.type === "image") publishImage(r.url, "loaded");
         if (r.type === "font") {
           diag?.fonts.push({
             family: r.name || r.url,
@@ -699,6 +734,7 @@ export async function resolveHtmlResources(
         }
       } catch (e) {
         // Per-resource failure is non-fatal; render proceeds regardless.
+        if (r.type === "image") publishImage(r.url, "error");
         const d = errorToDiagnostic(
           e,
           DIAGNOSTIC_CODES.RESOURCE_FETCH_FAILED,
