@@ -26,7 +26,9 @@ import { createGuard, type FetchLimits } from "./limits.js";
 import { Bridge, type BridgeOptions } from "./bridge.js";
 import { QuickJSInstance } from "./runtime.js";
 import { decodeHtml, sniffCharset } from "./decode.js";
+import type { CookieJarLike } from "./cookies.js";
 export type { Bridge, BridgeOptions, DOMWindow } from "./bridge.js";
+export { CookieJar, type Cookie, type CookieJarLike } from "./cookies.js";
 
 export { isPrivateHost, type FetchLimits } from "./limits.js";
 export { decodeHtml, sniffCharset } from "./decode.js";
@@ -141,6 +143,14 @@ export interface CreateDOMOptions extends JavaScriptOptions, EdgeJavaScriptEngin
   onLog?: (entry: PageLogEntry) => void;
   /** `window.innerWidth` of the page (default 800). */
   width?: number;
+  /**
+   * The cookie jar the page uses: `document.cookie` reads and writes it (scoped by the page's URL,
+   * `HttpOnly` hidden from the page), the page's requests carry its cookies, and the `Set-Cookie`
+   * headers of responses land in it. Any jar with the synchronous surface of {@link CookieJar} —
+   * a tough-cookie jar, say — works, so a jar can be shared between pages. Without one the page
+   * keeps a small jar of its own.
+   */
+  cookieJar?: CookieJarLike;
   /**
    * Whether the page pretends to be visual: `requestAnimationFrame` exists, `document.visibilityState` is
    * `\"visible\"` and the document has focus (default true). False removes the animation-frame functions and
@@ -327,7 +337,19 @@ export function openPage(
     const entry = { type: "request" as const, method: init.method ?? "GET", url: String(input) };
     try {
       if (!isPage && opts.skip?.(entry.url)) throw new Error(`Skipped by the skip option: ${entry.url}`);
-      const res = await guard.fetch(input, init);
+      // a page with a jar sends its cookies and keeps the ones it is given, as a browser does
+      const jar = options.cookieJar;
+      let sent = init;
+      if (jar) {
+        const headers = new Headers(init.headers);
+        if (!headers.has("cookie")) {
+          const cookies = jar.getCookieStringSync(entry.url);
+          if (cookies) headers.set("cookie", cookies);
+        }
+        sent = { ...init, headers };
+      }
+      const res = await guard.fetch(input, sent);
+      if (jar) for (const sc of res.headers.getSetCookie?.() ?? []) jar.setCookieSync(sc, res.url || entry.url);
       log({ ...entry, status: res.status });
       return res;
     } catch (error) {
@@ -564,6 +586,19 @@ export function openPage(
 
     const boot = vm.eval(`__edgeBoot(${JSON.stringify(html)}, ${JSON.stringify(baseUrl)}, ${Math.round(viewportWidth)}, ${JSON.stringify(randomSeed())}, ${options.visual !== false})`, "boot.js");
     if (boot.type === "error") throw new Error(`The QuickJS engine could not build the page: ${boot.value}`);
+    // with a jar of the host's, the page's document.cookie goes through it (boot.js looks the
+    // hooks up on the global at each access, so installing them now, before any script, is enough)
+    if (options.cookieJar) {
+      const jar = options.cookieJar;
+      bridge ??= new Bridge(vm, { timeout, onCall: () => bridgeActivity() });
+      // the hooks ride on the engine's own __host object: no new name appears on the window
+      (bridge.window as any).__host.cookieJar = {
+        get: (url: string) => jar.getCookieStringSync(url, { httpOnly: false }),
+        set: (cookie: string, url: string) => {
+          jar.setCookieSync(cookie, url, { script: true });
+        },
+      };
+    }
     [opts.beforeScripts ?? []].flat().forEach((code, i) => run(code, `before-scripts-${i + 1}.js`));
 
     // scripts in document order, the ones that scripts add included; each external one is fetched by the host

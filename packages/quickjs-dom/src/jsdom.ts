@@ -14,9 +14,11 @@ import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { openPage, type CreateDOMOptions, type OpenedPage, type PageLogEntry } from "./index.js";
 import { decodeHtml } from "./decode.js";
+import { CookieJar, type CookieJarLike } from "./cookies.js";
 import type { DOMWindow } from "./bridge.js";
 
 export type { DOMWindow };
+export { CookieJar, type Cookie, type CookieJarLike } from "./cookies.js";
 
 /** jsdom's VirtualConsole: the page's console output and errors as events. */
 export class VirtualConsole extends EventEmitter {
@@ -46,6 +48,13 @@ export interface JSDOMOptions {
    * `document.hasFocus()` is false.
    */
   pretendToBeVisual?: boolean;
+  /**
+   * The cookie jar of the page, shared or injected: `document.cookie`, the cookies of the page's
+   * requests and the `Set-Cookie` headers of its responses all go through it. Any jar with the
+   * synchronous surface of {@link CookieJar} — tough-cookie's own included. Without one, a fresh
+   * {@link CookieJar} of this package is used (and is readable as `dom.cookieJar`, as in jsdom).
+   */
+  cookieJar?: CookieJarLike;
   virtualConsole?: VirtualConsole | null;
   /** Called with the window before the scripts run. */
   beforeParse?(window: DOMWindow): void;
@@ -75,6 +84,8 @@ const classified = (error: unknown, type: string): Error => {
 
 export class JSDOM {
   readonly virtualConsole: VirtualConsole;
+  /** The jar this page's cookies live in (the one passed in, or a fresh one). */
+  readonly cookieJar: CookieJarLike;
   private readonly page: OpenedPage;
   private readonly bridgeWindow: DOMWindow;
   private timer: ReturnType<typeof setTimeout> | undefined;
@@ -100,7 +111,8 @@ export class JSDOM {
       }
     };
     const url = options.url ?? "about:blank";
-    this.page = openPage(decodeHtml(html, options.contentType), url, engine.quickjsWasm ?? defaultWasm(), { ...engine, onLog: report, stylesheets: options.resources === "usable", visual: options.pretendToBeVisual ?? false });
+    this.cookieJar = options.cookieJar ?? engine.cookieJar ?? new CookieJar();
+    this.page = openPage(decodeHtml(html, options.contentType), url, engine.quickjsWasm ?? defaultWasm(), { ...engine, cookieJar: this.cookieJar, onLog: report, stylesheets: options.resources === "usable", visual: options.pretendToBeVisual ?? false });
     const bridge = this.page.dom.bridge({ timeout: engine.timeout });
     this.bridgeWindow = bridge.window;
     // the page's `window.close()` ends the page
@@ -182,9 +194,14 @@ export class JSDOM {
 
   /** Fetch a page and make it a JSDOM (the scripts load and run behind, as in the constructor). */
   static async fromURL(url: string, options: JSDOMOptions = {}): Promise<JSDOM> {
-    const res = await fetch(url, { headers: options.referrer ? { referer: options.referrer } : undefined });
+    const jar = options.cookieJar ?? options.engine?.cookieJar ?? new CookieJar();
+    const headers = new Headers(options.referrer ? { referer: options.referrer } : undefined);
+    const cookies = jar.getCookieStringSync(url);
+    if (cookies && !headers.has("cookie")) headers.set("cookie", cookies);
+    const res = await fetch(url, { headers });
+    for (const sc of res.headers.getSetCookie?.() ?? []) jar.setCookieSync(sc, res.url || url);
     const body = new Uint8Array(await res.arrayBuffer());
-    return new JSDOM(body, { ...options, url: res.url || url, contentType: options.contentType ?? res.headers.get("content-type") ?? undefined });
+    return new JSDOM(body, { ...options, cookieJar: jar, url: res.url || url, contentType: options.contentType ?? res.headers.get("content-type") ?? undefined });
   }
 
   /** Read a file and make it a JSDOM, with a `file:` URL unless one is given. */

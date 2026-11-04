@@ -232,7 +232,8 @@ dom.window.close();
 | :--- | :--- |
 | `new JSDOM(html, options)` (synchronous parse & inline scripts) | `getInternalVMContext()` (runs in QuickJS WASM, not Node `vm`; use `window.eval`) |
 | `url`, `referrer`, `contentType`, `pretendToBeVisual` | `nodeLocation()` (parser does not retain source offsets) |
-| `runScripts: "dangerously"` \| `"outside-only"` | `cookieJar` (shared/injected jar not supported; see below) |
+| `runScripts: "dangerously"` \| `"outside-only"` | |
+| `cookieJar` (shared/injected, tough-cookie-compatible; see below) | |
 | `resources: "usable"` (fetches `<script src>` and `<link rel="stylesheet">`) | |
 | `virtualConsole` (`new VirtualConsole().sendTo(console)`) | |
 | `beforeParse(window)` | |
@@ -244,7 +245,7 @@ dom.window.close();
 
 > [!NOTE]
 > - **Timers & Lifecycle:** The page's timers and `load` event run behind the constructor and do not keep the Node process alive; `await dom.ready` waits for external scripts and the `load` event.
-> - **Cookies:** `document.cookie` works through a small in-memory jar belonging to the page itself (expiry via `max-age` / `expires` included). An external jar cannot be injected or shared between pages (which is what the unsupported `cookieJar` option would do).
+> - **Cookies:** `document.cookie`, the cookies of the page's requests and the `Set-Cookie` headers of its responses all go through the page's jar, with RFC 6265 domain/path scoping, `Secure` and `HttpOnly` (hidden from the page) honoured. Without a `cookieJar` option each page gets a fresh jar of this package's own (`dom.cookieJar`, as in jsdom); pass one — this package's `CookieJar`, or a tough-cookie jar, whose synchronous surface is what is used — to share cookies between pages or to seed them. The engine's `createDOM` / `openPage` take the same option; a page opened without it keeps a small per-page jar of its own.
 
 ---
 

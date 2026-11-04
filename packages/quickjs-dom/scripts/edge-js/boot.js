@@ -19,12 +19,19 @@
       Object.defineProperty(g, k, { configurable: true, writable: true, value: N.protos.Node[k] });
     });
     Object.defineProperty(d, "defaultView", { configurable: true, value: g });
-    // cookies: a jar for the page's own use (nothing is sent anywhere)
+    // cookies: the host's jar when one was given (its hooks ride on __host and are looked up per
+    // access), otherwise a small jar for the page's own use (nothing is sent anywhere)
     var jar = new Map();
     Object.defineProperty(d, "cookie", {
       configurable: true,
-      get: function () { return Array.from(jar.entries()).map(function (e) { return e[0] + "=" + e[1]; }).join("; "); },
+      get: function () {
+        var hooks = g.__host && g.__host.cookieJar;
+        if (hooks) return hooks.get(String(g.location.href));
+        return Array.from(jar.entries()).map(function (e) { return e[0] + "=" + e[1]; }).join("; ");
+      },
       set: function (v) {
+        var hooks = g.__host && g.__host.cookieJar;
+        if (hooks) { hooks.set(String(v), String(g.location.href)); return; }
         var parts = String(v).split(";"), kv = parts[0], i = kv.indexOf("=");
         var name = (i < 0 ? "" : kv.slice(0, i)).trim(), value = i < 0 ? kv.trim() : kv.slice(i + 1).trim();
         var expired = parts.slice(1).some(function (p) {
