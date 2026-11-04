@@ -232,7 +232,18 @@ export default {
       return res;
     } catch (e) {
       const message = e instanceof Error ? e.message : String(e);
-      return json(/timed out/i.test(message) ? 504 : 502, `Could not render or compare the page: ${message}`);
+      const isTimeout = /timed out/i.test(message);
+      const status = isTimeout ? 504 : 502;
+      const errorMsg = `Could not render or compare the page: ${message}`;
+      if (format === "json" || format === "raw") {
+        return json(status, errorMsg);
+      }
+      return new Response(request.method === "HEAD" ? null : renderHome(errorMsg), {
+        status,
+        headers: {
+          "content-type": "text/html; charset=utf-8",
+        },
+      });
     } finally {
       dom?.close();
     }

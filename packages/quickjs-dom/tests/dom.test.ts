@@ -1041,6 +1041,65 @@ describe("beforeScripts", () => {
   });
 });
 
+describe("URLSearchParams and Headers cloning and iterables", () => {
+  it("clones URLSearchParams correctly without breaking into an 'l' property", async () => {
+    const page = await createDOM({ html: "<p>x</p>" }, { settleMs: 0 });
+    try {
+      const res = await page.eval(`(function () {
+        var sp1 = new URLSearchParams("?name=sorakumo001&sort=-4");
+        var sp2 = new URLSearchParams(sp1);
+        var sp3 = new URLSearchParams([["foo", "1"], ["bar", "2"]]);
+        sp1.sort();
+        return JSON.stringify({
+          sp2_name: sp2.get("name"),
+          sp2_sort: sp2.get("sort"),
+          sp2_size: sp2.size,
+          sp2_str: sp2.toString(),
+          sp3_foo: sp3.get("foo"),
+          sp3_bar: sp3.get("bar"),
+          sp1_sorted: sp1.toString()
+        });
+      })()`);
+      expect(JSON.parse(res as string)).toEqual({
+        sp2_name: "sorakumo001",
+        sp2_sort: "-4",
+        sp2_size: 2,
+        sp2_str: "name=sorakumo001&sort=-4",
+        sp3_foo: "1",
+        sp3_bar: "2",
+        sp1_sorted: "name=sorakumo001&sort=-4"
+      });
+    } finally {
+      page.close();
+    }
+  });
+
+  it("clones Headers correctly without breaking into an 'm' property", async () => {
+    const page = await createDOM({ html: "<p>x</p>" }, { settleMs: 0 });
+    try {
+      const res = await page.eval(`(function () {
+        var h1 = new Headers({ "Content-Type": "application/json", "X-Custom": "val" });
+        var h2 = new Headers(h1);
+        var h3 = new Headers([["Accept", "text/plain"], ["X-Test", "123"]]);
+        return JSON.stringify({
+          h2_ct: h2.get("content-type"),
+          h2_custom: h2.get("x-custom"),
+          h3_accept: h3.get("accept"),
+          h3_test: h3.get("x-test")
+        });
+      })()`);
+      expect(JSON.parse(res as string)).toEqual({
+        h2_ct: "application/json",
+        h2_custom: "val",
+        h3_accept: "text/plain",
+        h3_test: "123"
+      });
+    } finally {
+      page.close();
+    }
+  });
+});
+
 describe("many listeners", () => {
   it("adding and removing thousands of listeners is not quadratic, and duplicates are still ignored", async () => {
     const page = await createDOM({ html: "<p>x</p>" }, { settleMs: 0, timeout: 10000 });

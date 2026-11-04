@@ -332,8 +332,99 @@ export function renderHome(error?: string): string {
 </html>`;
 }
 
+/**
+ * Generates the HTML string for diff contents (SSR).
+ */
+function renderDiffContent(activeDiff: DiffResult, layout: "split" | "unified"): string {
+  if (!activeDiff || activeDiff.changes.length === 0) {
+    return '<div class="empty-diff-notice">差分はありません（完全に一致しています）</div>';
+  }
+
+  if (layout === "unified") {
+    let html = '<div class="diff-header unified"><div class="diff-header-col">Unified Diff (赤: JS無効時にのみ存在 / 緑: JS実行で追加)</div></div>';
+    let lineA = 1;
+    let lineB = 1;
+
+    for (const change of activeDiff.changes) {
+      const type = change.type;
+      const escaped = escapeHtml(change.value);
+      const sign = type === "added" ? "+" : type === "removed" ? "-" : " ";
+      const numA = type === "added" ? "" : String(lineA++);
+      const numB = type === "removed" ? "" : String(lineB++);
+
+      html += `<div class="unified-row ${type}">
+        <div class="line-num">${numA}</div>
+        <div class="line-num">${numB}</div>
+        <div class="line-sign">${sign}</div>
+        <div class="line-content">${escaped}</div>
+      </div>`;
+    }
+    return html;
+  }
+
+  // Split (Side-by-Side)
+  let html = `<div class="diff-header">
+    <div class="diff-header-col">JavaScript 無効 (初期 HTML)</div>
+    <div class="diff-header-col">JavaScript 有効 (QuickJS 実行後)</div>
+  </div>`;
+
+  const left: Array<{ type: string; value: string } | null> = [];
+  const right: Array<{ type: string; value: string } | null> = [];
+  let i = 0;
+  const changes = activeDiff.changes;
+
+  while (i < changes.length) {
+    const c = changes[i];
+    if (c.type === "unchanged") {
+      left.push({ type: "unchanged", value: c.value });
+      right.push({ type: "unchanged", value: c.value });
+      i++;
+    } else {
+      const removedChunk: string[] = [];
+      const addedChunk: string[] = [];
+      while (i < changes.length && changes[i].type !== "unchanged") {
+        if (changes[i].type === "removed") removedChunk.push(changes[i].value);
+        if (changes[i].type === "added") addedChunk.push(changes[i].value);
+        i++;
+      }
+      const maxLen = Math.max(removedChunk.length, addedChunk.length);
+      for (let k = 0; k < maxLen; k++) {
+        left.push(k < removedChunk.length ? { type: "removed", value: removedChunk[k] } : null);
+        right.push(k < addedChunk.length ? { type: "added", value: addedChunk[k] } : null);
+      }
+    }
+  }
+
+  let lineLeft = 1;
+  let lineRight = 1;
+  for (let idx = 0; idx < left.length; idx++) {
+    const l = left[idx];
+    const r = right[idx];
+
+    const lClass = l ? l.type : "empty";
+    const rClass = r ? r.type : "empty";
+    const lNum = l ? String(lineLeft++) : "";
+    const rNum = r ? String(lineRight++) : "";
+    const lContent = l ? escapeHtml(l.value) : "";
+    const rContent = r ? escapeHtml(r.value) : "";
+
+    html += `<div class="split-row">
+      <div class="split-cell ${lClass}">
+        <div class="line-num">${lNum}</div>
+        <div class="line-content">${lContent}</div>
+      </div>
+      <div class="split-cell ${rClass}">
+        <div class="line-num">${rNum}</div>
+        <div class="line-content">${rContent}</div>
+      </div>
+    </div>`;
+  }
+  return html;
+}
+
 export function renderViewer(data: ViewerData): string {
   const dataJson = JSON.stringify(data).replace(/</g, "\\u003c");
+  const initialSsrHtml = renderDiffContent(data.textDiff, "split");
 
   return `<!doctype html>
 <html lang="ja">
@@ -358,6 +449,9 @@ export function renderViewer(data: ViewerData): string {
       --btn-active: #1f6feb;
       --btn-bg: #21262d;
       --btn-border: #363b42;
+      --notice-bg: rgba(210, 153, 34, 0.15);
+      --notice-border: rgba(210, 153, 34, 0.4);
+      --notice-text: #d29922;
     }
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -446,6 +540,16 @@ export function renderViewer(data: ViewerData): string {
     .stat-add { color: var(--added-text); font-weight: 600; }
     .stat-del { color: var(--removed-text); font-weight: 600; }
 
+    .noscript-banner {
+      background: var(--notice-bg);
+      border: 1px solid var(--notice-border);
+      color: var(--notice-text);
+      padding: 0.6rem 1rem;
+      border-radius: 6px;
+      font-size: 0.85rem;
+      margin-bottom: 1rem;
+    }
+
     .controls {
       display: flex;
       justify-content: space-between;
@@ -475,6 +579,7 @@ export function renderViewer(data: ViewerData): string {
       overflow-x: auto;
       font-family: ui-monospace, SFMono-Regular, SF Mono, Menlo, Consolas, Liberation Mono, monospace;
       font-size: 0.8125rem;
+      min-height: 120px;
     }
     .diff-header {
       display: grid;
@@ -599,6 +704,12 @@ export function renderViewer(data: ViewerData): string {
     </div>
   </header>
 
+  <noscript>
+    <div class="noscript-banner">
+      ℹ️ JavaScript が無効化されているため、テキスト比較の初期表示のみ行っています。HTML比較やインラインレイアウトへの切り替えには JavaScript を有効にしてください。
+    </div>
+  </noscript>
+
   <div class="controls">
     <div class="btn-group" id="modeGroup">
       <button class="btn active" data-mode="text">テキスト比較 (Text Content)</button>
@@ -611,7 +722,7 @@ export function renderViewer(data: ViewerData): string {
   </div>
 
   <main class="diff-container" id="diffViewer">
-    <!-- Populated by JavaScript -->
+    ${initialSsrHtml}
   </main>
 
   <script>
@@ -620,15 +731,18 @@ export function renderViewer(data: ViewerData): string {
     let currentLayout = "split";
 
     function escapeLine(str) {
-      return str
+      return String(str)
         .replace(/&/g, "&amp;")
         .replace(/</g, "&lt;")
-        .replace(/>/g, "&gt;");
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#39;");
     }
 
     function renderDiff() {
       const activeDiff = currentMode === "text" ? diffData.textDiff : diffData.htmlDiff;
       const viewer = document.getElementById("diffViewer");
+      if (!viewer) return;
 
       if (!activeDiff || activeDiff.changes.length === 0) {
         viewer.innerHTML = '<div class="empty-diff-notice">差分はありません（完全に一致しています）</div>';
@@ -718,26 +832,29 @@ export function renderViewer(data: ViewerData): string {
       }
     }
 
-    document.getElementById("modeGroup").addEventListener("click", (e) => {
-      const btn = e.target.closest("button[data-mode]");
-      if (!btn) return;
-      document.querySelectorAll("#modeGroup .btn").forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
-      currentMode = btn.dataset.mode;
-      renderDiff();
-    });
+    const modeGroup = document.getElementById("modeGroup");
+    if (modeGroup) {
+      modeGroup.addEventListener("click", (e) => {
+        const btn = e.target.closest("button[data-mode]");
+        if (!btn) return;
+        document.querySelectorAll("#modeGroup .btn").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        currentMode = btn.dataset.mode;
+        renderDiff();
+      });
+    }
 
-    document.getElementById("layoutGroup").addEventListener("click", (e) => {
-      const btn = e.target.closest("button[data-layout]");
-      if (!btn) return;
-      document.querySelectorAll("#layoutGroup .btn").forEach(b => b.classList.remove("active"));
-      btn.classList.add("active");
-      currentLayout = btn.dataset.layout;
-      renderDiff();
-    });
-
-    // Initial render
-    renderDiff();
+    const layoutGroup = document.getElementById("layoutGroup");
+    if (layoutGroup) {
+      layoutGroup.addEventListener("click", (e) => {
+        const btn = e.target.closest("button[data-layout]");
+        if (!btn) return;
+        document.querySelectorAll("#layoutGroup .btn").forEach(b => b.classList.remove("active"));
+        btn.classList.add("active");
+        currentLayout = btn.dataset.layout;
+        renderDiff();
+      });
+    }
   </script>
 </body>
 </html>`;

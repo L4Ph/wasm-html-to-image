@@ -8,6 +8,17 @@ const BLOCK_TAGS = /<\/(p|div|h[1-6]|li|tr|blockquote|section|article|header|foo
 const BREAK_TAGS = /<br\s*\/?>/gi;
 const ALL_TAGS = /<[^>]+>/g;
 
+function decodeCodePoint(val: number, orig: string): string {
+  if (Number.isFinite(val) && val >= 0 && val <= 0x10ffff) {
+    try {
+      return String.fromCodePoint(val);
+    } catch {
+      return orig;
+    }
+  }
+  return orig;
+}
+
 function decodeBasicEntities(text: string): string {
   return text
     .replace(/&nbsp;/g, " ")
@@ -16,8 +27,8 @@ function decodeBasicEntities(text: string): string {
     .replace(/&gt;/g, ">")
     .replace(/&quot;/g, '"')
     .replace(/&#39;/g, "'")
-    .replace(/&#(\d+);/g, (_, code) => String.fromCharCode(Number(code)))
-    .replace(/&#x([0-9a-fA-F]+);/g, (_, hex) => String.fromCharCode(parseInt(hex, 16)));
+    .replace(/&#(\d+);/g, (orig, code) => decodeCodePoint(Number(code), orig))
+    .replace(/&#x([0-9a-fA-F]+);/g, (orig, hex) => decodeCodePoint(parseInt(hex, 16), orig));
 }
 
 /**

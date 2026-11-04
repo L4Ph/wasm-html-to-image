@@ -289,14 +289,22 @@
         if (typeof i === "string") {
           i = i.replace(/^\?/, "");
           if (i) for (var p of i.split("&")) { var kv = p.split("="); this.l.push([decodeURIComponent(kv[0].replace(/\+/g, " ")), decodeURIComponent((kv[1] || "").replace(/\+/g, " "))]); }
-        } else if (i) for (var k of Object.keys(i)) this.l.push([k, String(i[k])]);
+        } else if (i && typeof i[Symbol.iterator] === "function") {
+          for (var pair of i) {
+            if (pair) this.l.push([String(pair[0]), String(pair[1])]);
+          }
+        } else if (i && typeof i === "object") {
+          for (var k of Object.keys(i)) this.l.push([k, String(i[k])]);
+        }
       }
+      get size() { return this.l.length; }
       get(k) { var e = this.l.find(function (x) { return x[0] === k; }); return e ? e[1] : null; }
       getAll(k) { return this.l.filter(function (x) { return x[0] === k; }).map(function (x) { return x[1]; }); }
       has(k) { return this.l.some(function (x) { return x[0] === k; }); }
       set(k, v) { this.delete(k); this.l.push([k, String(v)]); }
       append(k, v) { this.l.push([k, String(v)]); }
       delete(k) { this.l = this.l.filter(function (x) { return x[0] !== k; }); }
+      sort() { this.l.sort(function (a, b) { return a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0; }); }
       forEach(f) { var s = this; this.l.forEach(function (e) { f(e[1], e[0], s); }); }
       entries() { return this.l[Symbol.iterator](); }
       keys() { return this.l.map(function (x) { return x[0]; })[Symbol.iterator](); }
@@ -342,7 +350,19 @@
 
   // fetch: the host does the network and hands back text
   g.Headers = g.Headers || class {
-    constructor(i) { this.m = new Map(); if (i) for (var k of Object.keys(i)) this.m.set(k.toLowerCase(), String(i[k])); }
+    constructor(i) {
+      this.m = new Map();
+      if (i) {
+        if (typeof i[Symbol.iterator] === "function") {
+          for (var pair of i) if (pair) this.append(pair[0], pair[1]);
+        } else if (typeof i.forEach === "function") {
+          var s = this;
+          i.forEach(function (v, k) { s.append(k, v); });
+        } else if (typeof i === "object") {
+          for (var k of Object.keys(i)) this.set(k, String(i[k]));
+        }
+      }
+    }
     get(k) { var v = this.m.get(String(k).toLowerCase()); return v == null ? null : v; }
     set(k, v) { this.m.set(String(k).toLowerCase(), String(v)); }
     append(k, v) { k = String(k).toLowerCase(); this.m.set(k, this.m.has(k) ? this.m.get(k) + ", " + v : String(v)); }
