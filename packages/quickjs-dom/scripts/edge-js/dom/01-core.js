@@ -918,6 +918,9 @@
   // it belongs to its nearest form ancestor.
   // Backward compatibility: an element outside the category (a div, say) answers its nearest ancestor form,
   // as it did before the form-owner rules; the owner rules only bind the form-associated elements above.
+  // The over-exposure is deliberate: pages and libraries (and earlier versions of this engine) read
+  // `.form` off any element, so tightening the getter to the form-associated category would break them.
+  // Kept as is; the spec's answer is available through formOwnerOf for the elements that do belong.
   var FORM_ASSOCIATED = { button: true, input: true, select: true, textarea: true, fieldset: true, object: true, output: true };
   var firstElementWithId = function (root, id) {
     if (!root) return null;
