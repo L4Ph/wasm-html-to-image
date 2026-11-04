@@ -25,8 +25,32 @@ export function toBase64(bytes: Uint8Array): string {
   return btoa(s);
 }
 
-// QuickJS recurses on the host's own stack, which is about 1 MB on V8: its limit must stop a runaway script first
+// QuickJS recurses on the wasm's own stack, so its limit must stop a runaway script before that stack runs out (the host
+// has one too: about 1 MB on V8). quickjs.wasm is linked with a 1 MB stack (scripts/build-quickjs.mjs checks it and
+// records the size), leaving this much plus headroom for the frames the host calls back through.
 export const STACK_LIMIT = 192 * 1024;
+
+/** Bytes of stack `wasm` was linked with, from the custom section scripts/build-quickjs.mjs records. */
+function wasmStackBytes(wasm: WebAssembly.Module): number | undefined {
+  const [section] = WebAssembly.Module.customSections(wasm, "quickjs-stack");
+  if (!section || section.byteLength < 4) return undefined;
+  const bytes = new DataView(section).getUint32(0, true);
+  return bytes > 0 ? bytes : undefined;
+}
+
+const clampWarned = new WeakSet<WebAssembly.Module>();
+// Never let QuickJS's limit sit above the real stack: when it does, QuickJS's overflow check cannot fire before the wasm
+// stack is gone. A module without the record (an older build) keeps the default; a smaller stack is clamped to half.
+function stackLimitFor(wasm: WebAssembly.Module): number {
+  const bytes = wasmStackBytes(wasm);
+  if (bytes === undefined || STACK_LIMIT <= bytes / 2) return STACK_LIMIT;
+  const limit = Math.min(STACK_LIMIT, Math.floor(bytes / 2));
+  if (!clampWarned.has(wasm)) {
+    clampWarned.add(wasm);
+    console.warn(`quickjs.wasm has only ${bytes} bytes of stack; limiting scripts to ${limit} (rebuild it with scripts/build-quickjs.mjs)`);
+  }
+  return limit;
+}
 
 export const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -198,7 +222,7 @@ export function openPage(
       },
     },
     MEMORY_LIMIT,
-    STACK_LIMIT,
+    stackLimitFor(wasm),
     // the guest program is started once per module and copied from then on (see QuickJSInstance.create)
     (instance) => {
       const loaded = instance.evalBytecode(guest());
