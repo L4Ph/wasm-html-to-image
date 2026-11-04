@@ -697,8 +697,44 @@
   reflectBool(P.HTMLDirectoryElement, "compact", "compact");
   ["frameBorder", "longDesc", "marginHeight", "marginWidth", "scrolling"].forEach(function (k) { reflectString(P.HTMLFrameElement, k, k.toLowerCase()); });
   reflectBool(P.HTMLFrameElement, "noResize", "noresize");
-  getter(P.HTMLFrameElement, "contentDocument", function () { return null; });
-  getter(P.HTMLFrameElement, "contentWindow", function () { return null; });
+  // Nested browsing contexts are not loaded, but a frame still owns a document: a separate,
+  // blank HTML document (an iframe's srcdoc seeds it) that pages can write into with
+  // doc.open()/write()/close(). This is what renderers such as modern-screenshot expect from
+  // iframe.contentDocument; the page's own document is never touched. contentWindow is the small
+  // window-like object carrying that document (document.defaultView points back at it).
+  var FRAME_DOC = Symbol("frameDocument"), FRAME_SRC = Symbol("frameSrcdoc"), FRAME_WIN = Symbol("frameWindow");
+  var frameDocumentOf = function (el) {
+    var src = el.localName === "iframe" ? el.getAttribute("srcdoc") : null;
+    var cached = el[FRAME_DOC];
+    if (!cached || el[FRAME_SRC] !== src) {
+      cached = D.parse(src === null ? "<!doctype html><html><head></head><body></body></html>" : String(src));
+      if (W.HTMLDocument) Object.setPrototypeOf(cached, W.HTMLDocument.prototype);
+      Object.defineProperty(el, FRAME_DOC, { value: cached, configurable: true });
+      Object.defineProperty(el, FRAME_SRC, { value: src, configurable: true, writable: true });
+      Object.defineProperty(cached, "defaultView", { get: function () { return frameWindowOf(el); }, configurable: true });
+    }
+    return cached;
+  };
+  var frameWindowOf = function (el) {
+    var win = el[FRAME_WIN];
+    if (!win) {
+      win = {};
+      Object.defineProperties(win, {
+        document: { get: function () { return frameDocumentOf(el); }, enumerable: true },
+        window: { value: win, enumerable: true },
+        self: { value: win, enumerable: true },
+        frames: { value: win, enumerable: true },
+        top: { value: win, enumerable: true },
+        parent: { value: win, enumerable: true },
+        frameElement: { value: el, enumerable: true },
+        location: { value: { href: "about:blank", origin: "null", protocol: "about:", host: "", hostname: "", pathname: "blank", search: "", hash: "", toString: function () { return this.href; } }, enumerable: true },
+      });
+      Object.defineProperty(el, FRAME_WIN, { value: win, configurable: true });
+    }
+    return win;
+  };
+  getter(P.HTMLFrameElement, "contentDocument", function () { return frameDocumentOf(this); });
+  getter(P.HTMLFrameElement, "contentWindow", function () { return frameWindowOf(this); });
   reflectString(P.HTMLFrameSetElement, "cols", "cols");
   reflectString(P.HTMLFrameSetElement, "rows", "rows");
   ["behavior", "bgColor", "direction", "width", "height"].forEach(function (k) { reflectString(P.HTMLMarqueeElement, k, k.toLowerCase()); });

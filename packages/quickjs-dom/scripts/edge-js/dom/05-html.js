@@ -246,8 +246,8 @@
     });
     reflectString(P.HTMLIFrameElement, "srcdoc", "srcdoc");
     reflectBool(P.HTMLIFrameElement, "allowFullscreen", "allowfullscreen");
-    getter(P.HTMLIFrameElement, "contentWindow", function () { return null; });
-    getter(P.HTMLIFrameElement, "contentDocument", function () { return null; });
+    getter(P.HTMLIFrameElement, "contentWindow", function () { return frameWindowOf(this); });
+    getter(P.HTMLIFrameElement, "contentDocument", function () { return frameDocumentOf(this); });
     ["min", "max", "step", "pattern", "accept", "autocomplete"].forEach(function (n) { if (!Object.getOwnPropertyDescriptor(P.HTMLInputElement, n)) reflectString(P.HTMLInputElement, n, n); });
     reflectString(P.HTMLInputElement, "formTarget", "formtarget");
     reflectBool(P.HTMLInputElement, "formNoValidate", "formnovalidate");

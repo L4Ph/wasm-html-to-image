@@ -645,7 +645,7 @@ describe("native DOM: element interfaces", () => {
 });
 
 describe("native DOM: members real pages call", () => {
-  it("iterators, walkers, attributes as a live map, title, scrolling no-ops", async () => {
+  it("iterators, walkers, attributes as a live map, title, scroll offsets", async () => {
     expect(
       await run(`
         var doc = N.parse('<html><head><title> My  page </title></head><body><div id=a x=1 y=2><!--c1--><p>t</p><!--c2--></div></body></html>');
@@ -659,7 +659,7 @@ describe("native DOM: members real pages call", () => {
         doc.title = "New"; a.scrollTo({ left: 1 }); a.scrollTop = 5;
         var at = doc.createAttribute("z"); at.value = "9"; a.setAttributeNode(at);
         return [comments.join(), tags.join(), before, attrs.length, a.getAttribute("id"), doc.title, a.getAttribute("z"), a.scrollTop, a.getAttributeNode("z").value];`),
-    ).toEqual(["c1,c2", "p", 3, 1, null, "New", "9", 0, "9"]);
+    ).toEqual(["c1,c2", "p", 3, 1, null, "New", "9", 5, "9"]);
   });
 });
 

@@ -6,7 +6,9 @@
 /** What Node already has and the tests keep using: these are not replaced by the page's. */
 const KEEP = new Set([
   "AbortController", "AbortSignal", "Blob", "File", "FileReader", "FormData", "Headers", "Request", "Response", "URL", "URLSearchParams",
-  "TextEncoder", "TextDecoder", "DOMException", "ReadableStream", "WritableStream", "TransformStream", "MessageChannel", "MessagePort",
+  "TextEncoder", "TextDecoder", "TextEncoderStream", "TextDecoderStream", "CompressionStream", "DecompressionStream",
+  "DOMException", "ReadableStream", "WritableStream", "TransformStream", "ByteLengthQueuingStrategy", "CountQueuingStrategy",
+  "MessageChannel", "MessagePort",
   "BroadcastChannel", "WebSocket", "fetch", "crypto", "performance", "queueMicrotask", "structuredClone", "setTimeout", "setInterval",
   "setImmediate", "clearTimeout", "clearInterval", "clearImmediate", "console", "process", "Buffer", "global", "globalThis", "navigator",
   "atob", "btoa",

@@ -258,6 +258,26 @@ describe("javascript option, QuickJS engine: forms", () => {
     });
   });
 
+  it("a MouseEvent dispatches submit from outside and inside the form, as fireEvent.click does", async () => {
+    const out = await runPageScriptsQuickJS(
+      {
+        html: page(
+          '<form id="f"><input name="q"><button id="inside">go</button></form>' +
+            '<button id="outside" form="f">go</button>' +
+            '<button id="plain" type="button">no</button>',
+          `const f = document.getElementById("f"), seen = [];
+           f.addEventListener("submit", (ev) => { seen.push(ev.submitter ? ev.submitter.id : null); ev.preventDefault(); });
+           for (const id of ["inside", "outside", "plain"]) {
+             document.getElementById(id).dispatchEvent(new MouseEvent("click", { bubbles: true, cancelable: true }));
+           }
+           document.body.setAttribute("data-r", encodeURIComponent(JSON.stringify(seen)));`,
+        ),
+      },
+      { settleMs: 0 },
+    );
+    expect(JSON.parse(decodeURIComponent(/data-r="([^"]*)"/.exec(out.html)![1]))).toEqual(["inside", "outside"]);
+  });
+
   it("select.remove/options.remove, output state and reset, fieldset.elements/type, image submit, range and date values", async () => {
     const out = await runPageScriptsQuickJS(
       {
@@ -773,6 +793,90 @@ describe("createDOM: logs of what happened in the page", () => {
     } finally {
       dom.close();
       server.close();
+    }
+  });
+});
+
+describe("createDOM: frames and scrolling", () => {
+  it("an iframe owns a separate document: srcdoc seeds it and open()/write() fill it", async () => {
+    const dom = await createDOM(
+      { html: '<iframe id="f" srcdoc="&lt;p id=s&gt;seed&lt;/p&gt;"></iframe>' },
+      { settleMs: 0 },
+    );
+    try {
+      const info = await dom.eval(() => {
+        const f = document.getElementById("f") as HTMLIFrameElement;
+        const d = f.contentDocument!;
+        const w = f.contentWindow!;
+        const first = [
+          d !== document,
+          d.querySelector("#s")?.textContent,
+          d.defaultView === w,
+          w.document === d,
+          d.contentType,
+        ];
+        d.open();
+        d.write("<html><body><div class=cover>cover</div></body></html>");
+        d.close();
+        return {
+          first,
+          cover: d.querySelector(".cover")?.textContent,
+          body: d.body.textContent,
+          same: f.contentDocument === d,
+        };
+      });
+      expect(info).toEqual({
+        first: [true, "seed", true, true, "text/html"],
+        cover: "cover",
+        body: "cover",
+        same: true,
+      });
+    } finally {
+      dom.close();
+    }
+  });
+
+  it("scrollTop/scrollLeft hold what the page writes, and scrollTo/scrollBy move them", async () => {
+    const dom = await createDOM({ html: '<div id="a"></div>' }, { settleMs: 0 });
+    try {
+      expect(
+        await dom.eval(() => {
+          const a = document.getElementById("a") as HTMLElement;
+          a.scrollTop = 50;
+          a.scrollLeft = 20;
+          return [a.scrollTop, a.scrollLeft];
+        }),
+      ).toEqual([50, 20]);
+      expect(
+        await dom.eval(() => {
+          const a = document.getElementById("a") as HTMLElement;
+          a.scrollTo(10, 30);
+          return [a.scrollTop, a.scrollLeft];
+        }),
+      ).toEqual([30, 10]);
+      expect(
+        await dom.eval(() => {
+          const a = document.getElementById("a") as HTMLElement;
+          a.scrollTo({ top: 77 }); // a dict leaves the axis it does not name alone
+          return [a.scrollTop, a.scrollLeft];
+        }),
+      ).toEqual([77, 10]);
+      expect(
+        await dom.eval(() => {
+          const a = document.getElementById("a") as HTMLElement;
+          a.scrollBy(5, 3);
+          return [a.scrollTop, a.scrollLeft];
+        }),
+      ).toEqual([80, 15]);
+      expect(
+        await dom.eval(() => {
+          const a = document.getElementById("a") as HTMLElement;
+          a.scrollTop = -5;
+          return a.scrollTop;
+        }),
+      ).toBe(0);
+    } finally {
+      dom.close();
     }
   });
 });

@@ -548,15 +548,49 @@
   };
   def(P.Element, "getBoundingClientRect", zeroRect);
   def(P.Element, "getClientRects", function () { return []; });
-  ["offsetWidth", "offsetHeight", "offsetLeft", "offsetTop", "clientWidth", "clientHeight", "scrollWidth", "scrollHeight", "scrollTop", "scrollLeft"].forEach(function (k) {
+  ["offsetWidth", "offsetHeight", "offsetLeft", "offsetTop", "clientWidth", "clientHeight", "scrollWidth", "scrollHeight"].forEach(function (k) {
     getter(P.Element, k, function () { return 0; });
   });
 
-  // scrolling, animation and the like: there is no viewport, so these do nothing (and do not throw)
+  // Scroll offsets are state, even without layout: pages write them (scrollToElementById reads
+  // container.scrollTop, CategoryChipNav adds to scrollLeft) and read back what they wrote.
+  // Browsers clamp to the scrollable range; with no layout there is no range, so only negatives
+  // clamp to zero. No scroll event is fired (the page never sees a paint).
+  var SCROLL = Symbol("scroll");
+  var scrollOf = function (el) {
+    var s = el[SCROLL];
+    if (!s) Object.defineProperty(el, SCROLL, { value: { top: 0, left: 0 }, configurable: true });
+    return el[SCROLL];
+  };
+  var scrollNumber = function (v) {
+    var n = Number(v);
+    return isFinite(n) && n > 0 ? n : 0;
+  };
+  var setScroll = function (el, axis, v) { scrollOf(el)[axis] = scrollNumber(v); };
   ["scrollTop", "scrollLeft"].forEach(function (k) {
-    getter(P.Element, k, function () { return 0; }, function () {});
+    var axis = k === "scrollTop" ? "top" : "left";
+    getter(P.Element, k, function () { return scrollOf(this)[axis]; }, function (v) { setScroll(this, axis, v); });
   });
-  ["scroll", "scrollTo", "scrollBy", "scrollIntoView", "scrollIntoViewIfNeeded", "setPointerCapture", "releasePointerCapture", "requestFullscreen", "requestPointerLock"].forEach(function (k) {
+  var scrollDeltas = function (x, y) {
+    if (x && typeof x === "object") return { left: x.left, top: x.top };
+    return { left: x, top: y };
+  };
+  // scrollTo/scroll: set (both axes, or only the ones given), scrollBy: add. A dict without
+  // left/top leaves that axis alone, as the CSSOM View spec says.
+  var scrollTo = function (el, x, y) {
+    var d = scrollDeltas(x, y);
+    if (d.left !== undefined) setScroll(el, "left", d.left);
+    if (d.top !== undefined) setScroll(el, "top", d.top);
+  };
+  def(P.Element, "scrollTo", function (x, y) { scrollTo(this, x, y); });
+  def(P.Element, "scroll", function (x, y) { scrollTo(this, x, y); });
+  def(P.Element, "scrollBy", function (x, y) {
+    var d = scrollDeltas(x, y), s = scrollOf(this);
+    if (d.left !== undefined) s.left = Math.max(0, s.left + (isFinite(Number(d.left)) ? Number(d.left) : 0));
+    if (d.top !== undefined) s.top = Math.max(0, s.top + (isFinite(Number(d.top)) ? Number(d.top) : 0));
+  });
+  // scrolling into view, animation and the like: there is no viewport, so these do nothing (and do not throw)
+  ["scrollIntoView", "scrollIntoViewIfNeeded", "setPointerCapture", "releasePointerCapture", "requestFullscreen", "requestPointerLock"].forEach(function (k) {
     def(P.Element, k, function () {});
   });
   def(P.Element, "hasPointerCapture", function () { return false; });
@@ -1083,7 +1117,8 @@
         }
         return Reflect.get(t, k, r);
       },
-      has: function (t, k) { return typeof k === "string" && index.test(k) ? Number(k) < nodes.length : Reflect.has(t, k); },
+      // length is not on NodeList.prototype, and chai's `toHaveLength` asks `"length" in list`
+      has: function (t, k) { return k === "length" ? true : typeof k === "string" && index.test(k) ? Number(k) < nodes.length : Reflect.has(t, k); },
       ownKeys: function () {
         var keys = [];
         for (var i = 0; i < nodes.length; i++) keys.push(String(i));
