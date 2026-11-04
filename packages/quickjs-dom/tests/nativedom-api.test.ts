@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDOM, type QuickJSDOM } from "../src/index.js";
 import { JSDOM } from "jsdom";
 
@@ -704,6 +704,41 @@ describe("Storage and Intl", () => {
       expect(w.eval('[...new Intl.Segmenter("en", { granularity: "word" }).segment("hi there!")].filter((s) => s.isWordLike).map((s) => s.segment).join()')).toBe("hi,there");
       expect(w.eval('new Intl.PluralRules("en").select(1) + new Intl.PluralRules("en").select(2)')).toBe("oneother");
       expect(w.eval('new Intl.ListFormat("en").format(["a", "b", "c"])')).toBe("a, b, and c");
+    } finally {
+      dom.close();
+    }
+  });
+});
+
+describe("Storage from the host side", () => {
+  // issue #27: window.localStorage reached the host as a dynamic wrapper, so the host's Storage had no prototype and
+  // vi.spyOn(Storage.prototype, "setItem") had nothing to patch
+  it("Storage.prototype carries the standard methods; localStorage is a Storage with the same prototype", async () => {
+    const dom = await createDOM({ html: "<body></body>" }, { settleMs: 0 });
+    try {
+      const w = dom.bridge().window as any;
+      const Storage = w.Storage;
+      expect(typeof Storage).toBe("function");
+      for (const m of ["getItem", "setItem", "removeItem", "clear", "key"]) {
+        expect([m, typeof Storage.prototype[m]]).toEqual([m, "function"]);
+        expect(Object.getOwnPropertyDescriptor(Storage.prototype, m)).toMatchObject({ writable: true, configurable: true });
+      }
+      expect(typeof Object.getOwnPropertyDescriptor(Storage.prototype, "length")?.get).toBe("function");
+      expect(w.localStorage instanceof Storage).toBe(true);
+      expect(w.sessionStorage instanceof Storage).toBe(true);
+      expect(Object.getPrototypeOf(w.localStorage)).toBe(Storage.prototype);
+
+      const spy = vi.spyOn(Storage.prototype, "setItem");
+      try {
+        w.localStorage.setItem("k", "v");
+        expect(spy).toHaveBeenCalledWith("k", "v");
+        expect(w.localStorage.getItem("k")).toBe("v");
+        expect(w.localStorage.length).toBe(1);
+      } finally {
+        spy.mockRestore();
+      }
+      w.localStorage.clear();
+      expect(w.localStorage.length).toBe(0);
     } finally {
       dom.close();
     }

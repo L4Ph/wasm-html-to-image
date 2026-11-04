@@ -273,10 +273,16 @@ export default defineConfig({
         url: "http://localhost:3000",
         // Any JSDOMOptions (html, resources: "usable", etc.)
       },
+      // An existing jsdom setup keeps working: its options are the defaults,
+      // and wasmQuickjsDom overrides them.
+      jsdom: { url: "http://localhost:3000" },
     },
   },
 });
 ```
+
+> [!NOTE]
+> Options are resolved in this order: `environmentOptions.wasmQuickjsDom`, then `environmentOptions.jsdom` (the options of Vitest's `jsdom` environment), then the top-level `environmentOptions.url`; the first value present wins. `html` likewise falls back to `jsdom.html`, so a config written for `jsdom` does not need to move either option.
 
 ### Jest Configuration
 
@@ -462,10 +468,11 @@ npx wasm-quickjs-dom https://example.com/ --protocol https: --block-private --lo
 - **Frameworks:** React 18+, Next.js client hydration, Preact, Vue, and standard SPA routers (`history.pushState` / `replaceState`).
 - **Network:** `fetch` and `XMLHttpRequest` (binary-safe via base64 bridge), `Headers`, `Request`, `Response`, `AbortController`, `TextEncoder` / `TextDecoder`, `URL` / `URLSearchParams`, `Blob`, `FormData`, Web Streams.
 - **DOM & Selectors:** Full C-backed DOM tree manipulation, live HTMLCollections, `<template>`, Shadow DOM (`attachShadow`; shadow trees are not serialized), Custom Elements (`customElements.define`), `DOMParser`, `Range` & `Selection` (live-updated on tree mutations), and a native CSS selector engine (`:not`, `:is`, `:has`, `:nth-child`, attribute operators).
+- **Forms:** The `form` attribute associates controls (`input`, `button`, `select`, `textarea`, `fieldset`, `object`, `output`) with a form outside their subtree, with no fallback to an ancestor form when the named form does not exist. `form.elements` / `form.length` include those external controls, clicking a submit button submits its owner form, and `form.requestSubmit(submitter)` fires a `SubmitEvent` whose `submitter` is the button (it throws `TypeError` for a non-submit button and `NotFoundError` for a button owned by another form).
 - **CSS & `getComputedStyle`:** Cascades `<style>` tags, inline `style` attributes, and external `<link rel="stylesheet">` (fetched by default; `stylesheets: false` skips them, while the JSDOM facade fetches them with `resources: "usable"`). Supports selector specificity, `!important`, inheritance, `@media` width queries, `var()` custom properties, color normalization to `rgb()`, unit conversion (`em`, `rem`, `pt`, `cm`, `in`, etc. to `px`), and `calc()` / `min()` / `max()` / `clamp()`.
 - **Observers & Timers:** `MutationObserver`, `setTimeout` / `setInterval`, `requestAnimationFrame`, `queueMicrotask`. `IntersectionObserver` and `ResizeObserver` fire once immediately upon `.observe()` so lazy-loaded components render automatically.
 - **SVG Geometry (approximate):** `getBBox()`, `getTotalLength()`, and `getPointAtLength()` are computed from SVG shape and path attributes, not from a real layout (see the [limitations](#what-does-not-work) below).
-- **Storage & Crypto:** In-memory `localStorage`, `sessionStorage`, `document.cookie`, and `crypto.getRandomValues` / `crypto.randomUUID` (backed by `Math.random`, not a CSPRNG).
+- **Storage & Crypto:** In-memory `localStorage`, `sessionStorage`, `document.cookie`, and `crypto.getRandomValues` / `crypto.randomUUID` (backed by `Math.random`, not a CSPRNG). `Storage.prototype` carries the standard methods (`getItem`, `setItem`, `removeItem`, `clear`, `key`, `length`), so host-side test helpers such as `vi.spyOn(Storage.prototype, "setItem")` work as they do with jsdom.
 
 ### What Does Not Work
 

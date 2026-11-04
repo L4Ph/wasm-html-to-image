@@ -22,11 +22,17 @@ export default {
   viteEnvironment: "client",
   setup(global, options) {
     const given = (options?.wasmQuickjsDom ?? {}) as JSDOMOptions & { html?: string };
-    const dom = new JSDOM(given.html ?? "<!DOCTYPE html>", {
-      url: "http://localhost/",
+    const jsdomOpts = (options?.jsdom ?? {}) as JSDOMOptions & { html?: string };
+    // html and url are settled here, not left in the spreads: an `undefined` in one source must not erase the
+    // fallback the other offers, so they are taken out of both option objects and set last.
+    const { html: givenHtml, url: givenUrl, ...givenRest } = given;
+    const { html: jsdomHtml, url: jsdomUrl, ...jsdomRest } = jsdomOpts;
+    const dom = new JSDOM(givenHtml ?? jsdomHtml ?? "<!DOCTYPE html>", {
       pretendToBeVisual: true,
       runScripts: "dangerously",
-      ...given,
+      ...jsdomRest,
+      ...givenRest,
+      url: givenUrl ?? jsdomUrl ?? options?.url ?? "http://localhost/",
     });
     const uninstall = installWindow(global, dom.window);
     return {

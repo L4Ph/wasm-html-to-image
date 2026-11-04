@@ -149,8 +149,9 @@
   var radiosOf = function (el) {
     var name = el.getAttribute("name");
     if (!name) return [el];
-    var scope = el.form || el.getRootNode();
-    return Array.prototype.filter.call(scope.querySelectorAll("input[type=radio]"), function (r) { return r.getAttribute("name") === name && r.form === el.form; });
+    var form = el.form, scope = form || el.getRootNode();
+    var radios = form ? form.elements : scope.querySelectorAll("input[type=radio]");
+    return Array.prototype.filter.call(radios, function (r) { return r.localName === "input" && r.type === "radio" && r.getAttribute("name") === name && r.form === form; });
   };
   var preActivate = function (el, ev) {
     var type = (el.getAttribute("type") || "").toLowerCase();

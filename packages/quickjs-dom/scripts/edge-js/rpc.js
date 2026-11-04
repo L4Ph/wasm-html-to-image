@@ -17,6 +17,10 @@
     };
     Object.keys(D.ctors).forEach(function (k) { add(k, D.ctors[k]); });
     Object.keys(D.window).forEach(function (k) { add(k, D.window[k]); });
+    // interfaces boot.js and shims.js define on the guest's globals after nativedom.js built D: without them the host
+    // gets their instances as dynamic wrappers (no prototype, no methods) instead of instances of their class.
+    // Object.keys, not getOwnPropertyNames: the language's own globals are non-enumerable, the page's are not.
+    Object.keys(g).forEach(function (k) { add(k, g[k]); });
   };
   var INDEXED = ["NodeList", "HTMLCollection", "NamedNodeMap", "DOMTokenList", "HTMLOptionsCollection", "HTMLFormControlsCollection"];
 

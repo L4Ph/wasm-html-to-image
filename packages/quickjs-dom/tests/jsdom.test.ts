@@ -2,6 +2,7 @@ import { createServer } from "node:http";
 import { JSDOM as RealJSDOM } from "jsdom";
 import { afterEach, describe, expect, it } from "vitest";
 import { CookieJar, JSDOM, VirtualConsole } from "../src/jsdom.js";
+import vitestEnvironment from "../src/vitest.js";
 
 // `new JSDOM(html, options)` as jsdom's documentation uses it, from the host, with jsdom itself as the reference.
 
@@ -326,6 +327,29 @@ describe("JSDOM: cookieJar", () => {
       expect(dom.window.document.cookie).toBe("srv=1; echo=2");
     } finally {
       server.close();
+    }
+  });
+});
+
+describe("the Vitest environment: options", () => {
+  it("falls back to test.environmentOptions.jsdom.url, and wasmQuickjsDom wins", () => {
+    const fromJsdom: Record<string, any> = {};
+    const first = vitestEnvironment.setup(fromJsdom, { jsdom: { url: "https://example.test/jsdom" } });
+    try {
+      expect(fromJsdom.document.URL).toBe("https://example.test/jsdom");
+    } finally {
+      first.teardown(fromJsdom);
+    }
+
+    const fromWasm: Record<string, any> = {};
+    const second = vitestEnvironment.setup(fromWasm, {
+      jsdom: { url: "https://example.test/jsdom" },
+      wasmQuickjsDom: { url: "https://example.test/wasm" },
+    });
+    try {
+      expect(fromWasm.document.URL).toBe("https://example.test/wasm");
+    } finally {
+      second.teardown(fromWasm);
     }
   });
 });

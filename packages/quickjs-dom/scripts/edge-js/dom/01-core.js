@@ -867,7 +867,29 @@
     var group = radiosOf(el);
     for (var i = 0; i < group.length; i++) if (group[i] !== el) group[i][CHK] = false;
   };
-  getter(P.HTMLElement, "form", function () { return this.closest("form"); });
+  // the form owner (https://html.spec.whatwg.org/multipage/form-control-infrastructure.html#form-owner):
+  // a form-associated element with a form attribute belongs to the form whose id that is, in its own
+  // tree — and to no form at all when there is none (no fallback to an ancestor); without the attribute
+  // it belongs to its nearest form ancestor.
+  // Backward compatibility: an element outside the category (a div, say) answers its nearest ancestor form,
+  // as it did before the form-owner rules; the owner rules only bind the form-associated elements above.
+  var FORM_ASSOCIATED = { button: true, input: true, select: true, textarea: true, fieldset: true, object: true, output: true };
+  var firstElementWithId = function (root, id) {
+    if (!root) return null;
+    if (typeof root.getElementById === "function") return root.getElementById(id);
+    var found = root.querySelectorAll("[id]");
+    for (var i = 0; i < found.length; i++) if (found[i].getAttribute("id") === id) return found[i];
+    return null;
+  };
+  var formOwnerOf = function (el) {
+    if (!FORM_ASSOCIATED[el.localName]) return el.closest("form");
+    var id = el.getAttribute("form");
+    if (id === null) return el.closest("form");
+    if (id === "") return null;
+    var form = firstElementWithId(el.getRootNode ? el.getRootNode() : el.ownerDocument, id);
+    return form && form.localName === "form" ? form : null;
+  };
+  getter(P.HTMLElement, "form", function () { return formOwnerOf(this); });
   getter(P.HTMLElement, "isContentEditable", function () { return this.getAttribute("contenteditable") !== null && this.getAttribute("contenteditable") !== "false"; });
 
   // Shadow DOM: a shadow root is a fragment hanging off the host (it is not a child, and not serialised).
@@ -1119,10 +1141,16 @@
     return undefined;
   };
   getter(P.HTMLFormElement, "elements", function () {
+    // listed elements whose form owner is this form, including the ones outside it that name it
+    // with form="id", in tree order
     var form = this;
-    return liveCollection(function () { return Array.prototype.slice.call(form.querySelectorAll(CONTROLS)); }, true, "HTMLFormControlsCollection", formNamedItem);
+    return liveCollection(function () {
+      var root = form.getRootNode ? form.getRootNode() : form.ownerDocument;
+      var all = root.querySelectorAll(CONTROLS);
+      return Array.prototype.filter.call(all, function (el) { return el.form === form; });
+    }, true, "HTMLFormControlsCollection", formNamedItem);
   });
-  getter(P.HTMLFormElement, "length", function () { return this.querySelectorAll(CONTROLS).length; });
+  getter(P.HTMLFormElement, "length", function () { return this.elements.length; });
   getter(P.HTMLSelectElement, "options", function () {
     var select = this;
     return liveCollection(function () { return Array.prototype.slice.call(select.querySelectorAll("option")); }, false, "HTMLOptionsCollection");
@@ -1155,7 +1183,8 @@
     // the event goes first and can cancel the reset; the reset itself returns every control to
     // its defaults by clearing the state that parted from them (value, checkedness, selectedness)
     if (!this.dispatchEvent(new W.Event("reset", { bubbles: true, cancelable: true }))) return;
-    var controls = this.querySelectorAll(CONTROLS);
+    // by form owner, not by containment: controls outside the form that name it with form="id" reset too
+    var controls = this.elements;
     for (var i = 0; i < controls.length; i++) {
       var c = controls[i];
       if (c.localName === "input" || c.localName === "textarea") { c[VAL] = undefined; if (c.localName === "input") c[CHK] = undefined; }
@@ -1165,8 +1194,26 @@
       }
     }
   });
-  def(P.HTMLFormElement, "requestSubmit", function () {
-    if (this.dispatchEvent(new W.Event("submit", { bubbles: true, cancelable: true }))) { /* navigation: none here */ }
+  // a submit button is the only thing requestSubmit accepts as the submitter
+  var isSubmitButton = function (el) {
+    if (!el || el.nodeType !== 1) return false;
+    if (el.localName === "button") return el.type === "submit";
+    if (el.localName === "input") return el.type === "submit" || el.type === "image";
+    return false;
+  };
+  def(P.HTMLFormElement, "requestSubmit", function (submitter) {
+    // as jsdom (and the spec): reject a submitter that is not a submit button, or that belongs to
+    // another form, then fire a SubmitEvent carrying it (null when none was given)
+    submitter = submitter === undefined ? null : submitter;
+    if (submitter !== null) {
+      if (!isSubmitButton(submitter)) {
+        throw new TypeError("Failed to execute 'requestSubmit' on 'HTMLFormElement': The specified element is not a submit button.");
+      }
+      if (formOwnerOf(submitter) !== this) {
+        throw new DOMException("Failed to execute 'requestSubmit' on 'HTMLFormElement': The specified element is not owned by this form element.", "NotFoundError");
+      }
+    }
+    this.dispatchEvent(new W.SubmitEvent("submit", { bubbles: true, cancelable: true, submitter: submitter }));
   });
   def(P.HTMLFormElement, "submit", function () { /* navigation: none here */ });
 

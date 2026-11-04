@@ -215,6 +215,50 @@ describe("javascript option, QuickJS engine: browser APIs that apps use", () => 
   });
 });
 
+describe("javascript option, QuickJS engine: forms", () => {
+  it("a submit button outside a form submits it, through its form attribute", async () => {
+    const out = await runPageScriptsQuickJS(
+      {
+        html: page(
+          '<form id="f"><input name="inside"></form>' +
+            '<input id="ext" name="ext" form="f">' +
+            '<button id="go" form="f">go</button>' +
+            '<div><form id="other"></form><button id="orphan" form="nope">no</button></div>',
+          `const f = document.getElementById("f"), go = document.getElementById("go"), ext = document.getElementById("ext");
+           const seen = [];
+           f.addEventListener("submit", (ev) => { seen.push([ev instanceof SubmitEvent, ev.submitter ? ev.submitter.id : null]); ev.preventDefault(); });
+           go.click();          // activation reaches the form through form="f"
+           f.requestSubmit();   // no submitter: the event carries null
+           let foreign = "none";
+           try { f.requestSubmit(document.getElementById("orphan")); } catch (e) { foreign = e.name; }
+           document.body.setAttribute("data-r", encodeURIComponent(JSON.stringify({
+             seen: seen,
+             form: go.form === f,
+             ext: ext.form === f,
+             elements: f.elements.length,
+             length: f.length,
+             named: f.elements.ext === ext,
+             orphan: document.getElementById("orphan").form, // no fallback to the ancestor form
+             foreign: foreign,
+           })));`,
+        ),
+      },
+      { settleMs: 0 },
+    );
+    const info = JSON.parse(decodeURIComponent(/data-r="([^"]*)"/.exec(out.html)![1]));
+    expect(info).toEqual({
+      seen: [[true, "go"], [true, null]],
+      form: true,
+      ext: true,
+      elements: 3, // the two inputs inside the form, plus the external one
+      length: 3,
+      named: true,
+      orphan: null,
+      foreign: "NotFoundError",
+    });
+  });
+});
+
 describe("javascript option, QuickJS engine: client-side routing", () => {
   it("routers can fire popstate/hashchange events after pushState", async () => {
     const out = await runPageScriptsQuickJS(
