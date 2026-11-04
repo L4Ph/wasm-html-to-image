@@ -1,7 +1,9 @@
 // getComputedStyle and document.styleSheets: the style sheets of the page's <style> elements and the style attributes,
 // cascaded (importance, specificity, order), inherited, with the browser's defaults for display and a few others.
 // Lengths come out in px (em / rem / absolute units; calc(), min(), max(), clamp() when they hold no percentages), custom
-// properties are inherited and substituted by var(), and <link rel=stylesheet> sheets count once the host has loaded them.
+// properties are inherited and substituted by var(), <link rel=stylesheet> sheets count once the host has loaded them,
+// and document.adoptedStyleSheets count as soon as they are assigned. @supports is evaluated like CSS.supports; @layer
+// blocks cascade as ordinary rules (layer order is not modelled) and @container is not evaluated (it needs a layout).
 // Not computed: layout (sizes stay "auto" or as declared), percentages, pseudo-elements.
 (function (g) {
   var D = g.__native.dom;
@@ -179,6 +181,14 @@
   };
   var weight = function (sp) { return sp[0] * 1000000 + sp[1] * 1000 + sp[2]; };
 
+  // @supports asks the same CSS.supports the page sees (boot.js), so a sheet and a script agree on a feature
+  var supportsOk = function (condition) {
+    try {
+      return !!(g.CSS && typeof g.CSS.supports === "function" && g.CSS.supports(String(condition || "")));
+    } catch (e) {
+      return false;
+    }
+  };
   // rules: { selector, weight, decls, media }
   var parseSheet = function (text) {
     var rules = [];
@@ -195,7 +205,16 @@
           if (s.charAt(stop) !== "{") { i = stop + 1; continue; }
           var end = matchingBrace(s, stop);
           if (at === "media") run(s.slice(stop + 1, end), media.concat([s.slice(nameEnd, stop).trim()]));
-          else if (at === "supports" || at === "layer" || at === "container") run(s.slice(stop + 1, end), media);
+          else if (at === "supports") {
+            if (supportsOk(s.slice(nameEnd, stop).trim())) run(s.slice(stop + 1, end), media);
+          } else if (at === "layer") {
+            // A layer block still cascades as ordinary rules. Layer priority (an unlayered rule beating a layered one,
+            // and the order between layers) is a non-goal here: no rule is dropped, but the ordering may differ.
+            run(s.slice(stop + 1, end), media);
+          } else if (at === "container") {
+            // @container needs the size of a query container, which this layout-free engine does not have. The rules are
+            // left out rather than applied unconditionally (a non-goal; the renderer's own layout evaluates them).
+          }
           i = end + 1;
           continue;
         }
@@ -251,9 +270,26 @@
     sheetCache = new WeakMap();
     memo = { v: -1, m: new WeakMap() };
   };
+  // the document's adopted style sheets are part of the cascade but are not serialized (shadow roots are separate)
+  var adoptedSheetsOf = function (root) {
+    try { return root && root.adoptedStyleSheets ? Array.prototype.slice.call(root.adoptedStyleSheets) : []; } catch (e) { return []; }
+  };
+  var sheetText = function (sheet) { return sheet && typeof sheet._text === "string" ? sheet._text : ""; };
+  // replaceSync / insertRule / deleteRule change a sheet without a DOM mutation: its revision (and length, for a sheet
+  // this file did not make) is part of the cache key, without copying a large sheet's text on every style read
+  var sheetMark = function (sheet) {
+    if (sheet && typeof sheet._rev === "number") return sheet._rev + ":" + sheetText(sheet).length;
+    return sheetText(sheet);
+  };
+  var adoptedSignature = function (root) {
+    var list = adoptedSheetsOf(root), sig = "";
+    for (var i = 0; i < list.length; i++) sig += (list[i] && list[i].disabled ? "1" : "0") + sheetMark(list[i]) + "\u0000";
+    return sig;
+  };
   var documentRules = function (doc) {
-    var v = D.version(), have = sheetCache.get(doc);
-    if (have && have.v === v) return have.rules;
+    var v = D.version(), adopted = adoptedSheetsOf(doc), sig = adoptedSignature(doc);
+    var have = sheetCache.get(doc);
+    if (have && have.v === v && have.sig === sig) return have.rules;
     var rules = [], order = 0;
     var styles = doc.querySelectorAll("style, link");
     for (var i = 0; i < styles.length; i++) {
@@ -267,7 +303,16 @@
       if (css === undefined) continue;
       rulesOf(css).forEach(function (r) { rules.push({ selector: r.selector, weight: r.weight, decls: r.decls, media: base.concat(r.media), order: order++ }); });
     }
-    sheetCache.set(doc, { v: v, rules: rules });
+    // adopted sheets come after the document's own sheets, in adoptedStyleSheets order
+    for (var j = 0; j < adopted.length; j++) {
+      var sh = adopted[j];
+      if (!sh || sh.disabled) continue;
+      var mt = sh.media && sh.media.mediaText ? [sh.media.mediaText] : [];
+      (function (base) {
+        rulesOf(sheetText(sh)).forEach(function (r) { rules.push({ selector: r.selector, weight: r.weight, decls: r.decls, media: base.concat(r.media), order: order++ }); });
+      })(mt);
+    }
+    sheetCache.set(doc, { v: v, sig: sig, rules: rules });
     return rules;
   };
 
@@ -376,7 +421,8 @@
   // what was computed since the document last changed
   var memo = { v: -1, m: new WeakMap() };
   var computedOf = function (el, depth) {
-    var version = D.version();
+    // adopted sheet edits (replaceSync and friends) are not DOM mutations, so their revisions are part of the version
+    var version = D.version() + "|" + (el.ownerDocument ? adoptedSignature(el.ownerDocument) : "");
     if (memo.v !== version) memo = { v: version, m: new WeakMap() };
     var known = memo.m.get(el);
     if (known) return known;
@@ -966,21 +1012,23 @@
       }
     }));
   };
-  // constructable sheets (new CSSStyleSheet(), replaceSync, adoptedStyleSheets): they hold rules but do not enter the cascade
+  // constructable sheets (new CSSStyleSheet(), replaceSync, adoptedStyleSheets): adopted ones enter the cascade through
+  // documentRules, but they stay out of document.styleSheets and of the serialized page, as in a browser
   if (!g.CSSStyleSheet) {
     g.CSSStyleRule = CSSStyleRule;
     g.CSSStyleSheet = class CSSStyleSheet {
-      constructor(opts) { this._text = ""; this.media = makeMediaList((opts && opts.media) || ""); this.disabled = !!(opts && opts.disabled); this.ownerNode = null; this.parentStyleSheet = null; this.href = null; this.type = "text/css"; this.title = null; }
+      constructor(opts) { this._text = ""; this._rev = 0; this.media = makeMediaList((opts && opts.media) || ""); this.disabled = !!(opts && opts.disabled); this.ownerNode = null; this.parentStyleSheet = null; this.href = null; this.type = "text/css"; this.title = null; }
       get cssRules() { var r = parseSheetFlat(this._text); stampSheet(r, this); return r; }
       get rules() { return this.cssRules; }
-      replaceSync(text) { this._text = String(text); }
-      replace(text) { this._text = String(text); return Promise.resolve(this); }
+      replaceSync(text) { this._text = String(text); this._rev++; }
+      replace(text) { this._text = String(text); this._rev++; return Promise.resolve(this); }
       insertRule(rule, index) {
         var list = splitRules(stripComments(this._text));
         index = index === undefined ? 0 : index;
         if (index < 0 || index > list.length) throw domErr("IndexSizeError", "Failed to execute 'insertRule' on 'CSSStyleSheet': the index " + index + " is greater than the length of the rule list.");
         list.splice(index, 0, String(rule));
         this._text = list.join("\n");
+        this._rev++;
         return index;
       }
       deleteRule(index) {
@@ -988,6 +1036,7 @@
         if (index < 0 || index >= list.length) throw domErr("IndexSizeError", "Failed to execute 'deleteRule' on 'CSSStyleSheet': the index " + index + " is greater than the length of the rule list.");
         list.splice(index, 1);
         this._text = list.join("\n");
+        this._rev++;
       }
     };
   }

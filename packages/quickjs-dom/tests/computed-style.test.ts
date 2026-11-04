@@ -133,6 +133,47 @@ describe("document.styleSheets", () => {
   });
 });
 
+describe("adoptedStyleSheets", () => {
+  it("cascades after the document's sheets, follows replaceSync, and stays out of the serialized page", () => {
+    const dom = make(`<!doctype html><html><head><style>p { color: blue }</style></head><body><p id=p>t</p></body></html>`);
+    const { window } = dom;
+    const sheet = new window.CSSStyleSheet();
+    sheet.replaceSync("p { color: red; margin-top: 7px }");
+    window.document.adoptedStyleSheets = [sheet];
+    const p = window.document.getElementById("p");
+    // same specificity as the <style> rule, but adopted sheets come later in the cascade
+    expect(window.getComputedStyle(p).color).toBe("rgb(255, 0, 0)");
+    expect(window.getComputedStyle(p).marginTop).toBe("7px");
+    expect(window.document.styleSheets.length).toBe(1); // adopted sheets are not <style> sheets
+    expect(dom.serialize()).not.toContain("rgb(255, 0, 0)"); // and they are not serialized into the page
+    sheet.replaceSync("p { color: green }"); // no DOM mutation: the cached cascade still has to see it
+    expect(window.getComputedStyle(p).color).toBe("rgb(0, 128, 0)");
+    expect(window.getComputedStyle(p).marginTop).toBe("0px");
+  });
+});
+
+describe("@supports", () => {
+  it("evaluates its condition like CSS.supports instead of applying the block unconditionally", () => {
+    const dom = make(`<!doctype html><html><head><style>
+      p { color: blue }
+      @supports (display: block) { p { color: red } }
+      @supports (margin-trim: inline) { p { font-weight: bold } }
+      @supports not (margin-trim: inline) { p { text-align: center } }
+      @supports (display: block) and (not (margin-trim: inline)) { p { padding-left: 4px } }
+    </style></head><body><p id=p>t</p></body></html>`);
+    const { window } = dom;
+    const p = window.document.getElementById("p");
+    expect(window.getComputedStyle(p).color).toBe("rgb(255, 0, 0)"); // (display: block) is supported
+    expect(window.getComputedStyle(p).fontWeight).toBe("400"); // (margin-trim: inline) is not
+    expect(window.getComputedStyle(p).textAlign).toBe("center"); // its negation is
+    expect(window.getComputedStyle(p).paddingLeft).toBe("4px"); // and/or/not in one condition
+    expect(window.CSS.supports("display", "block")).toBe(true);
+    expect(window.CSS.supports("(display: block)")).toBe(true);
+    expect(window.CSS.supports("(margin-trim: inline)")).toBe(false);
+    expect(window.CSS.supports("not (margin-trim: inline)")).toBe(true);
+  });
+});
+
 describe("custom properties, units and calc()", () => {
   const CSS = `<!doctype html><html><head><style>
     :root { --gap: 4px; --main: #336699; --pair: 2px 6px; font-size: 20px }

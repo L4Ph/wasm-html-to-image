@@ -39,6 +39,153 @@ describe("reflected attributes", () => {
   });
 });
 
+const ours = (html: string, options: Record<string, unknown> = {}) => {
+  const dom = new JSDOM(html, { virtualConsole: null, url: "https://example.com/dir/page.html", ...options });
+  open.push(dom);
+  return dom.window;
+};
+
+describe("images: srcset, currentSrc, natural size and decode", () => {
+  const src = (name: string) => `https://example.com/dir/${name}`;
+
+  it("selects the DPR-1 candidate: the smallest x >= 1x, else the largest", () => {
+    const w = ours(`<body>
+      <img id=a src="fallback.png" srcset="small.png 1x, large.png 2x">
+      <img id=b src="fallback.png" srcset="small.png 2x, large.png 3x">
+      <img id=c src="fallback.png" srcset="  ">
+      <img id=d>
+    </body>`);
+    const d = w.document;
+    expect(d.getElementById("a")!.currentSrc).toBe(src("small.png"));
+    expect(d.getElementById("b")!.currentSrc).toBe(src("small.png"));
+    // an unparseable srcset keeps src; no source at all is an empty currentSrc
+    expect(d.getElementById("c")!.currentSrc).toBe(src("fallback.png"));
+    expect(d.getElementById("d")!.currentSrc).toBe("");
+    expect(d.getElementById("d")!.complete).toBe(true);
+  });
+
+  it("evaluates sizes for w descriptors, falling back to the largest candidate", () => {
+    const w = ours(`<body>
+      <img id=a srcset="w300.png 300w, w700.png 700w, w1200.png 1200w" sizes="200px">
+      <img id=b srcset="w300.png 300w, w700.png 700w" sizes="(max-width: 700px) 100px, 600px">
+      <img id=c srcset="w300.png 300w, w700.png 700w" sizes="(max-width: 900px) 100px, 600px">
+      <img id=d srcset="w300.png 300w, w700.png 700w">
+    </body>`);
+    const d = w.document;
+    // the viewport of the engine is 800px: b's condition does not match, c's does
+    expect(d.getElementById("a")!.currentSrc).toBe(src("w300.png"));
+    expect(d.getElementById("b")!.currentSrc).toBe(src("w700.png"));
+    expect(d.getElementById("c")!.currentSrc).toBe(src("w300.png"));
+    // no sizes means 100vw (800px): nothing covers it, so the largest w wins
+    expect(d.getElementById("d")!.currentSrc).toBe(src("w700.png"));
+  });
+
+  it("re-selects when srcset, sizes or src changes", () => {
+    const w = ours(`<body><img id=a src="fallback.png" srcset="x.png 2x, y.png 1x"></body>`);
+    const img = w.document.getElementById("a")!;
+    expect(img.currentSrc).toBe(src("y.png"));
+    img.setAttribute("srcset", "w300.png 300w, w700.png 700w");
+    img.setAttribute("sizes", "100px");
+    expect(img.currentSrc).toBe(src("w300.png"));
+    img.setAttribute("sizes", "500px");
+    expect(img.currentSrc).toBe(src("w700.png"));
+    img.removeAttribute("srcset");
+    expect(img.currentSrc).toBe(src("fallback.png"));
+    img.setAttribute("sizes", "200px");
+    expect(img.currentSrc).toBe(src("fallback.png"));
+  });
+
+  it("takes natural size and complete from the resource record, and decode() resolves", async () => {
+    const w = ours(`<body><img id=i src="a.png" srcset="a.png 1x"><img id=empty></body>`);
+    const img = w.document.getElementById("i")!;
+    const empty = w.document.getElementById("empty")!;
+    expect(img.currentSrc).toBe(src("a.png"));
+    expect(img.naturalWidth).toBe(0);
+    expect(img.complete).toBe(true); // no record: the snapshot renderer owns the file, nothing to wait for
+
+    (w as any).__edgeImageResource(src("a.png"), { status: "loading" });
+    expect(img.complete).toBe(false);
+    // decode waits for a record the renderer still owns; observe it from the page's side because
+    // the bridge hands a guest promise back as a plain object, not a host promise
+    w.eval('window.__decoded = "pending"; document.getElementById("i").decode().then(() => { window.__decoded = "resolved"; }); "ok"');
+    expect((w as any).__decoded).toBe("pending");
+    (w as any).__edgeImageResource(src("a.png"), { status: "loaded", width: 120.4, height: 80 });
+    expect(img.complete).toBe(true);
+    expect(img.naturalWidth).toBe(120);
+    expect(img.naturalHeight).toBe(80);
+    expect((w as any).__decoded).toBe("resolved");
+
+    w.eval('document.getElementById("empty").decode().then(() => { window.__emptyDecoded = "resolved"; }, (e) => { window.__emptyDecoded = e.name; }); "ok"');
+    expect((w as any).__emptyDecoded).toBe("EncodingError");
+  });
+
+  it("fires load on the elements showing a loaded record, before decode() resolves", () => {
+    const w = ours(`<body><img id=i src="a.png"><img id=other src="b.png"></body>`);
+    const img = w.document.getElementById("i")!;
+    w.eval(`
+      window.__log = [];
+      document.getElementById("i").addEventListener("load", function (e) {
+        window.__log.push({ type: e.type, target: e.target === this, current: e.currentTarget === this, bubbles: e.bubbles });
+      });
+      document.getElementById("other").addEventListener("load", function () {
+        window.__log.push({ type: "other" });
+      });
+    `);
+    const log = () => JSON.parse(w.eval("JSON.stringify(window.__log)") as string);
+
+    (w as any).__edgeImageResource(src("a.png"), { status: "loading" });
+    expect(log()).toEqual([]);
+    w.eval('document.getElementById("i").decode().then(() => { window.__log.push({ type: "decode" }); }); "ok"');
+    expect(log()).toEqual([]);
+
+    (w as any).__edgeImageResource(src("a.png"), { status: "loaded", width: 20, height: 10 });
+    expect(img.naturalWidth).toBe(20);
+    // the event comes first, then the decode() waiter; only the matching element hears it
+    expect(log()).toEqual([
+      { type: "load", target: true, current: true, bubbles: false },
+      { type: "decode" },
+    ]);
+
+    // a repeated settle of the same record is not a second load event
+    (w as any).__edgeImageResource(src("a.png"), { status: "loaded", width: 20, height: 10 });
+    expect(log()).toEqual([
+      { type: "load", target: true, current: true, bubbles: false },
+      { type: "decode" },
+    ]);
+  });
+
+  it("fires error, leaves naturalWidth at 0 and rejects decode() after the event", () => {
+    const w = ours(`<body><img id=e src="bad.png"></body>`);
+    const img = w.document.getElementById("e")!;
+    w.eval(`
+      window.__log = [];
+      document.getElementById("e").addEventListener("error", function (ev) {
+        window.__log.push({ type: ev.type, target: ev.target === this, current: ev.currentTarget === this, bubbles: ev.bubbles });
+      });
+    `);
+    const log = () => JSON.parse(w.eval("JSON.stringify(window.__log)") as string);
+
+    (w as any).__edgeImageResource(src("bad.png"), { status: "loading" });
+    expect(img.complete).toBe(false);
+    w.eval('document.getElementById("e").decode().then(() => { window.__log.push({ type: "resolved" }); }, (e) => { window.__log.push({ type: "rejected", name: e.name }); }); "ok"');
+
+    (w as any).__edgeImageResource(src("bad.png"), { status: "error" });
+    expect(img.naturalWidth).toBe(0);
+    expect(img.naturalHeight).toBe(0);
+    expect(log()).toEqual([
+      { type: "error", target: true, current: true, bubbles: false },
+      { type: "rejected", name: "EncodingError" },
+    ]);
+
+    // error is not re-fired on a repeated settle
+    (w as any).__edgeImageResource(src("bad.png"), { status: "error" });
+    expect(log()).toEqual([
+      { type: "error", target: true, current: true, bubbles: false },
+      { type: "rejected", name: "EncodingError" },
+    ]);
+  });
+});
+
 describe("validity", () => {
   it("required, pattern, type, range and custom errors", () => {
     same(

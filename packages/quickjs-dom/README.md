@@ -29,7 +29,7 @@ dom.close();
 | ⚡ **Fast Cold Starts (~3 ms)** | Pre-initialized QuickJS bytecode snapshot + C-based DOM parser and selector engine (~1.3 MB/s HTML parsing). |
 | 🧩 **Two API Styles** | Async sandboxed API (`createDOM`) for edge/serverless + synchronous `new JSDOM()` drop-in (`wasm-quickjs-dom/jsdom`) for Node.js & Bun. |
 | 🧪 **Vitest & Jest Environments** | Built-in test environments compatible with `@testing-library/dom`, `@testing-library/react`, `user-event`, and `jest-dom`. |
-| 🎨 **CSS Cascade & SVG Geometry** | `getComputedStyle` cascades `<style>`, inline styles, and optional `<link rel="stylesheet">`; computes SVG `getBBox` / `getTotalLength`. |
+| 🎨 **CSS Cascade & SVG Geometry** | `getComputedStyle` cascades `<style>`, inline styles, and `<link rel="stylesheet">` (fetched by default; `stylesheets: false` skips them); computes approximate SVG `getBBox` / `getTotalLength`. |
 
 **Good for:**
 - Pre-rendering single-page apps (React, Next.js, Vue, etc.) to static HTML for SEO, OGP, and link previews.
@@ -55,7 +55,7 @@ dom.close();
 | **DOM Implementation** | Pure JavaScript on V8 objects | **High-speed C DOM & selector engine** (`csrc/nativedom*.h`) |
 | **HTML Parser** | `parse5` (JavaScript) | **C port of `htmlparser2`** (~8.6× faster) |
 | **CSS Cascade** | `getComputedStyle` with CSS cascade | `getComputedStyle` with CSS cascade (`<style>`, inline, `@media`, `var()`, `calc()`) |
-| **SVG Geometry** | Minimal | **Exact SVG calculation** (`getBBox`, `getTotalLength`, `getPointAtLength`) |
+| **SVG Geometry** | Minimal | **Approximate SVG geometry** from attributes (`getBBox`, `getTotalLength`, `getPointAtLength`) |
 | **Testing Support** | Jest, Vitest, Testing Library | **Vitest & Jest environments included**, Testing Library compatible |
 
 ### Performance Benchmark (Node.js)
@@ -347,7 +347,7 @@ Creates a new isolated QuickJS + C DOM instance, loads the HTML, executes script
 | `settleMs` | `number` | `1000` | Maximum time in ms after `load` to let pending timers and network requests finish. Returns early as soon as the queue is idle. |
 | `waitFor` | `string` | — | CSS selector to wait for after `load` instead of `settleMs`. |
 | `width` | `number` | `800` | Viewport width (`window.innerWidth` and `@media` / `matchMedia` width queries). |
-| `stylesheets` | `boolean` | `false` | When `true`, fetches external `<link rel="stylesheet">` files so `getComputedStyle()` includes their rules. |
+| `stylesheets` | `boolean` | `true` | Fetches external `<link rel="stylesheet">` files so `getComputedStyle()` includes their rules. Set `false` to skip those requests; `<style>` elements and inline styles are cascaded either way. |
 | `beforeScripts` | `string \| string[]` | — | Classic script(s) to execute after HTML parsing but before any page `<script>` runs (useful for polyfills, globals, or probes). |
 | `limits` | `FetchLimits` | — | Network and resource restrictions (see [Security](#security-handling-untrusted-pages)). |
 | `skip` | `(url: string) => boolean` | — | Return `true` to reject a subresource request immediately without network access (great for skipping ads/analytics). |
@@ -392,7 +392,7 @@ type PageLogEntry =
 
 ### Layout Integration
 
-By default, QuickJS has no visual layout engine, so `getBoundingClientRect()`, `offsetWidth`, and `clientHeight` return `0` (except SVG shapes, where `getBBox()`, `getTotalLength()`, and `getPointAtLength()` are calculated directly from path/shape attributes).
+By default, QuickJS has no visual layout engine, so `getBoundingClientRect()`, `offsetWidth`, and `clientHeight` return `0` (except SVG shapes, where `getBBox()`, `getTotalLength()`, and `getPointAtLength()` are worked out from the path/shape attributes, approximately — see [Compatibility & Limitations](#compatibility--limitations)).
 
 If a page's scripts depend on real layout measurements:
 1. Call `dom.markForLayout()` to get HTML tagged with element IDs (`qjsl-<n>`).
@@ -440,6 +440,7 @@ npx wasm-quickjs-dom https://example.com/ --protocol https: --block-private --lo
 | `--timeout <ms>` | Timeout per operation in ms (default: `10000`). |
 | `--width <px>` | Viewport width in pixels (default: `800`). |
 | `--base-url <url>` | Base URL when reading from a local file or stdin (`-`). |
+| `--stylesheets` | Fetch `<link rel="stylesheet">` sheets for `getComputedStyle` (already the default; kept as an explicit flag). |
 | `--protocol <proto>` | Allowed URL protocol, e.g., `https:` (repeatable). |
 | `--allow-host <host>` | Allowed hostname (repeatable). |
 | `--block-host <host>` | Blocked hostname (repeatable). |
@@ -460,18 +461,24 @@ npx wasm-quickjs-dom https://example.com/ --protocol https: --block-private --lo
 - **Scripts & Modules:** Inline `<script>`, external `<script src>`, dynamically inserted scripts, and `<script type="module">` (static `import` and `import("literal")` are pre-fetched and linked).
 - **Frameworks:** React 18+, Next.js client hydration, Preact, Vue, and standard SPA routers (`history.pushState` / `replaceState`).
 - **Network:** `fetch` and `XMLHttpRequest` (binary-safe via base64 bridge), `Headers`, `Request`, `Response`, `AbortController`, `TextEncoder` / `TextDecoder`, `URL` / `URLSearchParams`, `Blob`, `FormData`, Web Streams.
-- **DOM & Selectors:** Full C-backed DOM tree manipulation, live HTMLCollections, `<template>`, Shadow DOM (`attachShadow`), Custom Elements (`customElements.define`), `DOMParser`, `Range` & `Selection` (live-updated on tree mutations), and a native CSS selector engine (`:not`, `:is`, `:has`, `:nth-child`, attribute operators).
-- **CSS & `getComputedStyle`:** Cascades `<style>` tags, inline `style` attributes, and external `<link rel="stylesheet">` (when `stylesheets: true` or `resources: "usable"`). Supports selector specificity, `!important`, inheritance, `@media` width queries, `var()` custom properties, color normalization to `rgb()`, unit conversion (`em`, `rem`, `pt`, `cm`, `in`, etc. to `px`), and `calc()` / `min()` / `max()` / `clamp()`.
+- **DOM & Selectors:** Full C-backed DOM tree manipulation, live HTMLCollections, `<template>`, Shadow DOM (`attachShadow`; shadow trees are not serialized), Custom Elements (`customElements.define`), `DOMParser`, `Range` & `Selection` (live-updated on tree mutations), and a native CSS selector engine (`:not`, `:is`, `:has`, `:nth-child`, attribute operators).
+- **CSS & `getComputedStyle`:** Cascades `<style>` tags, inline `style` attributes, and external `<link rel="stylesheet">` (fetched by default; `stylesheets: false` skips them, while the JSDOM facade fetches them with `resources: "usable"`). Supports selector specificity, `!important`, inheritance, `@media` width queries, `var()` custom properties, color normalization to `rgb()`, unit conversion (`em`, `rem`, `pt`, `cm`, `in`, etc. to `px`), and `calc()` / `min()` / `max()` / `clamp()`.
 - **Observers & Timers:** `MutationObserver`, `setTimeout` / `setInterval`, `requestAnimationFrame`, `queueMicrotask`. `IntersectionObserver` and `ResizeObserver` fire once immediately upon `.observe()` so lazy-loaded components render automatically.
-- **SVG Geometry:** `getBBox()`, `getTotalLength()`, and `getPointAtLength()` are computed accurately from SVG shape and path attributes.
-- **Storage & Crypto:** In-memory `localStorage`, `sessionStorage`, `document.cookie`, and `crypto.getRandomValues` / `crypto.randomUUID`.
+- **SVG Geometry (approximate):** `getBBox()`, `getTotalLength()`, and `getPointAtLength()` are computed from SVG shape and path attributes, not from a real layout (see the [limitations](#what-does-not-work) below).
+- **Storage & Crypto:** In-memory `localStorage`, `sessionStorage`, `document.cookie`, and `crypto.getRandomValues` / `crypto.randomUUID` (backed by `Math.random`, not a CSPRNG).
 
 ### What Does Not Work
 
 - **Visual Layout:** `getBoundingClientRect()` and `offsetWidth` return `0` unless bounding boxes are provided via [`setLayout`](#layout-integration).
-- **Canvas & Media:** `<canvas>` 2D/WebGL contexts are not rendered; `<audio>` / `<video>` have no media decoders (`play()` rejects just like an unsupported media source in a browser).
+- **Canvas & Media:** `<canvas>` has no backing store: `getContext()` returns `null` and `toDataURL()` returns `"data:,"` (each logs a one-time warning), so calling a method on the returned context throws a `TypeError`; `<audio>` / `<video>` have no media decoders (`play()` rejects just like an unsupported media source in a browser).
 - **Live Persistent Connections & Threads:** `WebSocket`, `EventSource`, and `Worker` exist as classes that emit an `error` event and close (logging a warning to `dom.logs`), allowing pages with fallback logic to continue gracefully.
-- **Iframe Documents:** `<iframe>` elements exist in the DOM, but nested browsing contexts are not loaded.
+- **Iframe Documents:** `<iframe>` elements exist in the DOM, but nested browsing contexts are not loaded: `contentWindow` / `contentDocument` are `null`, and `srcdoc` is kept as an attribute only, never parsed as a document.
+- **Shadow DOM Serialization:** `attachShadow()` and `shadowRoot` work for scripts, but shadow trees are not serialized: `serialize()` and the rendered HTML omit their content, and `attachShadow()` logs a warning. Declarative shadow DOM is not emitted.
+- **Fonts:** `document.fonts` is a stub (`ready` resolves at once, `check()` always returns `true`, `load()` resolves to an empty array) and `FontFace` is not defined, so pages cannot actually load or wait for web fonts.
+- **Interaction Selectors:** pseudo-classes that depend on user interaction (`:hover`, `:focus`, `:active`, `:visited`, `:target`, `:focus-within`, `:focus-visible`) and all pseudo-elements never match, in selectors or in `getComputedStyle()`. (`matchMedia("(hover: hover)")` still reports `true`.)
+- **Hit Testing & Scrolling:** `document.elementFromPoint()` returns `null` and `elementsFromPoint()` returns `[]`; `scroll()`, `scrollTo()`, `scrollBy()`, and `scrollIntoView()` do nothing, and `scrollTop` / `scrollLeft` always read `0`.
+- **XPath Namespaces:** XPath 1.0 expressions work, but namespace prefixes cannot be resolved (`namespace-uri()` returns `""` and `createNSResolver().lookupNamespaceURI()` returns `null`).
+- **SVG Geometry:** `getBBox()`, `getTotalLength()`, and `getPointAtLength()` are approximate: a path's `A` (arc) command is treated as its chord, `transform` attributes are ignored (`getCTM()` / `getScreenCTM()` return the identity), circles and ellipses are sampled, and `<text>` has no layout, so its box is `0 × 0`.
 
 ### Performance Characteristics
 

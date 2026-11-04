@@ -870,7 +870,11 @@
   getter(P.HTMLElement, "form", function () { return this.closest("form"); });
   getter(P.HTMLElement, "isContentEditable", function () { return this.getAttribute("contenteditable") !== null && this.getAttribute("contenteditable") !== "false"; });
 
-  // Shadow DOM: a shadow root is a fragment hanging off the host (it is not a child, and not serialised)
+  // Shadow DOM: a shadow root is a fragment hanging off the host (it is not a child, and not serialised).
+  // The snapshot therefore silently loses everything inside it, so say so in the page log.
+  // TODO: emit the tree as declarative shadow DOM (<template shadowrootmode="open">...), which is
+  // the (a) path: walk SHADOW roots while serialising and inline the root's children. Until then,
+  // this warning is the contract; keep it even if serialisation starts including shadow roots.
   var SHADOW = Symbol("shadow");
   def(P.Element, "attachShadow", function (init) {
     if (this[SHADOW]) {
@@ -881,6 +885,12 @@
     var root = this.ownerDocument.createDocumentFragment();
     Object.defineProperties(root, { host: { value: this }, mode: { value: (init && init.mode) || "open" } });
     Object.defineProperty(this, SHADOW, { value: root });
+    if (globalThis.console && globalThis.console.warn) {
+      globalThis.console.warn(
+        "attachShadow: a shadow tree is not serialised, so its content is missing from the snapshot (" +
+          (this.localName || "element") + ")"
+      );
+    }
     return root;
   });
   getter(P.Element, "shadowRoot", function () { var r = this[SHADOW]; return r && r.mode === "open" ? r : null; });

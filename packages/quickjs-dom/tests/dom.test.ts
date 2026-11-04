@@ -462,6 +462,47 @@ describe("createDOM: a page kept open", () => {
     }
   });
 
+  it("warns about a mark only when the DOM changed under it; an unchanged re-mark is silent", async () => {
+    const dom = await createDOM({ html: '<!doctype html><html><body><div id="a">hi</div></body></html>' }, { settleMs: 0 });
+    const warnings = () => dom.logs.filter((e) => e.type === "console" && e.level === "warn").map((e) => (e as { message: string }).message);
+    const marked = (prefix: string) => warnings().filter((m) => m.startsWith(prefix));
+    try {
+      const html = dom.markForLayout();
+      const index = Number(/(?:class="qjsl-(\d+)" id="a"|id="a" class="qjsl-(\d+)")/.exec(html)!.slice(1).find(Boolean));
+      dom.markForLayout(); // same document: the numbers come out the same and the boxes still match
+      expect(marked("markForLayout")).toEqual([]);
+      await dom.eval("document.body.appendChild(document.createElement('p'))");
+      dom.markForLayout(); // a different document order: the earlier numbers may point elsewhere
+      expect(marked("markForLayout")).toHaveLength(1);
+      dom.markForLayout(); // but the warning is for that one invalidation, not for every later mark
+      expect(marked("markForLayout")).toHaveLength(1);
+      dom.setLayout({ [index]: [1, 2, 3, 4] }); // marked from the current DOM: no complaint
+      expect(marked("setLayout")).toEqual([]);
+      await dom.eval("document.body.appendChild(document.createElement('i'))");
+      expect(await dom.eval("document.getElementById('a').offsetWidth")).toBe(3); // the old box is still served
+      expect(marked("layout is stale")).toHaveLength(1);
+      await dom.eval("document.getElementById('a').offsetWidth"); // and the warning is not repeated per read
+      expect(marked("layout is stale")).toHaveLength(1);
+    } finally {
+      dom.close();
+    }
+  });
+
+  it("setLayout() warns when the DOM changed after the mark the boxes were measured from", async () => {
+    const dom = await createDOM({ html: '<!doctype html><html><body><div id="a">hi</div></body></html>' }, { settleMs: 0 });
+    const warnings = () => dom.logs.filter((e) => e.type === "console" && e.level === "warn").map((e) => (e as { message: string }).message);
+    try {
+      const html = dom.markForLayout();
+      const index = Number(/(?:class="qjsl-(\d+)" id="a"|id="a" class="qjsl-(\d+)")/.exec(html)!.slice(1).find(Boolean));
+      await dom.eval("document.body.appendChild(document.createElement('p'))");
+      dom.setLayout({ [index]: [1, 2, 3, 4] });
+      expect(warnings().filter((m) => m.startsWith("setLayout"))).toHaveLength(1);
+      expect(await dom.eval("document.getElementById('a').offsetWidth")).toBe(3); // the boxes are applied as given
+    } finally {
+      dom.close();
+    }
+  });
+
   it("refuses to be used after close()", async () => {
     const dom = await createDOM({ html: "" }, { settleMs: 0 });
     dom.close();
@@ -696,7 +737,59 @@ describe("createDOM: WebSocket, EventSource and Worker fail the way a dead conne
     expect(dom.logs.filter((l) => l.type === "console").map((l) => (l as { message: string }).message)).toEqual(
       expect.arrayContaining([expect.stringContaining("WebSocket is not available"), expect.stringContaining("EventSource is not available")]),
     );
+    // the error/close phase is logged too, not just the construction warning
+    expect(dom.logs.filter((l) => l.type === "console").map((l) => (l as { message: string }).message)).toEqual(
+      expect.arrayContaining([expect.stringContaining("WebSocket closed with an error"), expect.stringContaining("EventSource closed with an error")]),
+    );
     dom.close();
+  });
+});
+
+describe("createDOM: silent losses in a snapshot are warned about", () => {
+  it("warns that a shadow tree is not serialized", async () => {
+    const dom = await createDOM(
+      {
+        html: page(
+          '<div id="host"></div>',
+          `var root = document.getElementById("host").attachShadow({ mode: "open" });
+           root.innerHTML = "<b>" + ["inside", "the", "shadow"].join(" ") + "</b>";`,
+        ),
+      },
+      { settleMs: 0 },
+    );
+    try {
+      const out = dom.serialize();
+      expect(out).toContain('id="host"');
+      expect(out).not.toContain("inside the shadow");
+      expect(dom.logs).toContainEqual(
+        expect.objectContaining({ type: "console", level: "warn", message: expect.stringContaining("attachShadow") }),
+      );
+    } finally {
+      dom.close();
+    }
+  });
+
+  it("warns when a canvas returns null from getContext and an empty data: URL from toDataURL", async () => {
+    const dom = await createDOM(
+      {
+        html: page(
+          '<canvas id="c" width="10" height="10"></canvas>',
+          `var c = document.getElementById("c");
+           c.setAttribute("data-ctx", String(c.getContext("2d")));
+           c.setAttribute("data-url", c.toDataURL("image/png"));`,
+        ),
+      },
+      { settleMs: 0 },
+    );
+    try {
+      const out = dom.serialize();
+      expect(out).toContain('data-ctx="null"');
+      expect(out).toContain('data-url="data:,"');
+      const messages = dom.logs.filter((l) => l.type === "console" && l.level === "warn").map((l) => (l as { message: string }).message);
+      expect(messages).toEqual(expect.arrayContaining([expect.stringContaining("getContext"), expect.stringContaining("toDataURL")]));
+    } finally {
+      dom.close();
+    }
   });
 });
 

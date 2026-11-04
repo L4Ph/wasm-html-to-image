@@ -1,5 +1,5 @@
   // ---- what user interaction needs: focus, the activation behaviour of a click, the selection of a text control, labels,
-  // Range and Selection. (Ranges are not adjusted when the tree changes under them.)
+  // Range and Selection. (Ranges are live: their boundary points move as the tree changes under them.)
   var domError = function (name, message) {
     var e = new Error(message);
     e.name = name;

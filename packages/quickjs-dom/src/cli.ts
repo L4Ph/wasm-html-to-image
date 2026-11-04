@@ -38,7 +38,7 @@ Running
       --timeout <ms>       upper limit for the scripts (default 10000)
       --width <px>         window width of the page (default 800)
       --base-url <url>     the page's URL, for file and standard input
-      --stylesheets        fetch <link rel="stylesheet"> sheets for cascading in getComputedStyle
+      --stylesheets        fetch <link rel="stylesheet"> sheets for getComputedStyle (already the default)
 
 Limits (set these for pages you do not control)
       --protocol <p>       allowed protocol such as https: (repeatable)

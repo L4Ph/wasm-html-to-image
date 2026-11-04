@@ -407,7 +407,7 @@ export function openPage(
       begin();
       const scripts = runScripts(); // the inline scripts run before this returns; only the ones that fetch wait
       await scripts;
-      if (opts.stylesheets) await loadStyleSheets();
+      if (opts.stylesheets !== false) await loadStyleSheets();
       call("__edgeDocumentEvents()");
       if (how.settle ?? true) await wait(opts.settleMs ?? DEFAULT_SETTLE_MS, opts.waitFor);
     };

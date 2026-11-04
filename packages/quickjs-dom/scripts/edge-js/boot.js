@@ -144,6 +144,9 @@
         g.setTimeout(function () {
           if (self.readyState === 3 || (Name === "EventSource" && self.readyState === 2)) return;
           self.readyState = Name === "EventSource" ? 2 : 3;
+          // the constructor already warned; the failure that follows is a separate line in the log,
+          // so a page that only sees the error/close handlers still leaves a trace of why
+          if (g.console && g.console.warn) g.console.warn(Name + " closed with an error; network and worker APIs are not available in wasm-quickjs-dom (" + self.url + ")");
           self.__fire(new g.Event("error"));
           if (Name === "WebSocket") {
             var close = new g.Event("close");
@@ -227,6 +230,110 @@
 
   // CSS
   if (!g.CSS) {
+    // CSS.supports: the property names litehtml knows (its string_id.h), checked the way stylesheet.cpp evaluates
+    // @supports. The value grammar is NOT checked: like litehtml's "property ID means supported" shortcut, any
+    // non-empty value of a known property answers true. TODO: mirror style::add_property for values as well.
+    // computed.js asks this same function for @supports, so a style sheet and a script agree.
+    var SUPPORTS_PROPS = Object.create(null);
+    ("background background-color background-image background-image-baseurl background-repeat background-origin background-clip background-attachment background-size background-position background-position-x background-position-y background-gradient border border-width border-style border-color border-spacing litehtml-border-spacing-x litehtml-border-spacing-y border-top border-right border-bottom border-left border-top-style border-right-style border-bottom-style border-left-style border-top-width border-right-width border-bottom-width border-left-width border-top-color border-right-color border-bottom-color border-left-color border-radius border-radius-x border-radius-y border-top-left-radius border-top-right-radius border-bottom-right-radius border-bottom-left-radius border-start-start-radius border-start-end-radius border-end-start-radius border-end-end-radius border-top-left-radius-x border-top-right-radius-x border-bottom-right-radius-x border-bottom-left-radius-x border-top-left-radius-y border-top-right-radius-y border-bottom-right-radius-y border-bottom-left-radius-y border-image border-image-source border-image-slice border-image-slice-top border-image-slice-right border-image-slice-bottom border-image-slice-left border-image-width border-image-width-top border-image-width-right border-image-width-bottom border-image-width-left border-image-outset border-image-outset-top border-image-outset-right border-image-outset-bottom border-image-outset-left border-image-repeat " +
+      "list-style list-style-type list-style-position list-style-image list-style-image-baseurl margin margin-top margin-right margin-bottom margin-left margin-trim padding padding-top padding-right padding-bottom padding-left font font-family font-style font-variant font-variant-ligatures font-variant-numeric font-variant-east-asian font-variant-caps font-variant-position font-feature-settings font-kerning font-variation-settings font-stretch font-weight font-size line-height line-clamp webkit-line-clamp max-lines block-ellipsis webkit-hyphens moz-orient webkit-appearance webkit-box-orient text-decoration text-decoration-style text-decoration-line text-decoration-color text-decoration-thickness text-underline-offset text-decoration-skip-ink text-underline-position text-emphasis text-emphasis-style text-emphasis-color text-emphasis-position outline outline-width outline-style outline-color outline-offset " +
+      "white-space white-space-collapse text-wrap text-wrap-mode text-wrap-style word-break overflow-wrap word-wrap break-before break-after break-inside page-break-before page-break-after page-break-inside orphans widows text-align vertical-align color width height min-width min-height max-width max-height block-size min-inline-size min-block-size max-inline-size max-block-size contain-intrinsic-size container container-type container-name position overflow overflow-x overflow-y text-overflow display direction unicode-bidi writing-mode text-orientation text-combine-upright visibility appearance box-sizing z-index float clear text-indent top right bottom left cursor content border-collapse table-layout text-transform " +
+      "flex flex-flow flex-direction flex-wrap justify-content justify-items align-items align-content align-self place-items place-content place-self flex-grow flex-shrink flex-basis column-count column-width columns column-rule column-rule-width column-rule-style column-rule-color stroke stroke-linejoin corner-shape corner-top-left-shape corner-top-right-shape corner-bottom-right-shape corner-bottom-left-shape text-fit scrollbar-gutter grid-template grid line-break text-align-last text-justify hyphens hyphenate-character tab-size font-optical-sizing font-synthesis font-synthesis-weight font-synthesis-style font-synthesis-small-caps font-synthesis-position box-decoration-break webkit-box-decoration-break clip-rule gap column-gap row-gap grid-gap grid-column-gap grid-row-gap letter-spacing word-spacing grid-template-columns grid-template-rows grid-template-areas grid-auto-columns grid-auto-rows grid-auto-flow grid-area satoru-grid-columns-tokens satoru-grid-rows-tokens grid-column grid-column-start grid-column-end grid-row grid-row-start grid-row-end justify-self " +
+      "caption-side object-fit object-position image-rendering fill contain cover scale-down isolation order filter backdrop-filter webkit-backdrop-filter mix-blend-mode background-blend-mode clip-path mask webkit-mask mask-image webkit-mask-image mask-size webkit-mask-size mask-repeat webkit-mask-repeat mask-position webkit-mask-position pointer-events user-select webkit-user-select webkit-background-clip webkit-text-fill-color webkit-text-stroke webkit-text-stroke-width webkit-text-stroke-color scroll-behavior transform-style perspective backface-visibility counter-reset counter-increment box-shadow text-shadow opacity transform transform-origin translate rotate scale " +
+      "margin-inline margin-inline-start margin-inline-end margin-block margin-block-start margin-block-end padding-inline padding-inline-start padding-inline-end padding-block padding-block-start padding-block-end inset inset-inline inset-inline-start inset-inline-end inset-block inset-block-start inset-block-end border-inline border-inline-start border-inline-end border-inline-width border-inline-start-width border-inline-end-width border-inline-style border-inline-start-style border-inline-end-style border-inline-color border-inline-start-color border-inline-end-color border-block border-block-start border-block-end border-block-width border-block-start-width border-block-end-width border-block-style border-block-start-style border-block-end-style border-block-color border-block-start-color border-block-end-color " +
+      "offset offset-path offset-distance offset-rotate offset-anchor offset-position inline-size size")
+      .split(" ")
+      .forEach(function (p) { SUPPORTS_PROPS[p] = true; });
+    var supportsDecl = function (prop, value) {
+      prop = String(prop == null ? "" : prop).trim().toLowerCase();
+      value = String(value == null ? "" : value).trim();
+      if (!prop || !value) return false;
+      if (prop.slice(0, 2) === "--") return true; // any custom property with a value is supported
+      // the same features litehtml rejects to follow Chromium (Tailwind's old-Safari hacks, for one)
+      if (prop === "margin-trim" || prop === "-webkit-hyphens" || prop.slice(0, 5) === "-moz-" || prop.slice(0, 4) === "-ms-") return false;
+      var known = SUPPORTS_PROPS[prop];
+      if (!known && prop.slice(0, 8) === "-webkit-") known = SUPPORTS_PROPS[prop.slice(1)];
+      return !!known;
+    };
+    var supportsCondition = function (text) {
+      var s = String(text == null ? "" : text), pos = 0;
+      var ws = function () { while (pos < s.length && /\s/.test(s.charAt(pos))) pos++; };
+      var ident = function () { var from = pos; while (pos < s.length && /[\w-]/.test(s.charAt(pos))) pos++; return s.slice(from, pos).toLowerCase(); };
+      var block = function () {
+        if (s.charAt(pos) !== "(") return null;
+        var depth = 0, from = pos;
+        for (; pos < s.length; pos++) {
+          var c = s.charAt(pos);
+          if (c === '"' || c === "'") {
+            var q = c;
+            for (pos++; pos < s.length; pos++) {
+              var d = s.charAt(pos);
+              if (d === "\\") pos++;
+              else if (d === q) break;
+            }
+          } else if (c === "(") depth++;
+          else if (c === ")") {
+            depth--;
+            if (depth === 0) { var inner = s.slice(from + 1, pos); pos++; return inner; }
+          }
+        }
+        pos = s.length;
+        return null;
+      };
+      var colonAt = function (t) {
+        var depth = 0;
+        for (var i = 0; i < t.length; i++) {
+          var c = t.charAt(i);
+          if (c === '"' || c === "'") {
+            var q = c;
+            for (i++; i < t.length; i++) {
+              var d = t.charAt(i);
+              if (d === "\\") i++;
+              else if (d === q) break;
+            }
+          } else if (c === "(" || c === "[") depth++;
+          else if (c === ")" || c === "]") depth--;
+          else if (c === ":" && depth === 0) return i;
+        }
+        return -1;
+      };
+      var term = function () {
+        ws();
+        if (s.charAt(pos) === "(") {
+          var inner = block();
+          if (inner === null) return false;
+          var c = colonAt(inner);
+          return c >= 0 ? supportsDecl(inner.slice(0, c), inner.slice(c + 1)) : supportsCondition(inner);
+        }
+        var name = ident();
+        ws();
+        if (name === "not") return !term();
+        if (s.charAt(pos) === "(") {
+          var arg = block();
+          return name === "selector" ? !!arg && arg.trim() !== "" : false;
+        }
+        return false;
+      };
+      var andExpr = function () {
+        var v = term();
+        for (;;) {
+          ws();
+          var save = pos, op = ident();
+          if (op !== "and") { pos = save; return v; }
+          v = term() && v;
+        }
+      };
+      var orExpr = function () {
+        var v = andExpr();
+        for (;;) {
+          ws();
+          var save = pos, op = ident();
+          if (op !== "or") { pos = save; return v; }
+          v = andExpr() || v;
+        }
+      };
+      return orExpr();
+    };
     g.CSS = {
       escape: function (v) {
         v = String(v);
@@ -241,7 +348,7 @@
         }
         return out;
       },
-      supports: function () { return true; },
+      supports: function (a, b) { return arguments.length > 1 ? supportsDecl(a, b) : supportsCondition(a); },
       registerProperty: function () {},
       px: function (n) { return { value: n, unit: "px", toString: function () { return n + "px"; } }; },
     };
@@ -366,6 +473,18 @@
   }
 
   // Canvas stubs
+  // A canvas here has no backing store: getContext hands back null and toDataURL an empty data: URL.
+  // Both are silent data loss in a snapshot, so each canvas says so once, in the page log.
+  var canvasWarned = typeof WeakMap === "function" ? new WeakMap() : null;
+  var warnCanvasOnce = function (el, key, message) {
+    if (canvasWarned) {
+      var keys = canvasWarned.get(el);
+      if (!keys) { keys = {}; canvasWarned.set(el, keys); }
+      if (keys[key]) return;
+      keys[key] = true;
+    }
+    if (g.console && g.console.warn) g.console.warn(message);
+  };
   if (!g.Path2D) {
     g.Path2D = class Path2D {
       constructor(d) { this._d = d instanceof Path2D ? d._d : typeof d === "string" ? d : ""; }
@@ -385,14 +504,23 @@
   if (!g.OffscreenCanvas) {
     g.OffscreenCanvas = class OffscreenCanvas {
       constructor(w, h) { this.width = w; this.height = h; }
-      getContext() { return null; }
+      getContext() {
+        warnCanvasOnce(this, "getContext", "OffscreenCanvas.getContext: 2D canvas is not available in wasm-quickjs-dom; the call returns null");
+        return null;
+      }
       convertToBlob() { return Promise.reject(new Error("OffscreenCanvas has no drawing here")); }
     };
   }
   var canvasProto = N.protos && N.protos.HTMLCanvasElement;
   if (canvasProto) {
-    Object.defineProperty(canvasProto, "getContext", { configurable: true, writable: true, value: function () { return null; } });
-    Object.defineProperty(canvasProto, "toDataURL", { configurable: true, writable: true, value: function () { return "data:,"; } });
+    Object.defineProperty(canvasProto, "getContext", { configurable: true, writable: true, value: function () {
+      warnCanvasOnce(this, "getContext", "HTMLCanvasElement.getContext: 2D canvas is not available in wasm-quickjs-dom; the call returns null");
+      return null;
+    } });
+    Object.defineProperty(canvasProto, "toDataURL", { configurable: true, writable: true, value: function () {
+      warnCanvasOnce(this, "toDataURL", "HTMLCanvasElement.toDataURL: there is no canvas drawing to encode; the call returns \"data:,\"");
+      return "data:,";
+    } });
     Object.defineProperty(canvasProto, "toBlob", { configurable: true, writable: true, value: function (cb) { if (typeof cb === "function") g.setTimeout(function () { cb(null); }, 0); } });
     ["width", "height"].forEach(function (k, i) {
       Object.defineProperty(canvasProto, k, {
@@ -595,6 +723,25 @@
       return i;
     };
     g.Image.prototype = w.HTMLImageElement ? w.HTMLImageElement.prototype : Object.getPrototypeOf(d.createElement("img"));
+    // Images: the page's view of the renderer's image resources. Fetching and decoding belong to
+    // the renderer's ResourceManager (src/cpp/core/resource_manager.h), so the host publishes each
+    // record here under its absolute URL and 05-html.js reads it for naturalWidth/naturalHeight,
+    // complete, currentSrc and decode(). The record is
+    //   { status: "idle" | "loading" | "loaded" | "error", width, height, promise }
+    // __edgeImageSettle (05-html.js) turns a settled record into the load/error event of every
+    // <img> showing the URL and settles the decode() waiters.
+    // TODO(onload): both the event and the decode() promise are synthesized from this registry;
+    // once the resource_manager bridge knows the timing they should be shared with its onload
+    // transition instead of fired here.
+    g.__edgeImageResources = new Map();
+    g.__edgeImageResource = function (url, record) {
+      url = String(url);
+      try { url = new URL(url, g.location.href).href; } catch (e) { /* a data: URL stays as it is */ }
+      if (record == null) g.__edgeImageResources.delete(url);
+      else g.__edgeImageResources.set(url, record);
+      // the <img> load/error events and the decode() waiters settle from this record
+      if (g.__edgeImageSettle) g.__edgeImageSettle(url, record);
+    };
     g.Option = function (text, value, defaultSelected, selected) {
       var o = d.createElement("option");
       if (text !== undefined) o.textContent = String(text);
@@ -611,6 +758,11 @@
     };
     g.Audio.prototype = w.HTMLAudioElement ? w.HTMLAudioElement.prototype : Object.getPrototypeOf(d.createElement("audio"));
 
+    // document.fonts is a stub: ready resolves at once, check() always says true and load() resolves with no
+    // fonts. There is no font loading here, so a page must not use this for text measurement (or to wait for
+    // webfonts): it gets no chance to settle first. Text is measured by the image engine, not by this DOM.
+    // TODO: make load() and ready wait for the renderer's fonts with a timeout, so measurement after
+    // fonts.ready is meaningful.
     d.fonts = d.fonts || { ready: Promise.resolve(), check: function () { return true; }, load: function () { return Promise.resolve([]); }, add: function () {}, forEach: function () {}, addEventListener: function () {}, removeEventListener: function () {} };
     var state = "loading";
     Object.defineProperty(d, "readyState", { configurable: true, get: function () { return state; } });
@@ -688,10 +840,31 @@
   };
 
   var boxes = null;
+  // `__qi` is a snapshot of document order, and the native DOM's version moves on every tree or attribute change.
+  // A layout is therefore valid only at the revision it was measured from: after a change the numbers may point
+  // at other elements, so the old boxes are stale and must be measured again from a fresh markForLayout().
+  var markRevision = -1, layoutRevision = -1, staleWarned = false;
+  var layoutWarn = function (message) { if (g.console && g.console.warn) g.console.warn(message); };
+  var checkLayoutRevision = function () {
+    if (boxes === null || staleWarned) return;
+    if (g.__native.dom.version() !== layoutRevision) {
+      staleWarned = true;
+      layoutWarn("layout is stale: the DOM changed after setLayout(), so getBoundingClientRect(), offset*, client* and scroll* still report the old boxes; call markForLayout() and setLayout() again");
+    }
+  };
   g.__edgeMarkLayout = function () {
+    // A mark only invalidates the boxes of an earlier one when the document changed in between: the numbers are
+    // reassigned in the new document order, so they can point at other elements. Marking an unchanged document
+    // assigns the same numbers again and leaves those boxes valid, so there is nothing to warn about.
+    // `markRevision` is the revision right after the clone was marked, so this compares the document alone and not
+    // the clone work the previous mark did.
+    if (markRevision !== -1 && markRevision !== g.__native.dom.version()) {
+      layoutWarn("markForLayout(): the DOM changed after an earlier markForLayout(), so boxes measured from it may no longer match the elements; measure again");
+    }
     var d = g.document, clone = d.cloneNode(true);
     var a = Array.prototype.slice.call(d.querySelectorAll("*")), b = Array.prototype.slice.call(clone.querySelectorAll("*"));
     boxes = null;
+    staleWarned = false;
     for (var i = 0; i < a.length && i < b.length; i++) {
       a[i].__qi = i;
       var had = b[i].getAttribute("class");
@@ -700,12 +873,19 @@
     var n = clone.querySelectorAll("noscript");
     for (var j = 0; j < n.length; j++) n[j].remove();
     var html = g.__native.dom.serialize(clone);
+    markRevision = g.__native.dom.version();
     return /^<!DOCTYPE/i.test(html) ? html.replace(/^<!DOCTYPE\s*(?:html)?\s*>/i, "<!DOCTYPE html>") : "<!DOCTYPE html>" + html;
   };
   g.__edgeSetLayout = function (json) {
+    var current = g.__native.dom.version();
+    if (markRevision !== -1 && markRevision !== current) {
+      layoutWarn("setLayout(): the DOM changed after markForLayout(), so these boxes were measured from a different document; call markForLayout() again and pass its fresh boxes");
+    }
     boxes = JSON.parse(json);
+    layoutRevision = current;
+    staleWarned = false;
     var P = g.Element.prototype;
-    var box = function (el) { return (boxes && el.__qi !== undefined && boxes[el.__qi]) || [0, 0, 0, 0]; };
+    var box = function (el) { checkLayoutRevision(); return (boxes && el.__qi !== undefined && boxes[el.__qi]) || [0, 0, 0, 0]; };
     var def = function (name, get) { Object.defineProperty(P, name, { configurable: true, get: get }); };
     var rect = function (el) {
       var b = box(el);

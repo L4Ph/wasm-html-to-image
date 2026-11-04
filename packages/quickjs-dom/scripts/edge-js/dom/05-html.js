@@ -22,10 +22,224 @@
     reflectString(P.HTMLImageElement, "useMap", "usemap");
     reflectString(P.HTMLImageElement, "lowsrc", "lowsrc");
     reflectBool(P.HTMLImageElement, "isMap", "ismap");
-    getter(P.HTMLImageElement, "naturalWidth", function () { return 0; });
-    getter(P.HTMLImageElement, "naturalHeight", function () { return 0; });
-    getter(P.HTMLImageElement, "complete", function () { return !this.getAttribute("src"); });
-    getter(P.HTMLImageElement, "currentSrc", function () { return this.src || ""; });
+    // ---- image source selection and the resource record the renderer fills in ----
+    // The resource record is the shape the renderer's ResourceManager (src/cpp/core/resource_manager.h)
+    // can publish once it has fetched and decoded an image:
+    //   { url, status: "idle" | "loading" | "loaded" | "error", width, height, promise }
+    // boot.js creates one registry per page and exposes __edgeImageResource(url, record) to the host.
+    // With no record the snapshot renderer loads the file itself: the DOM has nothing to wait for.
+    var imageUrl = function (el, value) {
+      if (!value) return "";
+      try {
+        var base = el.ownerDocument && el.ownerDocument.baseURI;
+        return base ? new URL(value, base).href : value;
+      } catch (e) {
+        return value;
+      }
+    };
+    // srcset candidates: a URL runs to the next whitespace (so commas inside a data: URL stay in
+    // it), then descriptor tokens run to the next comma, as the HTML parser does.
+    var srcsetCandidates = function (text) {
+      var out = [], p = 0, n = String(text).length, space = function (c) { return c === " " || c === "\t" || c === "\n" || c === "\r" || c === "\f"; };
+      while (p < n) {
+        while (p < n && (space(text.charAt(p)) || text.charAt(p) === ",")) p++;
+        if (p >= n) break;
+        var start = p;
+        while (p < n && !space(text.charAt(p))) p++;
+        var cand = { url: text.slice(start, p), width: 0, density: 0 };
+        while (p < n && space(text.charAt(p))) p++;
+        var descStart = p;
+        while (p < n && text.charAt(p) !== ",") p++;
+        var desc = text.slice(descStart, p);
+        if (p < n && text.charAt(p) === ",") p++;
+        var tokens = desc.split(/[\t\n\r\f ]+/);
+        for (var i = 0; i < tokens.length; i++) {
+          var tok = tokens[i], last = tok.charAt(tok.length - 1);
+          if (!tok || (last !== "w" && last !== "x")) continue;
+          var v = parseFloat(tok);
+          if (!(v > 0)) continue;
+          if (last === "w") cand.width = v; else cand.density = v;
+        }
+        if (cand.url) out.push(cand);
+      }
+      return out;
+    };
+    // One sizes length token (px, vw, % of the viewport, em/rem at 16px, or a bare number as px).
+    var sizesLength = function (tok, viewport) {
+      var m = /^\s*(-?(?:\d+(?:\.\d*)?|\.\d+))\s*(px|vw|%|em|rem)?\s*$/.exec(String(tok));
+      if (!m) return null;
+      var v = parseFloat(m[1]), unit = m[2] || "px";
+      if (unit === "vw" || unit === "%") return v * viewport / 100;
+      if (unit === "em" || unit === "rem") return v * 16;
+      return v;
+    };
+    // The sizes slot: the first entry whose media condition matches wins; a bare length is the
+    // default. Only the common (max-width: N) / (min-width: N) conditions are understood, as in
+    // the renderer's litehtml el_image.cpp; an entry with any other condition is skipped.
+    var sizesSlot = function (sizes, viewport) {
+      if (!sizes) return viewport;
+      var text = String(sizes), pos = 0, n = text.length;
+      while (pos < n) {
+        var depth = 0, end = pos;
+        while (end < n) {
+          var c = text.charAt(end);
+          if (c === "(") depth++;
+          else if (c === ")") depth--;
+          else if (c === "," && depth === 0) break;
+          end++;
+        }
+        var entry = text.slice(pos, end) || "";
+        pos = end + 1;
+        entry = entry.replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, "");
+        if (!entry) continue;
+        var matches = true, length = entry;
+        if (entry.charAt(0) === "(") {
+          var close = entry.lastIndexOf(")");
+          if (close < 0) continue;
+          var cond = entry.slice(1, close);
+          length = entry.slice(close + 1).replace(/^[\t\n\r ]+/, "");
+          if (!length) continue;
+          var colon = cond.indexOf(":");
+          if (colon < 0) continue;
+          var condValue = sizesLength(cond.slice(colon + 1), viewport);
+          if (condValue === null) continue;
+          var name = cond.slice(0, colon).replace(/^[\t\n\r ]+|[\t\n\r ]+$/g, "");
+          if (name === "max-width") matches = viewport <= condValue;
+          else if (name === "min-width") matches = viewport >= condValue;
+          else continue;
+        }
+        if (matches) {
+          var value = sizesLength(length, viewport);
+          if (value !== null) return value;
+        }
+      }
+      return viewport;
+    };
+    // The candidate a DPR-1 browser would load (the renderer lays out at scale 1): with w
+    // descriptors the smallest width covering the sizes slot (else the largest), with x
+    // descriptors the smallest density >= 1 (else the largest). "" when nothing is selectable.
+    var selectSrcset = function (srcset, sizes, viewport) {
+      var cands = srcsetCandidates(srcset), i;
+      if (!cands.length) return "";
+      var hasWidth = false;
+      for (i = 0; i < cands.length; i++) hasWidth = hasWidth || cands[i].width > 0;
+      if (hasWidth) {
+        var slot = sizesSlot(sizes, viewport), best = null, largest = null;
+        for (i = 0; i < cands.length; i++) {
+          var c = cands[i];
+          if (!(c.width > 0)) continue;
+          if (!largest || c.width > largest.width) largest = c;
+          if (c.width >= slot && (!best || c.width < best.width)) best = c;
+        }
+        return (best || largest || {}).url || "";
+      }
+      var bestDensity = null, largestDensity = null, largestValue = 0;
+      for (i = 0; i < cands.length; i++) {
+        var cand = cands[i], density = cand.density > 0 ? cand.density : 1;
+        if (!largestDensity || density > largestValue) { largestDensity = cand; largestValue = density; }
+        if (density >= 1 && (!bestDensity || density < (bestDensity.density > 0 ? bestDensity.density : 1))) bestDensity = cand;
+      }
+      return (bestDensity || largestDensity || {}).url || "";
+    };
+    var imageSource = function (el) {
+      var srcset = el.getAttribute("srcset");
+      if (srcset) {
+        var selected = selectSrcset(srcset, el.getAttribute("sizes"), globalThis.innerWidth || 0);
+        if (selected) return imageUrl(el, selected);
+      }
+      var src = el.getAttribute("src");
+      return src ? imageUrl(el, src) : "";
+    };
+    var imageRecord = function (url) {
+      var registry = globalThis.__edgeImageResources;
+      return registry && url ? registry.get(url) : undefined;
+    };
+    // decode() waits while the renderer still owns the source: boot.js calls __edgeImageSettle
+    // after publishing a loaded (or failed) record. The same settle transition fires the
+    // load/error event of every <img> showing the URL (non-bubbling, target = currentTarget),
+    // before the decode() waiters resolve or reject.
+    var imageWaiters = new Map();
+    // the last settled status each element was told about, so a repeated record is one event
+    var imageEvents = new WeakMap();
+    var imageError = function () { return new DOMException("The source image cannot be decoded.", "EncodingError"); };
+    var imageWait = function (url, record) {
+      if (!record || record.status === "loaded") return Promise.resolve();
+      if (record.status === "error") return Promise.reject(imageError());
+      return new Promise(function (resolve, reject) {
+        var list = imageWaiters.get(url);
+        if (list) list.push({ resolve: resolve, reject: reject });
+        else imageWaiters.set(url, [{ resolve: resolve, reject: reject }]);
+      });
+    };
+    var imageElements = function (url) {
+      var doc = globalThis.document, out = [];
+      if (!doc || !doc.images) return out;
+      for (var i = 0; i < doc.images.length; i++) if (imageSource(doc.images[i]) === url) out.push(doc.images[i]);
+      return out;
+    };
+    var imageNotify = function (url, record) {
+      var type = record.status === "error" ? "error" : "load";
+      var els = imageElements(url);
+      for (var i = 0; i < els.length; i++) {
+        var el = els[i], key = url + "\n" + record.status;
+        if (imageEvents.get(el) === key) continue;
+        imageEvents.set(el, key);
+        el.dispatchEvent(new W.Event(type, { bubbles: false }));
+      }
+    };
+    var imageReset = function (url) {
+      var els = imageElements(url);
+      for (var i = 0; i < els.length; i++) imageEvents.delete(els[i]);
+    };
+    globalThis.__edgeImageSettle = function (url, record) {
+      if (!record || (record.status !== "loaded" && record.status !== "error")) {
+        // the renderer starts owning the source again: the next settle fires once more
+        imageReset(url);
+        return;
+      }
+      imageNotify(url, record);
+      var list = imageWaiters.get(url);
+      if (!list) return;
+      imageWaiters.delete(url);
+      var error = record.status === "error";
+      for (var i = 0; i < list.length; i++) {
+        if (error) list[i].reject(imageError());
+        else list[i].resolve();
+      }
+    };
+    var imageNumber = function (record, key, alias) {
+      if (!record) return 0;
+      var n = record[key];
+      if (n == null) n = record[alias];
+      n = Number(n);
+      return isFinite(n) && n > 0 ? Math.round(n) : 0;
+    };
+    getter(P.HTMLImageElement, "naturalWidth", function () {
+      return imageNumber(imageRecord(imageSource(this)), "width", "naturalWidth");
+    });
+    getter(P.HTMLImageElement, "naturalHeight", function () {
+      return imageNumber(imageRecord(imageSource(this)), "height", "naturalHeight");
+    });
+    // complete is false only while the renderer's record says the source is still queued or
+    // loading; a loaded or failed record (or no record at all, the snapshot path) is complete.
+    getter(P.HTMLImageElement, "complete", function () {
+      var src = imageSource(this);
+      if (!src) return true;
+      var record = imageRecord(src);
+      return !record || (record.status !== "loading" && record.status !== "idle");
+    });
+    getter(P.HTMLImageElement, "currentSrc", function () { return imageSource(this); });
+    def(P.HTMLImageElement, "decode", function () {
+      var src = imageSource(this);
+      if (!src) return Promise.reject(imageError());
+      var record = imageRecord(src);
+      // TODO(onload): decoding belongs to the renderer's resource_manager. Once it owns image
+      // loading, this promise should settle with the record's own promise and a "loaded" record
+      // should make naturalWidth/naturalHeight readable; the load event and this promise should
+      // both come from that same renderer transition (__edgeImageSettle synthesizes them now).
+      if (record && record.promise && typeof record.promise.then === "function") return Promise.resolve(record.promise).then(function () {});
+      return imageWait(src, record);
+    });
     [P.HTMLImageElement, P.HTMLVideoElement, P.HTMLIFrameElement].forEach(function (p) {
       if (!Object.getOwnPropertyDescriptor(p, "width")) attrNumber(p, "width", "width", 0, 0);
       if (!Object.getOwnPropertyDescriptor(p, "height")) attrNumber(p, "height", "height", 0, 0);

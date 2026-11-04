@@ -1,5 +1,5 @@
 /**
- * The `javascript` option without Node: a page's scripts run in QuickJS (compiled to WebAssembly) on a linkedom DOM.
+ * The `javascript` option without Node: a page's scripts run in QuickJS (compiled to WebAssembly) on a native C DOM.
  *
  * The engine is the package `wasm-quickjs-dom` (a small JSDOM that knows nothing about images); this entry re-exports
  * it, and adds `applyJavaScript`, which hands its result to `render()`. It runs wherever WebAssembly does, `eval` or
@@ -63,6 +63,10 @@ export async function measureLayout(
       baseUrl: (options as { baseUrl?: string }).baseUrl ?? dom.baseUrl,
       onLayout(list: LayoutBox[]) {
         for (const b of list) {
+          // `b.c` is the element's class attribute. boot.js writes the marker as the first class token, as
+          // `qjsl-<n>` or `qjsl-<n> <original classes>`, so a marker is a whole whitespace-delimited token:
+          // start of string or `\s` before it, end of string or `\s` after it. A longer class such as
+          // `my-qjsl-12` or `qjsl-12x` is not a marker.
           const m = /(?:^|\s)qjsl-(\d+)(?:\s|$)/.exec(b.c);
           if (m) boxes[Number(m[1])] = [b.x, b.y, b.w, b.h];
         }

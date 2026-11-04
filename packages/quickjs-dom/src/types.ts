@@ -22,8 +22,10 @@ export interface JavaScriptOptions {
   /** CSS selector to wait for after `load`; replaces `settleMs` when given. */
   waitFor?: string;
   /**
-   * Fetch the `<link rel=stylesheet>` sheets so that `getComputedStyle` cascades them too (default false: only `<style>`
-   * elements and style attributes count).
+   * Fetch the `<link rel=stylesheet>` sheets so that `getComputedStyle` cascades them too (default true).
+   * A page whose scripts read computed styles must see its linked CSS, and the render path (`applyJavaScript`)
+   * serializes that same page. Set false to skip those requests when only the scripts' own DOM changes matter;
+   * `<style>` elements and style attributes are cascaded either way.
    */
   stylesheets?: boolean;
   /**
@@ -130,12 +132,17 @@ export interface QuickJSDOM {
   expose(name: string, fn: (...args: any[]) => unknown): void;
   /** Let the page's timers and fetches run for `ms` (default `settleMs`) and until its fetches are done. */
   settle(ms?: number): Promise<void>;
-  /** The document as it is now, as HTML. */
+  /** The document as it is now, as HTML. Shadow trees live outside the document tree and are not serialized. */
   serialize(): string;
   /**
    * The page as HTML for a layout engine: every element's `class` starts with `qjsl-<n>` (its number, in document
-   * order), so boxes that report `class` can be matched back to elements. The page itself is not changed.
+   * order), so boxes that report `class` can be matched back to elements. The page's markup is not changed (an
+   * internal `__qi` number is written onto each element for {@link QuickJSDOM.setLayout}).
    * Pair it with {@link QuickJSDOM.setLayout}; `wasm-html-to-image/javascript` has `measureLayout()` doing both.
+   *
+   * The numbers belong to the DOM at this call. If the page changes afterwards (nodes added, removed or moved),
+   * call `markForLayout()` again and measure again before `setLayout()`: `__qi` is reassigned in the new document
+   * order, so boxes keyed by the old numbers would land on other elements.
    */
   markForLayout(): string;
   /**
@@ -143,8 +150,15 @@ export interface QuickJSDOM {
    * `[x, y, width, height]` in page coordinates. Afterwards `getBoundingClientRect()`, `getClientRects()`,
    * `offsetWidth` / `offsetHeight` / `offsetLeft` / `offsetTop`, `clientWidth` / `clientHeight` and
    * `scrollWidth` / `scrollHeight` answer from it (the offsets are measured from the page, not from an offset
-   * parent). An element without a box is 0 x 0. The layout is not kept in step with later changes to the page:
-   * measure again.
+   * parent). An element without a box is 0 x 0.
+   *
+   * The layout is a snapshot, not kept in step with the page: once the DOM changes, the old boxes (and the `__qi`
+   * numbers they are keyed by) are stale, so call `markForLayout()` again and `setLayout()` with the fresh boxes.
+   * Until then the old numbers may even point at different elements.
+   *
+   * `getComputedStyle()` does not depend on this layout: a `width` / `height` that is `auto` or a percentage (say
+   * `50%`) is returned unresolved, exactly as computed from the CSS (this DOM has no layout pass). A renderer
+   * downstream is expected to resolve those values against the page; they are not pixels here.
    */
   setLayout(boxes: Record<number, [number, number, number, number]>): void;
   /** Options for a renderer that draws this page: `value` is the serialized DOM and `baseUrl` is this page's. */

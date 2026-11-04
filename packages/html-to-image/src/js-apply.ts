@@ -16,7 +16,7 @@ export interface JavaScriptOptions {
   waitFor?: string;
   /**
    * What runs the scripts. `"jsdom"` (default, Node only, needs `jsdom`) or `"quickjs"`: QuickJS compiled to
-   * WebAssembly on a linkedom DOM, which also works where `eval` is not allowed (Cloudflare Workers; see
+   * WebAssembly on a native C DOM, which also works where `eval` is not allowed (Cloudflare Workers; see
    * `wasm-html-to-image/javascript`). It is a smaller DOM than jsdom's and an interpreter, so heavy pages are slower.
    */
   engine?: "jsdom" | "quickjs";
