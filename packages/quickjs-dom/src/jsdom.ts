@@ -154,6 +154,17 @@ export class JSDOM {
     this.bridgeWindow = bridge.window;
     // the page's `window.close()` ends the page
     this.bridgeWindow.close = () => this.close();
+    // jsdom's window stubs do nothing useful but say so on the virtual console; ours were silent. Keep the page's
+    // no-answers (alert/focus/scroll still do not throw) and add the one line jsdom adds: a "not-implemented" error.
+    // Only this class of error is emitted; a failed subresource ("resource-loading") is still not classified.
+    for (const name of ["alert", "blur", "confirm", "focus", "moveBy", "moveTo", "open", "print", "prompt", "resizeBy", "resizeTo", "scroll", "scrollBy", "scrollTo"] as const) {
+      const stub = (this.bridgeWindow as any)[name];
+      if (typeof stub !== "function") continue;
+      (this.bridgeWindow as any)[name] = (...args: unknown[]) => {
+        this.virtualConsole.emit("jsdomError", classified(new Error(`Not implemented: Window's ${name}() method`), "not-implemented"));
+        return stub.apply(this.bridgeWindow, args);
+      };
+    }
     this.page.onActivity = () => this.arm();
     options.beforeParse?.(this.bridgeWindow);
     // the inline scripts run before start() returns its promise; the rest (fetched scripts, load events, timers)

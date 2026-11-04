@@ -74,9 +74,10 @@ baseline 657 / ours 654 / total 657(すべて v10.4.2 時点)。
 - 外部資源が必要な検証は、env ではなく素の `JSDOM` を使い、
   `await dom.ready` してから操作する。`scripts/tl-suite.mjs` の
   dom-testing-library スイートは外部資源に依存しないため、この制約の外にある。
-- 将来 env で対応するなら、`setup()` 内で `await dom.ready` する変更と、
-  タイムアウト時の扱いを設計してからにする(コード変更。本ドキュメントでは
-  方針だけを固定する)。
+- 待機が必要な場合の逃げ道として `environmentOptions` の `awaitReady: true`
+  (既定 off)を追加した。旗 ON のときだけ `setup()` が非同期になり、
+  `dom.ready` を engine timeout(既定 10 秒)との race で待つ。旗 OFF では
+  同期のまま、タイマーも動かない。外部資源の既定未対応は変えない。
 
 ## 5. 方針4: teardown は同期 `close()` だけでは不足する
 
@@ -98,13 +99,12 @@ baseline 657 / ours 654 / total 657(すべて v10.4.2 時点)。
 5. 必要なら `await new Promise((resolve) => setTimeout(resolve, 0))` で
    ホストのキューを1巡させてから次のテストへ進む。
 
-**要再現**: 「`await dom.ready` を省いた同期 `close()` だけで、次のテストに
-進行中の外部 script / fetch が漏れる」ことを示す最小再現はまだ作っていない。
-再現テストを追加するときは、この手順の 1 と 5 が実際に差を生むことを
-確認し、`tests/known-gaps.json` の `tlSuite.policies.teardown` を更新する。
-現時点では、env の teardown(`jest.cjs` の `async teardown()` と
-`src/vitest.ts` の同期 `teardown()`)は上記 3 までしか行わない、という
-既知の不足として記録する。
+**再現済み**: `tests/jsdom.test.ts` の「awaits an in-flight external script」が
+最小再現である。同期 `close()` だけでは、まだ fetch が始まっていない外部 script は
+abort され、ページは読み込み途中のままテストが終わる。このテストは 3 回の繰り返しで
+flake 0 を確認する。env の teardown は `jest.cjs` / `src/vitest.ts` とも
+「`await dom.ready.catch(() => {})` → `uninstall()` → `dom.close()` →
+`setTimeout(0)` で host を 1 tick」の順に固定した(上記 1〜3 と 5)。
 
 ## 6. 検証の強化
 

@@ -1061,6 +1061,50 @@
       },
     });
   };
+  // querySelectorAll answers a static NodeList. The C side already gives a snapshot (a plain array); this is the thin
+  // wrapper collection() uses on the host: the interface's prototype (so instanceof NodeList holds), length and
+  // indices, item(), and the iteration methods. It re-reads nothing: a live collection would be wrong for qSA.
+  var staticNodeList = function (nodes) {
+    // 02-classes.js installs NodeList after this file; a call before then (there is none today) keeps the array
+    if (!W.NodeList) return nodes;
+    var proto = W.NodeList.prototype;
+    var index = /^(?:0|[1-9][0-9]*)$/;
+    return new Proxy(Object.create(proto), {
+      get: function (t, k, r) {
+        if (typeof k === "string") {
+          if (k === "length") return nodes.length;
+          if (index.test(k)) return nodes[Number(k)];
+          if (k === "item") return function (i) { return i >= 0 && i < nodes.length ? nodes[i] : null; };
+          if (k === "forEach" || k === "entries" || k === "keys" || k === "values") return Array.prototype[k].bind(nodes);
+        } else if (k === Symbol.iterator) {
+          return function () { return nodes[Symbol.iterator](); };
+        } else if (k === Symbol.toStringTag) {
+          return "NodeList";
+        }
+        return Reflect.get(t, k, r);
+      },
+      has: function (t, k) { return typeof k === "string" && index.test(k) ? Number(k) < nodes.length : Reflect.has(t, k); },
+      ownKeys: function () {
+        var keys = [];
+        for (var i = 0; i < nodes.length; i++) keys.push(String(i));
+        return keys;
+      },
+      getOwnPropertyDescriptor: function (t, k) {
+        if (typeof k === "string" && index.test(k) && Number(k) < nodes.length) return { value: nodes[Number(k)], enumerable: true, configurable: true, writable: false };
+        return undefined;
+      },
+    });
+  };
+  var staticQuery = function (proto) {
+    var d = Object.getOwnPropertyDescriptor(proto, "querySelectorAll");
+    if (!d || typeof d.value !== "function") return;
+    var orig = d.value;
+    Object.defineProperty(proto, "querySelectorAll", {
+      value: function (selector) { return staticNodeList(orig.call(this, selector)); },
+      writable: true, configurable: true,
+    });
+  };
+  [P.Element, P.Document, P.DocumentFragment].forEach(staticQuery);
   // The element interfaces pages test with instanceof or take prototypes from (HTMLInputElement for input, ...):
   // each is a class between HTMLElement and the element, and the C side gives new elements of its tags that prototype.
   var illegal = function () { throw new TypeError("Illegal constructor"); };

@@ -1,0 +1,240 @@
+// The React + user-event acceptance measurement (design doc section 10.3/10.4), run twice on the
+// same test file: once under jsdom (the baseline) and once under this package's Vitest environment.
+// It reports, and on --record ledgers, the pass rate per environment and the timing ratio per
+// user-event sequence (click, type, tab, pointer).
+//
+//   node scripts/react-userevent-suite.mjs [--reps=N] [--rounds=N] [--record] [--json] [--require-parity]
+//
+// The test file is tests/acceptance/react-userevent.test.tsx (outside the default Vitest includes).
+// It renders a small react-dom app through @testing-library/react and drives it with
+// @testing-library/user-event; the timings are medians of render + userEvent.setup + sequence with
+// user-event's delay disabled, so the numbers are DOM work, not typing delays. jsdom and
+// user-event are devDependencies. This script changes no product code: it only measures.
+import { spawnSync } from "node:child_process";
+import { createRequire } from "node:module";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const here = path.dirname(fileURLToPath(import.meta.url));
+const root = path.join(here, "..");
+const require = createRequire(path.join(root, "package.json"));
+const argv = process.argv.slice(2);
+const flag = (name) => argv.includes(name);
+const option = (name, fallback) => {
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i];
+    if (a === name) return argv[i + 1] !== undefined && !argv[i + 1].startsWith("--") ? argv[i + 1] : true;
+    if (a.startsWith(`${name}=`)) return a.slice(name.length + 1);
+  }
+  return fallback;
+};
+
+if (flag("--help") || flag("-h")) {
+  console.log(`Usage: node scripts/react-userevent-suite.mjs [options]
+
+  --reps=N            repetitions per case inside each environment (default 7)
+  --rounds=N          full environment runs per side; samples are pooled (default 3)
+  --record            write the result to tests/known-gaps.json (reactUserEvent)
+  --json              print the result as JSON instead of the table
+  --require-parity    exit non-zero when ours passes fewer tests than the jsdom baseline
+  --help              print this help and exit
+`);
+  process.exit(0);
+}
+
+const reps = Number(option("--reps", 7));
+if (!Number.isInteger(reps) || reps < 1) {
+  console.error(`react-userevent-suite: --reps must be a positive integer (got ${option("--reps", "")})`);
+  process.exit(1);
+}
+const rounds = Number(option("--rounds", 3));
+if (!Number.isInteger(rounds) || rounds < 1) {
+  console.error(`react-userevent-suite: --rounds must be a positive integer (got ${option("--rounds", "")})`);
+  process.exit(1);
+}
+
+// Not every dependency exports ./package.json (user-event does not), so read the manifest from the
+// installed tree instead of resolving through "exports".
+const version = (id) => JSON.parse(readFileSync(path.join(root, "node_modules", id, "package.json"), "utf8")).version;
+const versions = {
+  "wasm-quickjs-dom": require(path.join(root, "package.json")).version,
+  react: version("react"),
+  "react-dom": version("react-dom"),
+  "@testing-library/react": version("@testing-library/react"),
+  "@testing-library/user-event": version("@testing-library/user-event"),
+  "@testing-library/dom": version("@testing-library/dom"),
+  jsdom: version("jsdom"),
+  vitest: version("vitest"),
+};
+
+const cache = path.join(root, "node_modules", ".cache", "react-userevent");
+mkdirSync(cache, { recursive: true });
+// One key per test, so a category's ratio is the sum of its workloads, not a blend of samples.
+const subcases = {
+  click: ["click.button", "click.checkbox"],
+  type: ["type.input", "type.clear"],
+  tab: ["tab.forward", "tab.back"],
+  pointer: ["pointer.click", "pointer.hover"],
+};
+const cases = Object.keys(subcases);
+const sampleKeys = Object.values(subcases).flat();
+const environments = [
+  { name: "baseline", environment: "jsdom" },
+  { name: "ours", environment: "./src/vitest.ts" },
+];
+const results = {};
+
+const median = (a) => {
+  if (!Array.isArray(a) || !a.length) return null;
+  const s = [...a].sort((x, y) => x - y);
+  return s[s.length >> 1];
+};
+const round = (n) => (n === null || n === undefined ? null : Math.round(n * 100) / 100);
+const pct = (n, d) => (d ? `${((n / d) * 100).toFixed(0)}%` : "n/a");
+const slope = (o, b) => (o === null || b === null || !b ? null : Math.round((o / b) * 100) / 100);
+
+for (const env of environments) {
+  let passed = Infinity;
+  let total = 0;
+  const failures = new Set();
+  const samples = Object.fromEntries(sampleKeys.map((c) => [c, []]));
+  const walls = [];
+  for (let r = 0; r < rounds; r++) {
+    const suffix = `${env.name}.${r + 1}`;
+    const config = path.join(cache, `vitest.${suffix}.config.mjs`);
+    const report = path.join(cache, `report.${suffix}.json`);
+    const timing = path.join(cache, `timing.${suffix}.json`);
+    writeFileSync(
+      config,
+      `// generated by scripts/react-userevent-suite.mjs\nexport default {\n  root: ${JSON.stringify(root)},\n  test: {\n    include: ["tests/acceptance/react-userevent.test.tsx"],\n    environment: ${JSON.stringify(env.environment)},\n    environmentOptions: { wasmQuickjsDom: { url: "http://localhost/" } },\n    testTimeout: 120000,\n    hookTimeout: 120000,\n    fileParallelism: false,\n  },\n};\n`,
+    );
+    const started = performance.now();
+    // Run vitest's own bin with this node: spawning `npx.cmd` directly is refused on Windows.
+    const r2 = spawnSync(
+      process.execPath,
+      [path.join(root, "node_modules", "vitest", "vitest.mjs"), "run", "--config", config, "--reporter=json", "--outputFile", report],
+      {
+        cwd: root,
+        stdio: "inherit",
+        env: { ...process.env, REACT_UE_OUT: timing, REACT_UE_ENV: env.name, REACT_UE_REPS: String(reps) },
+      },
+    );
+    walls.push(performance.now() - started);
+    if (r2.status !== 0 && !existsSync(report)) {
+      console.error(`react-userevent-suite: ${env.name} round ${r + 1} did not produce a report (exit ${r2.status})`);
+      process.exit(1);
+    }
+    const data = JSON.parse(readFileSync(report, "utf8"));
+    const assertions = (data.testResults ?? []).flatMap((suite) => suite.assertionResults ?? []);
+    passed = Math.min(passed, assertions.filter((a) => a.status === "passed").length);
+    total = Math.max(total, assertions.length);
+    for (const a of assertions) if (a.status === "failed") failures.add(a.fullName || a.title);
+    if (existsSync(timing)) {
+      const t = JSON.parse(readFileSync(timing, "utf8"));
+      for (const c of sampleKeys) samples[c].push(...(t.samples?.[c] ?? []));
+    }
+  }
+  results[env.name] = {
+    passed: Number.isFinite(passed) ? passed : 0,
+    total,
+    failures: [...failures],
+    medians: Object.fromEntries(cases.map((c) => [c, median(samples[c])])),
+    samples,
+    wallMs: walls.reduce((s, x) => s + x, 0),
+    rounds,
+  };
+}
+
+const base = results.baseline;
+const ours = results.ours;
+const perCase = {};
+for (const c of cases) {
+  const sub = subcases[c].map((k) => {
+    const b = median(base.samples[k]) ?? null;
+    const o = median(ours.samples[k]) ?? null;
+    return { key: k, jsdom: round(b), ours: round(o), ratio: slope(o, b) };
+  });
+  const b = sub.reduce((s, x) => s + (x.jsdom ?? 0), 0);
+  const o = sub.reduce((s, x) => s + (x.ours ?? 0), 0);
+  perCase[c] = { jsdom: round(b), ours: round(o), ratio: slope(o, b), subcases: sub };
+}
+const bTotal = cases.reduce((s, c) => s + (perCase[c].jsdom ?? 0), 0);
+const oTotal = cases.reduce((s, c) => s + (perCase[c].ours ?? 0), 0);
+const perf = {
+  unit: "ms (median of render + userEvent.setup + sequence; user-event delay=null; one warm-up repetition per round)",
+  reps,
+  rounds,
+  samplesPerCase: reps * rounds,
+  perCase,
+  overall: { jsdom: round(bTotal), ours: round(oTotal), ratio: slope(oTotal, bTotal) },
+};
+const result = {
+  measured: new Date().toISOString().slice(0, 10),
+  versions,
+  environments: { baseline: "jsdom", ours: "src/vitest.ts" },
+  passRate: { baseline: { passed: base.passed, total: base.total }, ours: { passed: ours.passed, total: ours.total } },
+  failures: { baseline: base.failures, ours: ours.failures },
+  perf,
+  wallMs: { rounds, baseline: Math.round(base.wallMs), ours: Math.round(ours.wallMs), ratio: slope(ours.wallMs, base.wallMs) },
+};
+
+if (flag("--json")) {
+  console.log(JSON.stringify(result, null, 2));
+} else {
+  console.log(
+    `react-userevent-suite: react ${versions.react} / react-dom ${versions["react-dom"]} / RTL ${versions["@testing-library/react"]} / user-event ${versions["@testing-library/user-event"]} / jsdom ${versions.jsdom} / vitest ${versions.vitest}`,
+  );
+  console.log(`\nenvironment | passed | rate | wall ms (${rounds} rounds)`);
+  for (const name of ["baseline", "ours"]) {
+    const r = results[name];
+    console.log(`${name.padEnd(11)} | ${`${r.passed}/${r.total}`.padEnd(6)} | ${pct(r.passed, r.total).padEnd(4)} | ${Math.round(r.wallMs)}`);
+  }
+  console.log(`\ncase    | jsdom ms | ours ms | ratio (ours/jsdom)`);
+  for (const c of cases) console.log(`${c.padEnd(7)} | ${String(perCase[c].jsdom).padEnd(8)} | ${String(perCase[c].ours).padEnd(7)} | ${perCase[c].ratio}x`);
+  console.log(`overall | ${String(perf.overall.jsdom).padEnd(8)} | ${String(perf.overall.ours).padEnd(7)} | ${perf.overall.ratio}x  (design guard: <= 2x)`);
+  for (const name of ["baseline", "ours"]) {
+    const r = results[name];
+    if (r.failures.length) {
+      console.log(`\n${name} failures (${r.failures.length}):`);
+      for (const f of r.failures) console.log(`  - ${f}`);
+    }
+  }
+}
+
+const invalid = base.total === 0 || base.total !== cases.length * 2;
+if (invalid) {
+  console.error(`\nreact-userevent-suite: baseline produced ${base.total} test result(s), expected ${cases.length * 2}`);
+  process.exit(1);
+}
+if (base.failures.length) {
+  console.error(`\nreact-userevent-suite: the jsdom baseline has ${base.failures.length} failure(s); nothing to compare against`);
+  for (const f of base.failures) console.error(`  - ${f}`);
+  process.exit(1);
+}
+
+if (flag("--record")) {
+  const ledgerPath = path.join(root, "tests", "known-gaps.json");
+  const ledger = JSON.parse(readFileSync(ledgerPath, "utf8"));
+  ledger.reactUserEvent = {
+    script: "scripts/react-userevent-suite.mjs",
+    measured: result.measured,
+    versions: result.versions,
+    environments: result.environments,
+    cases,
+    passRate: result.passRate,
+    failures: result.failures,
+    perf: result.perf,
+    wallMs: result.wallMs,
+    note: "Numbers only, measured before deciding on bridge batching / qSA NodeList (2026-11-04); no product code changed and no optimisation applied for this entry. ratio = ours/jsdom; design guard 2x (docs/jsdom-compat-design.md section 11).",
+  };
+  writeFileSync(ledgerPath, JSON.stringify(ledger) + "\n");
+  console.log(`\nreact-userevent-suite: recorded reactUserEvent in tests/known-gaps.json`);
+}
+
+if (flag("--require-parity") && ours.passed < base.passed) {
+  console.error(`\nreact-userevent-suite: ours passed ${ours.passed}/${ours.total}, baseline ${base.passed}/${base.total}`);
+  process.exitCode = 1;
+} else {
+  console.log(`\nreact-userevent-suite: measured ${ours.passed}/${ours.total} under ours, ${base.passed}/${base.total} under jsdom`);
+}

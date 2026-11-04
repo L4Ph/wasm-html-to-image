@@ -160,6 +160,19 @@ describe("JSDOM: the virtual console", () => {
     expect(seen[0].message).toContain('pass "usable"');
   });
 
+  it("reports the window's unimplemented stubs as jsdom does", () => {
+    const vc = new VirtualConsole();
+    const seen: { type?: string; message: string }[] = [];
+    vc.on("jsdomError", (e: Error & { type?: string }) => seen.push({ type: e.type, message: e.message }));
+    const dom = make("<p>x</p>", { virtualConsole: vc, runScripts: "dangerously" });
+    dom.window.scrollTo(0, 10);
+    dom.window.alert("hello");
+    expect(seen).toEqual([
+      { type: "not-implemented", message: "Not implemented: Window's scrollTo() method" },
+      { type: "not-implemented", message: "Not implemented: Window's alert() method" },
+    ]);
+  });
+
   it("sendTo forwards to a console", () => {
     const lines: unknown[][] = [];
     const vc = new VirtualConsole().sendTo({ log: (...a) => lines.push(["log", ...a]), info() {}, warn() {}, error: (...a) => lines.push(["error", ...a]), debug() {} });
@@ -196,6 +209,22 @@ describe("JSDOM: answers like jsdom", () => {
   };
   it("gives the same answers for a page of ordinary DOM use", () => {
     expect(probe(make(html).window)).toEqual(probe(new RealJSDOM(html).window));
+  });
+
+  it("querySelectorAll answers a static NodeList with item() and iteration", () => {
+    const dom = make('<ul><li class=a>1</li><li class=a>2</li><li>3</li></ul><script>var q = document.querySelectorAll("li.a"); window.qsaProbe = [q instanceof NodeList, q instanceof HTMLCollection, Array.isArray(q), q.length, q.item(0).textContent, q.item(9)]</script>', { runScripts: "dangerously" });
+    expect(dom.window.qsaProbe).toEqual([true, false, false, 2, "1", null]);
+    const list = dom.window.document.querySelectorAll("li.a");
+    expect(list instanceof dom.window.NodeList).toBe(true);
+    expect(list instanceof dom.window.HTMLCollection).toBe(false);
+    expect(list.length).toBe(2);
+    expect(list.item(1).textContent).toBe("2");
+    expect(list.item(99)).toBe(null);
+    expect([...list].map((e: any) => e.textContent)).toEqual(["1", "2"]);
+    // a snapshot, not a live view (the spec's qSA): appending later does not change it
+    dom.window.document.querySelector("ul")!.appendChild(dom.window.document.createElement("li")).className = "a";
+    expect(list.length).toBe(2);
+    expect(dom.window.document.querySelectorAll("li.a").length).toBe(3);
   });
 });
 
@@ -352,31 +381,31 @@ describe("JSDOM: cookieJar", () => {
 });
 
 describe("the Vitest environment: options", () => {
-  it("falls back to test.environmentOptions.jsdom.url, and wasmQuickjsDom wins", () => {
+  it("falls back to test.environmentOptions.jsdom.url, and wasmQuickjsDom wins", async () => {
     const fromJsdom: Record<string, any> = {};
-    const first = vitestEnvironment.setup(fromJsdom, { jsdom: { url: "https://example.test/jsdom" } });
+    const first = await vitestEnvironment.setup(fromJsdom, { jsdom: { url: "https://example.test/jsdom" } });
     try {
       expect(fromJsdom.document.URL).toBe("https://example.test/jsdom");
     } finally {
-      first.teardown(fromJsdom);
+      await first.teardown(fromJsdom);
     }
 
     const fromWasm: Record<string, any> = {};
-    const second = vitestEnvironment.setup(fromWasm, {
+    const second = await vitestEnvironment.setup(fromWasm, {
       jsdom: { url: "https://example.test/jsdom" },
       wasmQuickjsDom: { url: "https://example.test/wasm" },
     });
     try {
       expect(fromWasm.document.URL).toBe("https://example.test/wasm");
     } finally {
-      second.teardown(fromWasm);
+      await second.teardown(fromWasm);
     }
   });
 
-  it("resolves three layers and never lets an explicit undefined erase a lower fallback", () => {
+  it("resolves three layers and never lets an explicit undefined erase a lower fallback", async () => {
     // layer order: wasmQuickjsDom, then jsdom, then the environment's top level
     const topOnly: Record<string, any> = {};
-    const top = vitestEnvironment.setup(topOnly, {
+    const top = await vitestEnvironment.setup(topOnly, {
       url: "https://example.test/top",
       jsdom: { url: undefined },
       wasmQuickjsDom: { url: undefined, html: undefined },
@@ -384,12 +413,12 @@ describe("the Vitest environment: options", () => {
     try {
       expect(topOnly.document.URL).toBe("https://example.test/top");
     } finally {
-      top.teardown(topOnly);
+      await top.teardown(topOnly);
     }
 
     // undefined in the first layer falls through to the second; a real value there wins over the top level
     const withJsdom: Record<string, any> = {};
-    const second = vitestEnvironment.setup(withJsdom, {
+    const second = await vitestEnvironment.setup(withJsdom, {
       url: "https://example.test/top",
       jsdom: { url: "https://example.test/jsdom" },
       wasmQuickjsDom: { url: undefined },
@@ -397,12 +426,12 @@ describe("the Vitest environment: options", () => {
     try {
       expect(withJsdom.document.URL).toBe("https://example.test/jsdom");
     } finally {
-      second.teardown(withJsdom);
+      await second.teardown(withJsdom);
     }
 
     // and the first layer's value wins over both when it is there
     const withWasm: Record<string, any> = {};
-    const third = vitestEnvironment.setup(withWasm, {
+    const third = await vitestEnvironment.setup(withWasm, {
       url: "https://example.test/top",
       jsdom: { url: "https://example.test/jsdom" },
       wasmQuickjsDom: { url: "https://example.test/wasm" },
@@ -410,7 +439,72 @@ describe("the Vitest environment: options", () => {
     try {
       expect(withWasm.document.URL).toBe("https://example.test/wasm");
     } finally {
-      third.teardown(withWasm);
+      await third.teardown(withWasm);
+    }
+  });
+});
+
+describe("the Vitest environment: teardown and awaitReady", () => {
+  // The reproduction for the "in-flight work leaks past teardown" flake: a page whose external script is still in
+  // flight when the test ends. The old synchronous teardown closed the page and aborted the request; the script never
+  // ran, and the next test (or the process) saw a page mid-load. Teardown now awaits `dom.ready` first.
+  it("awaits an in-flight external script instead of aborting it (0 flakes over repeats)", async () => {
+    const seen: string[] = [];
+    let hits = 0;
+    const server = createServer((req, res) => {
+      hits++;
+      // slow enough that a synchronous close wins the race every time
+      setTimeout(() => {
+        res.setHeader("content-type", "text/javascript");
+        res.end("console.log('loaded')");
+      }, 300);
+    }).listen(0);
+    await new Promise((r) => server.once("listening", r));
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
+    try {
+      for (let i = 0; i < 3; i++) {
+        const vc = new VirtualConsole();
+        vc.on("log", (m: string) => seen.push(m));
+        const global: Record<string, any> = {};
+        const setup = await vitestEnvironment.setup(global, {
+          wasmQuickjsDom: { html: '<script src="slow.js"></script>', url: base, resources: "usable", runScripts: "dangerously", virtualConsole: vc },
+        });
+        await setup.teardown(global);
+      }
+    } finally {
+      server.close();
+    }
+    expect(hits).toBe(3);
+    expect(seen).toEqual(["loaded", "loaded", "loaded"]);
+  });
+
+  it("waits for external resources only when awaitReady is set", async () => {
+    const server = createServer((req, res) => {
+      setTimeout(() => {
+        res.setHeader("content-type", "text/javascript");
+        res.end("document.title = 'loaded'");
+      }, 50);
+    }).listen(0);
+    await new Promise((r) => server.once("listening", r));
+    const base = `http://127.0.0.1:${(server.address() as { port: number }).port}/`;
+    const options = { html: '<script src="slow.js"></script>', url: base, resources: "usable", runScripts: "dangerously" } as const;
+    try {
+      // default (off): setup is synchronous and returns before the external script has run
+      const early: Record<string, any> = {};
+      const earlySetup = vitestEnvironment.setup(early, { wasmQuickjsDom: options });
+      expect(earlySetup).not.toBeInstanceOf(Promise);
+      expect(early.document.title).toBe("");
+      await (earlySetup as { teardown(g: Record<string, any>): Promise<void> }).teardown(early);
+
+      // flag on: setup is asynchronous and settles only after `load` (and the external script) has run
+      const late: Record<string, any> = {};
+      const lateSetup = vitestEnvironment.setup(late, { wasmQuickjsDom: { ...options, awaitReady: true } });
+      expect(lateSetup).toBeInstanceOf(Promise);
+      const ready = await (lateSetup as Promise<{ teardown(g: Record<string, any>): Promise<void> }>);
+      expect(late.document.title).toBe("loaded");
+      await ready.teardown(late);
+    } finally {
+      server.close();
     }
   });
 });
