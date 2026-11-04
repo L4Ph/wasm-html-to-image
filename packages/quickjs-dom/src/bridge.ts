@@ -51,11 +51,54 @@ interface Handle {
 
 /** Methods that only read: what they answer holds until something that is not one of these runs. */
 const PURE_CALLS = new Set([
-  "matches", "closest", "contains", "getAttribute", "getAttributeNS", "hasAttribute", "hasAttributeNS", "getAttributeNames", "hasAttributes",
+  "matches", "closest", "contains", "getAttribute", "getAttributeNS", "hasAttribute", "hasAttributeNS", "getAttributeNames", "hasAttributes", "getAttributeNode", "hasChildNodes",
   "querySelector", "querySelectorAll", "getElementsByTagName", "getElementsByClassName", "getElementsByName", "getElementById",
-  "compareDocumentPosition", "getRootNode", "isSameNode", "isEqualNode", "hasChildNodes", "getBoundingClientRect", "getClientRects",
+  "compareDocumentPosition", "getRootNode", "isSameNode", "isEqualNode", "getBoundingClientRect", "getClientRects",
   "item", "namedItem", "lookupNamespaceURI", "lookupPrefix", "isDefaultNamespace", "toString",
+  "getComputedStyle", "getPropertyValue", "getPropertyPriority",
 ]);
+
+interface SelectorCheck {
+  tagRequired?: Set<string>;
+  alwaysTrue?: boolean;
+}
+
+const selectorCheckCache = new Map<string, SelectorCheck>();
+
+function analyzeSelector(sel: string): SelectorCheck {
+  let cached = selectorCheckCache.get(sel);
+  if (cached) return cached;
+  const s = sel.trim();
+  if (s === "*") {
+    cached = { alwaysTrue: true };
+    selectorCheckCache.set(sel, cached);
+    return cached;
+  }
+  // Check if it's a comma-separated list of branches, each without combinators (' ', '>', '+', '~')
+  // and each starting with a specific tag name: e.g. "input[type=button], input[type=submit]" or "th[scope=col]"
+  if (!/[\s>+~]/.test(s)) {
+    const branches = s.split(",");
+    const tags = new Set<string>();
+    let valid = true;
+    for (const b of branches) {
+      const trimmed = b.trim();
+      const match = /^([a-zA-Z0-9]+)/.exec(trimmed);
+      if (!match) {
+        valid = false;
+        break;
+      }
+      tags.add(match[1].toLowerCase());
+    }
+    if (valid && tags.size > 0) {
+      cached = { tagRequired: tags };
+      selectorCheckCache.set(sel, cached);
+      return cached;
+    }
+  }
+  cached = {};
+  selectorCheckCache.set(sel, cached);
+  return cached;
+}
 
 const HANDLE = Symbol("wasm-quickjs-dom.handle");
 const CLASS_NAME = Symbol("wasm-quickjs-dom.class");
@@ -105,6 +148,9 @@ export class Bridge {
   private fnLimit = 256;
   private pruning = false;
 
+  private readonly classProxyHandler: ProxyHandler<object>;
+  private readonly indexedClassProxyHandler: ProxyHandler<object>;
+
   constructor(vm: BridgeVM, options: BridgeOptions = {}) {
     this.vm = vm;
     this.timeout = options.timeout ?? 10000;
@@ -115,6 +161,43 @@ export class Bridge {
       const ref = this.wrappers.get(cell.id);
       if (ref && !ref.deref()) this.wrappers.delete(cell.id);
     });
+
+    const bridge = this;
+    this.classProxyHandler = {
+      get(t, k, r) {
+        if (k in t) return Reflect.get(t, k, r);
+        const cell = (t as any)[HANDLE] as Cell;
+        return typeof k === "string" ? bridge.get(cell, k) : undefined;
+      },
+      set(t, k, v, r) {
+        if (k in t) return Reflect.set(t, k, v, r);
+        bridge.pinned.add(r);
+        return Reflect.set(t, k, v, t);
+      },
+      has(t, k) {
+        return Reflect.has(t, k);
+      },
+    };
+
+    this.indexedClassProxyHandler = {
+      get(t, k, r) {
+        const cell = (t as any)[HANDLE] as Cell;
+        if (typeof k === "string" && INDEX.test(k)) return bridge.get(cell, k);
+        if (k in t) return Reflect.get(t, k, r);
+        return typeof k === "string" ? bridge.get(cell, k) : undefined;
+      },
+      set(t, k, v, r) {
+        if (k in t) return Reflect.set(t, k, v, r);
+        bridge.pinned.add(r);
+        return Reflect.set(t, k, v, t);
+      },
+      has(t, k) {
+        const cell = (t as any)[HANDLE] as Cell;
+        if (typeof k === "string" && INDEX.test(k)) return Number(k) < (bridge.get(cell, "length") as number);
+        return Reflect.has(t, k);
+      },
+    };
+
     const schema = cachedSchema ?? (cachedSchema = this.sendJ(["schema"]) as InterfaceSchema[]);
     this.buildClasses(schema);
     this.window = this.sendJ(["root"]) as DOMWindow;
@@ -238,6 +321,16 @@ export class Bridge {
   }
 
   private handleOf(s: string): unknown {
+    const sep = s.indexOf("\u0001");
+    if (sep < 0) {
+      const id = Number(s);
+      const known = this.wrappers.get(id)?.deref();
+      if (known) {
+        (known as any)[HANDLE].count++;
+        return known;
+      }
+      return this.wrapper({ i: id });
+    }
     const [i, c, t, n, l, g] = s.split("\u0001");
     return this.wrapper({ i: Number(i), c: c || undefined, t: t === undefined || t === "" ? undefined : Number(t), n, l, g });
   }
@@ -308,6 +401,11 @@ export class Bridge {
   }
 
   private call(cell: Cell, key: string, args: unknown[]): unknown {
+    if (key === "matches" && cell.t === 1 && typeof cell.l === "string" && typeof args[0] === "string") {
+      const check = analyzeSelector(args[0]);
+      if (check.alwaysTrue) return true;
+      if (check.tagRequired && !check.tagRequired.has(cell.l.toLowerCase())) return false;
+    }
     const encoded = this.encodeArgs(args);
     if (!PURE_CALLS.has(key)) {
       this.invalidate();
@@ -429,25 +527,9 @@ export class Bridge {
    */
   private classWrapper(cell: Cell, cls: any): object {
     const obj = Object.create(cls.prototype);
-    Object.defineProperty(obj, HANDLE, { value: cell, configurable: true });
+    obj[HANDLE] = cell;
     const indexed = !!cls[INDEXED];
-    const proxy: object = new Proxy(obj, {
-      get: (t, k, r) => {
-        if (indexed && typeof k === "string" && INDEX.test(k)) return this.get(cell, k);
-        if (k in t) return Reflect.get(t, k, r);
-        return typeof k === "string" ? this.get(cell, k) : undefined;
-      },
-      set: (t, k, v, r) => {
-        if (k in t) return Reflect.set(t, k, v, r);
-        this.pinned.add(proxy);
-        return Reflect.set(t, k, v, t);
-      },
-      has: (t, k) => {
-        if (indexed && typeof k === "string" && INDEX.test(k)) return Number(k) < (this.get(cell, "length") as number);
-        return Reflect.has(t, k);
-      },
-    });
-    return proxy;
+    return new Proxy(obj, indexed ? this.indexedClassProxyHandler : this.classProxyHandler);
   }
 
   /** Any other object (a style declaration, `window`, a DOMRect, ...): every property is looked up in the page. */
@@ -513,7 +595,7 @@ export class Bridge {
       const k = cell.id + "\u0001*" + key;
       let list = this.reads.get(k) as unknown[] | undefined;
       if (!list) {
-        list = this.sendJ(["kids", cell.id, key === "children"]) as unknown[];
+        list = this.send("k" + cell.id + "\u0001" + (key === "children" ? "1" : "0")) as unknown[];
         this.reads.set(k, list);
       }
       return list;

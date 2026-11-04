@@ -624,9 +624,12 @@
   // the element styles' own class (nativedom.js), so el.style and a computed style are instances
   // of the one CSSStyleDeclaration; the fallback is for a layer running without nativedom.js
   var Computed = D.CSSStyleDeclarationCtor || function CSSStyleDeclaration() {};
-  var makeComputed = function (el, values) {
-    var names = Object.keys(values).filter(function (n) { return n.slice(0, 2) !== "--"; }).sort();
+  var makeComputed = function (el, pseudo) {
+    var getValues = function () {
+      return pseudo ? {} : computedOf(el, 0);
+    };
     var read = function (name) {
+      var values = getValues();
       if (name.slice(0, 2) !== "--") name = name.toLowerCase(); // custom properties are case-sensitive
       var v = values[name];
       if (v === undefined && SHORT[name]) {
@@ -635,23 +638,27 @@
       }
       return v === undefined ? "" : v;
     };
+    var getNames = function () {
+      var values = getValues();
+      return Object.keys(values).filter(function (n) { return n.slice(0, 2) !== "--"; }).sort();
+    };
     var base = {};
     Object.defineProperties(base, {
-      getPropertyValue: { value: function (n) { return read(String(n)); } },
-      getPropertyPriority: { value: function () { return ""; } },
-      item: { value: function (i) { return names[i] || ""; } },
-      setProperty: { value: function () { throw domErr("NoModificationAllowedError", "These styles are computed, and therefore read-only."); } },
-      removeProperty: { value: function () { throw domErr("NoModificationAllowedError", "These styles are computed, and therefore read-only."); } },
-      length: { get: function () { return names.length; } },
-      cssText: { get: function () { return ""; } },
-      parentRule: { value: null },
+      getPropertyValue: { value: function (n) { return read(String(n)); }, configurable: true },
+      getPropertyPriority: { value: function () { return ""; }, configurable: true },
+      item: { value: function (i) { return getNames()[i] || ""; }, configurable: true },
+      setProperty: { value: function () { throw domErr("NoModificationAllowedError", "These styles are computed, and therefore read-only."); }, configurable: true },
+      removeProperty: { value: function () { throw domErr("NoModificationAllowedError", "These styles are computed, and therefore read-only."); }, configurable: true },
+      length: { get: function () { return getNames().length; }, configurable: true },
+      cssText: { get: function () { return ""; }, configurable: true },
+      parentRule: { value: null, configurable: true },
     });
     Object.setPrototypeOf(base, Computed.prototype);
     return new Proxy(base, {
       get: function (t, k) {
         if (typeof k !== "string") return t[k];
         if (k in t) return t[k];
-        if (/^\d+$/.test(k)) return names[+k];
+        if (/^\d+$/.test(k)) return getNames()[+k];
         if (k === "cssFloat") return read("float");
         var n = k.indexOf("-") >= 0 ? k : kebab(k);
         return read(n);
@@ -659,10 +666,11 @@
       set: function (t, k) {
         throw domErr("NoModificationAllowedError", "These styles are computed, and therefore read-only.");
       },
-      has: function (t, k) { return typeof k === "string" ? (k in t || read(kebab(k)) !== "" || /^\d+$/.test(k) && +k < names.length) : k in t; },
-      ownKeys: function () { return names.map(function (_, i) { return String(i); }).concat(names.map(camel)); },
+      has: function (t, k) { return typeof k === "string" ? (k in t || read(kebab(k)) !== "" || /^\d+$/.test(k) && +k < getNames().length) : k in t; },
+      ownKeys: function () { var names = getNames(); return names.map(function (_, i) { return String(i); }).concat(names.map(camel)); },
       getOwnPropertyDescriptor: function (t, k) {
         if (typeof k !== "string") return undefined;
+        var names = getNames();
         if (/^\d+$/.test(k)) return +k < names.length ? { value: names[+k], enumerable: true, configurable: true } : undefined;
         var v = read(kebab(k));
         return v === "" ? undefined : { value: v, enumerable: true, configurable: true };
@@ -671,10 +679,16 @@
   };
   var domErr = function (name, message) { var e = new Error(message); e.name = name; return e; };
 
+  var computedCache = new WeakMap();
   g.getComputedStyle = function getComputedStyle(el, pseudo) {
     if (!el || el.nodeType !== 1) throw new TypeError("Failed to execute 'getComputedStyle' on 'Window': parameter 1 is not of type 'Element'.");
-    if (pseudo) return makeComputed(el, {});
-    return makeComputed(el, computedOf(el, 0));
+    if (pseudo) return makeComputed(el, true);
+    var cs = computedCache.get(el);
+    if (!cs) {
+      cs = makeComputed(el, false);
+      computedCache.set(el, cs);
+    }
+    return cs;
   };
   // (CSSStyleDeclaration is not put on D.window: boot.js installs the constructor as a global from
   // D.CSSStyleDeclarationCtor, keeping style objects off the bridge's class table — see nativedom.js)

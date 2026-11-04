@@ -594,7 +594,7 @@
       if (h != null) i.setAttribute("height", h);
       return i;
     };
-    g.Image.prototype = Object.getPrototypeOf(d.createElement("img"));
+    g.Image.prototype = w.HTMLImageElement ? w.HTMLImageElement.prototype : Object.getPrototypeOf(d.createElement("img"));
     g.Option = function (text, value, defaultSelected, selected) {
       var o = d.createElement("option");
       if (text !== undefined) o.textContent = String(text);
@@ -603,13 +603,13 @@
       if (selected) o.selected = true;
       return o;
     };
-    g.Option.prototype = Object.getPrototypeOf(d.createElement("option"));
+    g.Option.prototype = w.HTMLOptionElement ? w.HTMLOptionElement.prototype : Object.getPrototypeOf(d.createElement("option"));
     g.Audio = function (src) {
       var a = d.createElement("audio");
       if (src !== undefined) a.setAttribute("src", String(src));
       return a;
     };
-    g.Audio.prototype = Object.getPrototypeOf(d.createElement("audio"));
+    g.Audio.prototype = w.HTMLAudioElement ? w.HTMLAudioElement.prototype : Object.getPrototypeOf(d.createElement("audio"));
 
     d.fonts = d.fonts || { ready: Promise.resolve(), check: function () { return true; }, load: function () { return Promise.resolve([]); }, add: function () {}, forEach: function () {}, addEventListener: function () {}, removeEventListener: function () {} };
     var state = "loading";
@@ -619,10 +619,10 @@
     if (!d.timeline) d.timeline = { get currentTime() { return g.performance.now(); } };
 
     // URL-valued properties read back absolute
-    [["script", "src"], ["img", "src"], ["link", "href"], ["a", "href"], ["iframe", "src"]].forEach(function (pair) {
-      var P = Object.getPrototypeOf(d.createElement(pair[0])), prop = pair[1];
+    [["HTMLScriptElement", "src", "script"], ["HTMLImageElement", "src", "img"], ["HTMLLinkElement", "href", "link"], ["HTMLAnchorElement", "href", "a"], ["HTMLIFrameElement", "src", "iframe"]].forEach(function (triple) {
+      var C = w[triple[0]], P = C ? C.prototype : Object.getPrototypeOf(d.createElement(triple[2])), prop = triple[1];
       while (P && !Object.getOwnPropertyDescriptor(P, prop)) P = Object.getPrototypeOf(P);
-      P = P || Object.getPrototypeOf(d.createElement(pair[0]));
+      P = P || (C ? C.prototype : Object.getPrototypeOf(d.createElement(triple[2])));
       Object.defineProperty(P, prop, {
         configurable: true,
         get: function () {

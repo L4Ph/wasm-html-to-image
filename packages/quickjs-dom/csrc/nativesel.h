@@ -174,6 +174,24 @@ static void sel_free(SList *l) {
     l->ar = NULL;
 }
 
+/* 0 when parsed; `out` must be released with sel_free() then */
+static int sel_parse(const char *s, size_t len, SList *out) {
+    memset(out, 0, sizeof(*out));
+    SP p;
+    p.s = s;
+    p.len = len;
+    p.i = 0;
+    p.depth = 0;
+    p.arn = 0;
+    p.ar = malloc(len * 2 + 8);
+    if (!p.ar) return -1;
+    out->ar = p.ar;
+    int ok = sp_list(&p, out, 0);
+    sp_ws(&p);
+    if (!ok || p.i != len) { sel_free(out); return -1; }
+    return 0;
+}
+
 static int sp_pseudo(SP *p, SComp *k) {
     int colons = 1;
     p->i++;
@@ -344,22 +362,41 @@ static int sp_list(SP *p, SList *out, int relative) {
     }
 }
 
-/* 0 when parsed; `out` must be released with sel_free() then */
-static int sel_parse(const char *s, size_t len, SList *out) {
-    memset(out, 0, sizeof(*out));
-    SP p;
-    p.s = s;
-    p.len = len;
-    p.i = 0;
-    p.depth = 0;
-    p.arn = 0;
-    p.ar = malloc(len * 2 + 8);
-    if (!p.ar) return -1;
-    out->ar = p.ar;
-    int ok = sp_list(&p, out, 0);
-    sp_ws(&p);
-    if (!ok || p.i != len) { sel_free(out); return -1; }
-    return 0;
+#define SEL_CACHE_SIZE 32
+typedef struct {
+    char *str;
+    size_t len;
+    SList list;
+    int valid;
+} SelCacheEntry;
+static SelCacheEntry sel_cache[SEL_CACHE_SIZE];
+static int sel_cache_hand;
+
+/* Look up or parse a selector. The returned SList pointer is valid until subsequent sel_parse_cached calls evict it. Do NOT call sel_free on it. */
+static const SList *sel_parse_cached(const char *s, size_t len) {
+    for (int i = 0; i < SEL_CACHE_SIZE; i++) {
+        if (sel_cache[i].valid && sel_cache[i].len == len && memcmp(sel_cache[i].str, s, len) == 0) {
+            return &sel_cache[i].list;
+        }
+    }
+    int slot = sel_cache_hand;
+    sel_cache_hand = (sel_cache_hand + 1) % SEL_CACHE_SIZE;
+    if (sel_cache[slot].valid) {
+        sel_free(&sel_cache[slot].list);
+        free(sel_cache[slot].str);
+        sel_cache[slot].valid = 0;
+    }
+    if (sel_parse(s, len, &sel_cache[slot].list) != 0) return NULL;
+    sel_cache[slot].str = malloc(len + 1);
+    if (!sel_cache[slot].str) {
+        sel_free(&sel_cache[slot].list);
+        return NULL;
+    }
+    memcpy(sel_cache[slot].str, s, len);
+    sel_cache[slot].str[len] = 0;
+    sel_cache[slot].len = len;
+    sel_cache[slot].valid = 1;
+    return &sel_cache[slot].list;
 }
 
 static int sel_class_has(ND *n, const char *cls, int clen) {

@@ -53,6 +53,7 @@ const decoder = new TextDecoder();
 // What a started instance looks like in memory, per compiled module, so the next one is a copy instead of a start
 // (see QuickJSInstance.create): starting the guest program costs more than copying a few megabytes.
 const snapshots = new WeakMap<WebAssembly.Module, { key: string; bytes: Uint8Array }>();
+const wasmImportsCache = new WeakMap<WebAssembly.Module, WebAssembly.ModuleImportDescriptor[]>();
 
 function takeSnapshot(memory: WebAssembly.Memory): Uint8Array {
   const words = new Uint32Array(memory.buffer);
@@ -129,10 +130,15 @@ export class QuickJSInstance {
       env: { emscripten_notify_memory_growth: () => {} },
     };
     // another Emscripten version may ask for more of the C library's system calls than these: say "not implemented"
-    for (const i of WebAssembly.Module.imports(wasm)) {
+    const modImports = wasmImportsCache.get(wasm) ?? (() => {
+      const im = WebAssembly.Module.imports(wasm);
+      wasmImportsCache.set(wasm, im);
+      return im;
+    })();
+    for (const i of modImports) {
       if (i.module === "wasi_snapshot_preview1" && !(i.name in imports.wasi_snapshot_preview1)) imports.wasi_snapshot_preview1[i.name] = () => 52;
     }
-    const wanted = WebAssembly.Module.imports(wasm).filter((i) => !(i.name in (imports[i.module] ?? {})));
+    const wanted = modImports.filter((i) => !(i.name in (imports[i.module] ?? {})));
     if (wanted.length) throw new Error(`quickjs.wasm needs imports this runtime does not provide: ${wanted.map((i) => `${i.module}.${i.name}`).join(", ")}`);
     x = new WebAssembly.Instance(wasm, imports).exports as unknown as Exports;
     const key = `${memoryLimit}:${stackLimit}`;

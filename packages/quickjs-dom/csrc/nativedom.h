@@ -36,8 +36,40 @@ static long nd_version; /* bumped by every change to a tree or an attribute: liv
 static long nd_live; /* nodes alive: tests check that dropped trees are really freed */
 static JSValue nd_protos[NP_COUNT];
 /* prototypes of the elements with a class of their own (HTMLInputElement for input, ...), registered by nativedom.js */
-static struct { char tag[16]; int len; JSValue proto; } nd_tag_protos[96];
+#define ND_TAG_HASH_SIZE 256
+#define ND_TAG_HASH_MASK (ND_TAG_HASH_SIZE - 1)
+static struct { char tag[16]; int len; JSValue proto; } nd_tag_protos[ND_TAG_HASH_SIZE];
 static int nd_ntag_protos;
+
+static inline uint32_t nd_tag_hash(const char *tag, int len) {
+    uint32_t h = 2166136261u;
+    for (int i = 0; i < len; i++) {
+        char c = tag[i];
+        if (c >= 'A' && c <= 'Z') c += 32;
+        h = (h ^ (uint8_t)c) * 16777619u;
+    }
+    return h;
+}
+
+static inline JSValue nd_lookup_tag_proto(const char *tag, int len) {
+    if (len <= 0 || len >= 16) return JS_UNDEFINED;
+    uint32_t h = nd_tag_hash(tag, len) & ND_TAG_HASH_MASK;
+    for (int step = 0; step < ND_TAG_HASH_SIZE; step++) {
+        uint32_t idx = (h + step) & ND_TAG_HASH_MASK;
+        if (nd_tag_protos[idx].len == 0) return JS_UNDEFINED;
+        if (nd_tag_protos[idx].len == len) {
+            int same = 1;
+            for (int k = 0; k < len; k++) {
+                char a = nd_tag_protos[idx].tag[k], b = tag[k];
+                if (a >= 'A' && a <= 'Z') a += 32;
+                if (b >= 'A' && b <= 'Z') b += 32;
+                if (a != b) { same = 0; break; }
+            }
+            if (same) return nd_tag_protos[idx].proto;
+        }
+    }
+    return JS_UNDEFINED;
+}
 
 static ND *nd_of(JSValueConst v) { return (ND *)JS_GetOpaque(v, nd_class_id); }
 
@@ -84,7 +116,12 @@ static char *nd_dup(const char *s, size_t len) {
 /* a node of `owner`'s document (a document passes null for itself) */
 static JSValue nd_new(JSContext *c, JSValueConst owner, int type, const char *tag, size_t taglen, int lower) {
     int kind = type == 3 ? NP_TEXT : type == 8 ? NP_COMMENT : type == 9 ? NP_DOCUMENT : type == 10 ? NP_DOCTYPE : type == 11 ? NP_FRAGMENT : NP_ELEMENT;
-    JSValue obj = JS_NewObjectProtoClass(c, nd_protos[kind], nd_class_id);
+    JSValue proto = nd_protos[kind];
+    if (type == 1 && tag && taglen > 0) {
+        JSValue custom_proto = nd_lookup_tag_proto(tag, (int)taglen);
+        if (!JS_IsUndefined(custom_proto)) proto = custom_proto;
+    }
+    JSValue obj = JS_NewObjectProtoClass(c, proto, nd_class_id);
     if (JS_IsException(obj)) return obj;
     ND *n = calloc(1, sizeof(ND));
     if (!n) {
@@ -101,24 +138,6 @@ static JSValue nd_new(JSContext *c, JSValueConst owner, int type, const char *ta
         if (lower) for (int i = 0; i < n->taglen; i++) if (n->tag[i] >= 'A' && n->tag[i] <= 'Z') n->tag[i] += 32;
     }
     JS_SetOpaque(obj, n);
-    if (type == 1 && n->tag) {
-        for (int i = 0; i < nd_ntag_protos; i++) {
-            if (nd_tag_protos[i].len != n->taglen) continue;
-            /* case-insensitive: the registered names are lower-case, an SVG element's adjusted
-               name is not (foreignObject still gets the foreignObject class) */
-            int same = 1;
-            for (int k = 0; k < n->taglen; k++) {
-                char a = nd_tag_protos[i].tag[k], b = n->tag[k];
-                if (a >= 'A' && a <= 'Z') a += 32;
-                if (b >= 'A' && b <= 'Z') b += 32;
-                if (a != b) { same = 0; break; }
-            }
-            if (same) {
-                JS_SetPrototype(c, obj, nd_tag_protos[i].proto);
-                break;
-            }
-        }
-    }
     return obj;
 }
 
@@ -815,8 +834,8 @@ static JSValue sel_query(JSContext *c, JSValueConst root, JSValueConst selector,
     size_t len;
     const char *s = JS_ToCStringLen(c, &len, selector);
     if (!s) return JS_EXCEPTION;
-    SList list;
-    if (sel_parse(s, len, &list) != 0) {
+    const SList *list = sel_parse_cached(s, len);
+    if (!list) {
         JSValue e = JS_ThrowSyntaxError(c, "native DOM: unsupported selector: %s", s);
         JS_FreeCString(c, s);
         return e;
@@ -827,7 +846,7 @@ static JSValue sel_query(JSContext *c, JSValueConst root, JSValueConst selector,
     JSValue cur = nd_of(root)->first;
     while (!JS_IsNull(cur)) {
         ND *n = nd_of(cur);
-        if (n->type == 1 && sel_match(n, &list)) {
+        if (n->type == 1 && sel_match(n, list)) {
             if (all) JS_SetPropertyUint32(c, result, count++, JS_DupValue(c, cur));
             else { result = JS_DupValue(c, cur); break; }
         }
@@ -840,7 +859,6 @@ static JSValue sel_query(JSContext *c, JSValueConst root, JSValueConst selector,
             if (!JS_IsNull(cur)) cur = nd_of(cur)->next;
         }
     }
-    sel_free(&list);
     JS_FreeCString(c, s);
     return result;
 }

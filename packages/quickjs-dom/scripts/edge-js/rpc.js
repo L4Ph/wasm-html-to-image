@@ -82,7 +82,10 @@
   // the handle of an object whose class is known, as a string; null for anything else
   var handleString = function (v) {
     var id = byObj.get(v);
-    if (id !== undefined && infos[id] !== undefined) { sent[id]++; return infos[id]; }
+    if (id !== undefined && infos[id] !== undefined) {
+      sent[id]++;
+      return "h" + id;
+    }
     if (v === g || typeof v === "function") return null;
     id = idFor(v);
     var s = infoOf(v, id);
@@ -282,6 +285,11 @@
   g.__rpc = function (s) {
     try {
       var c = s.charCodeAt(0), i = s.indexOf(SEP), j;
+      if (c === 107) { // k: kids (k<id>\1<elementsOnly: 0|1>)
+        var kidNodes = [], kn = target(+s.slice(1, i)), elOnly = s.charCodeAt(i + 1) === 49;
+        for (var kc = kn.firstChild; kc; kc = kc.nextSibling) if (!elOnly || kc.nodeType === 1) kidNodes.push(kc);
+        return reply(kidNodes);
+      }
       if (c === 103) return reply(target(+s.slice(1, i))[s.slice(i + 1)]); // g
       if (c === 99) { // c
         j = s.indexOf(SEP, i + 1);
@@ -335,4 +343,7 @@
       return "x" + JSON.stringify(errorInfo(e));
     }
   };
+
+  // Pre-collect interface and constructor names into the memory snapshot
+  collect();
 })(globalThis);

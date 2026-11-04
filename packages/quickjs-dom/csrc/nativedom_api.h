@@ -479,47 +479,43 @@ static JSValue js_nd_query(JSContext *ctx, JSValueConst this_val, int argc, JSVa
     if (argc < 1) return JS_ThrowTypeError(ctx, "Failed to execute 'querySelector': 1 argument required.");
     return sel_query(ctx, this_val, argv[0], magic);
 }
-static int nd_parse_selector_arg(JSContext *ctx, JSValueConst v, SList *list, char **keep) {
-    size_t len;
-    const char *s = JS_ToCStringLen(ctx, &len, v);
-    if (!s) return -1;
-    *keep = nd_dup(s, len);
-    JS_FreeCString(ctx, s);
-    if (sel_parse(*keep, len, list) != 0) {
-        free(*keep);
-        *keep = NULL;
-        nd_throw(ctx, "SyntaxError", "The provided selector is not supported by the native DOM.");
-        return -1;
-    }
-    return 0;
-}
 static JSValue js_nd_matches(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     ND_THIS(n);
     if (argc < 1) return JS_ThrowTypeError(ctx, "Failed to execute 'matches': 1 argument required.");
-    SList list;
-    char *keep;
-    if (nd_parse_selector_arg(ctx, argv[0], &list, &keep) != 0) return JS_EXCEPTION;
+    size_t len;
+    const char *s = JS_ToCStringLen(ctx, &len, argv[0]);
+    if (!s) return JS_EXCEPTION;
+    const SList *list = sel_parse_cached(s, len);
+    if (!list) {
+        JSValue e = JS_ThrowSyntaxError(ctx, "native DOM: unsupported selector: %s", s);
+        JS_FreeCString(ctx, s);
+        return e;
+    }
     sel_scope = n;
-    int m = n->type == 1 && sel_match(n, &list);
-    sel_free(&list);
-    free(keep);
+    int m = n->type == 1 && sel_match(n, list);
+    JS_FreeCString(ctx, s);
     return JS_NewBool(ctx, m);
 }
 static JSValue js_nd_closest(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     ND_THIS(n);
     (void)n;
     if (argc < 1) return JS_ThrowTypeError(ctx, "Failed to execute 'closest': 1 argument required.");
-    SList list;
-    char *keep;
-    if (nd_parse_selector_arg(ctx, argv[0], &list, &keep) != 0) return JS_EXCEPTION;
+    size_t len;
+    const char *s = JS_ToCStringLen(ctx, &len, argv[0]);
+    if (!s) return JS_EXCEPTION;
+    const SList *list = sel_parse_cached(s, len);
+    if (!list) {
+        JSValue e = JS_ThrowSyntaxError(ctx, "native DOM: unsupported selector: %s", s);
+        JS_FreeCString(ctx, s);
+        return e;
+    }
     JSValue found = JS_NULL;
     sel_scope = n;
     for (JSValue p = this_val; !JS_IsNull(p); p = nd_of(p)->parent) {
         ND *pn = nd_of(p);
-        if (pn->type == 1 && sel_match(pn, &list)) { found = JS_DupValue(ctx, p); break; }
+        if (pn->type == 1 && sel_match(pn, list)) { found = JS_DupValue(ctx, p); break; }
     }
-    sel_free(&list);
-    free(keep);
+    JS_FreeCString(ctx, s);
     return found;
 }
 /* getElementById (0), getElementsByTagName (1), getElementsByClassName (2): below this node, document order */
@@ -702,10 +698,32 @@ static JSValue js_dom_set_tag_proto(JSContext *ctx, JSValueConst this_val, int a
     size_t len;
     const char *tag = JS_ToCStringLen(ctx, &len, argv[0]);
     if (!tag) return JS_EXCEPTION;
-    if (len < 16 && nd_ntag_protos < 96) {
-        memcpy(nd_tag_protos[nd_ntag_protos].tag, tag, len);
-        nd_tag_protos[nd_ntag_protos].len = (int)len;
-        nd_tag_protos[nd_ntag_protos++].proto = JS_DupValue(ctx, argv[1]);
+    if (len > 0 && len < 16 && nd_ntag_protos < ND_TAG_HASH_SIZE - 1) {
+        uint32_t h = nd_tag_hash(tag, (int)len) & ND_TAG_HASH_MASK;
+        for (int step = 0; step < ND_TAG_HASH_SIZE; step++) {
+            uint32_t idx = (h + step) & ND_TAG_HASH_MASK;
+            if (nd_tag_protos[idx].len == 0) {
+                memcpy(nd_tag_protos[idx].tag, tag, len);
+                nd_tag_protos[idx].len = (int)len;
+                nd_tag_protos[idx].proto = JS_DupValue(ctx, argv[1]);
+                nd_ntag_protos++;
+                break;
+            }
+            if (nd_tag_protos[idx].len == (int)len) {
+                int same = 1;
+                for (int k = 0; k < (int)len; k++) {
+                    char a = nd_tag_protos[idx].tag[k], b = tag[k];
+                    if (a >= 'A' && a <= 'Z') a += 32;
+                    if (b >= 'A' && b <= 'Z') b += 32;
+                    if (a != b) { same = 0; break; }
+                }
+                if (same) {
+                    JS_FreeValue(ctx, nd_tag_protos[idx].proto);
+                    nd_tag_protos[idx].proto = JS_DupValue(ctx, argv[1]);
+                    break;
+                }
+            }
+        }
     }
     JS_FreeCString(ctx, tag);
     return JS_UNDEFINED;
