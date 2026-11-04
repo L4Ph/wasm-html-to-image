@@ -13,6 +13,9 @@
   Object.keys(w).forEach(function (k) {
     if (!(k in g)) Object.defineProperty(g, k, { configurable: true, writable: true, value: w[k] });
   });
+  // defineProperty keeps these non-enumerable (unlike the assignments above); rpc.js's collect() scans
+  // getOwnPropertyNames for that reason, and deliberately leaves these named-property interfaces off the bridge's
+  // class table (a wrapper would keep host-side sets local instead of forwarding them to the page).
   if (N.DOMStringMapCtor && !("DOMStringMap" in g)) Object.defineProperty(g, "DOMStringMap", { configurable: true, writable: true, value: N.DOMStringMapCtor });
   if (N.CSSStyleDeclarationCtor && !("CSSStyleDeclaration" in g)) Object.defineProperty(g, "CSSStyleDeclaration", { configurable: true, writable: true, value: N.CSSStyleDeclarationCtor });
   if (N.svgValueCtors) for (var vk in N.svgValueCtors) if (!(vk in g)) Object.defineProperty(g, vk, { configurable: true, writable: true, value: N.svgValueCtors[vk] });

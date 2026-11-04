@@ -8,6 +8,29 @@
   var callbacks = new Map(); // id of a function of the host's -> the function that calls it from here
   var protoNames = null, ctorNames = null, interfaces = null;
 
+  // The language's and the runtime's own globals. They are non-enumerable like the page's defineProperty-installed
+  // ones, so the scan of g below must know them by name: they are values of the language, not interfaces of the page.
+  // (The Web Streams polyfill's classes are here too: shims.js installs the polyfill, not the DOM.)
+  var BUILTINS = {};
+  ("Object Function Array Number Boolean String Symbol BigInt Date RegExp Error EvalError RangeError ReferenceError " +
+    "SyntaxError TypeError URIError AggregateError InternalError SuppressedError Math JSON Promise Proxy Reflect Map Set " +
+    "WeakMap WeakSet WeakRef FinalizationRegistry ArrayBuffer SharedArrayBuffer DataView Atomics Intl Iterator " +
+    "DisposableStack AsyncDisposableStack Int8Array Uint8Array Uint8ClampedArray Int16Array Uint16Array Int32Array " +
+    "Uint32Array Float16Array Float32Array Float64Array BigInt64Array BigUint64Array WebAssembly " +
+    "ReadableStream ReadableStreamDefaultReader ReadableStreamBYOBReader ReadableStreamDefaultController " +
+    "ReadableByteStreamController ReadableStreamBYOBRequest WritableStream WritableStreamDefaultWriter " +
+    "WritableStreamDefaultController TransformStream TransformStreamDefaultController ByteLengthQueuingStrategy " +
+    "CountQueuingStrategy")
+    .split(" ").forEach(function (k) { BUILTINS[k] = 1; });
+
+  // Installed as globals by boot.js but kept off the class table on purpose: a dataset, a style declaration and an
+  // animated SVG value are nothing but named properties, so a class wrapper would keep host-side sets on the wrapper
+  // instead of forwarding them to the page (see DOMStringMap in dom/01-core.js and 02-classes.js, style in 01-core.js,
+  // and the SVG value interfaces in 01-core.js). getOwnPropertyNames would find them; they must stay excluded.
+  var UNBRIDGED = {};
+  ["DOMStringMap", "CSSStyleDeclaration", "SVGAnimatedString", "SVGAnimatedRect", "SVGRect", "SVGNumber", "SVGStringList",
+    "SVGPreserveAspectRatio", "SVGAnimatedPreserveAspectRatio"].forEach(function (k) { UNBRIDGED[k] = 1; });
+
   var collect = function () {
     protoNames = new Map(); ctorNames = new Map(); interfaces = [];
     var add = function (name, C) {
@@ -19,8 +42,15 @@
     Object.keys(D.window).forEach(function (k) { add(k, D.window[k]); });
     // interfaces boot.js and shims.js define on the guest's globals after nativedom.js built D: without them the host
     // gets their instances as dynamic wrappers (no prototype, no methods) instead of instances of their class.
-    // Object.keys, not getOwnPropertyNames: the language's own globals are non-enumerable, the page's are not.
-    Object.keys(g).forEach(function (k) { add(k, g[k]); });
+    // getOwnPropertyNames, not Object.keys: the page's interfaces installed with defineProperty (DOMException from the
+    // QuickJS runtime, and anything boot.js adds that way) are non-enumerable, just like the language's globals. The
+    // two are told apart by name: BUILTINS is not the page's; UNBRIDGED is the page's but deliberately has no class.
+    // The "names" op (below) uses getOwnPropertyNames for the same reason; "keys" stays Object.keys because the host
+    // uses it for its Object.keys trap over a window/object wrapper, which must report enumerable members only.
+    Object.getOwnPropertyNames(g).forEach(function (k) {
+      if (BUILTINS[k] || UNBRIDGED[k]) return;
+      add(k, g[k]);
+    });
   };
   var INDEXED = ["NodeList", "HTMLCollection", "NamedNodeMap", "DOMTokenList", "HTMLOptionsCollection", "HTMLFormControlsCollection"];
 
@@ -241,7 +271,10 @@
     schema: function () { return json(schema()); },
     has: function (r) { return r[2] in Object(target(r[1])); },
     del: function (r) { return delete target(r[1])[r[2]]; },
-    keys: function (r) { return json(Object.getOwnPropertyNames(Object(target(r[1])))); },
+    // Object.keys for the host's Object.keys trap (ownKeys over a dynamic wrapper): enumerable members only.
+    keys: function (r) { return json(Object.keys(Object(target(r[1])))); },
+    // every own name, for installing a page's window as a test environment's globals (non-enumerable interfaces too)
+    names: function (r) { return json(Object.getOwnPropertyNames(Object(target(r[1])))); },
     apply: function (r) { return target(r[1]).apply(dec(r[2]), decAll(r[3])); },
     construct: function (r) { return Reflect.construct(target(r[1]), decAll(r[2])); },
     "new": function (r) { return Reflect.construct(ctorOf(r[1]), decAll(r[2])); },
@@ -348,6 +381,9 @@
     }
   };
 
-  // Pre-collect interface and constructor names into the memory snapshot
+  // Pre-collect interface and constructor names into the memory snapshot. This runs once, when the guest is compiled
+  // (before any page): it is not a live view. Anything that installs a new global interface after this point (a later
+  // shim, a lazily defined class) will not be in the schema until something calls collect() again; if such a late
+  // addition ever becomes possible, reset protoNames/ctorNames/interfaces here (and let the host rebuild its classes).
   collect();
 })(globalThis);

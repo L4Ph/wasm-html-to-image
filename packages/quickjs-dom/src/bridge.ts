@@ -540,7 +540,8 @@ export class Bridge {
     return new Proxy(target, {
       get: (t, k) => {
         if (k === HANDLE) return cell;
-        if (k === WIN_KEYS) return () => this.sendJ(["keys", cell.id]) as string[];
+        // every own name of the page's window (non-enumerable interfaces included), for installWindow
+        if (k === WIN_KEYS) return () => this.sendJ(["names", cell.id]) as string[];
         if (typeof k === "symbol") {
           if (k === Symbol.iterator && this.sendJ(["has", cell.id, "length"])) return () => (this.sendJ(["array", cell.id]) as unknown[])[Symbol.iterator]();
           return undefined;

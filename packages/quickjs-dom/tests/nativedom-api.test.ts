@@ -44,6 +44,27 @@ describe("native DOM: interfaces", () => {
   });
 });
 
+describe("native DOM: the bridge schema", () => {
+  it("has DOMException but no language builtins or unbridged named-property interfaces", async () => {
+    const page = await createDOM({ html: "<p>" }, { settleMs: 0 });
+    try {
+      // the schema is the class table the host builds from; collect() scans getOwnPropertyNames(g) so that the
+      // runtime's non-enumerable DOMException is included, and filters BUILTINS / UNBRIDGED by name
+      const schema = (page.bridge() as any).sendJ(["schema"]) as { n: string }[];
+      const names = schema.map((s) => s.n);
+      expect(names).toContain("DOMException");
+      for (const builtin of ["Object", "Array", "Function", "Math", "JSON", "Promise", "ReadableStream", "Map", "Error"]) {
+        expect([builtin, names.includes(builtin)]).toEqual([builtin, false]);
+      }
+      for (const unbridged of ["DOMStringMap", "CSSStyleDeclaration", "SVGAnimatedString", "SVGRect"]) {
+        expect([unbridged, names.includes(unbridged)]).toEqual([unbridged, false]);
+      }
+    } finally {
+      page.close();
+    }
+  });
+});
+
 describe("native DOM: parsing like a browser", () => {
   const show = (markup: string) =>
     dom.eval((m: string) => new DOMParser().parseFromString(m, "text/html").documentElement.outerHTML, markup);
