@@ -1,9 +1,9 @@
 /*
- * EXPERIMENT (phase 0 of the native DOM plan): a DOM tree whose nodes are QuickJS objects carrying a C struct, so that
- * parsing builds the tree without calling into JavaScript, and serializing and selecting walk C pointers.
+ * The native DOM tree of wasm-quickjs-dom: nodes are QuickJS objects carrying a C struct, so that
+ * parsing builds the tree directly in C without JS callback overhead, and serialization and selectors walk C pointers.
  *
- * It is a prototype to measure against linkedom, not a replacement: the node types, properties and selector syntax are
- * the minimum that benchmark needs. Exposed as `__native.dom`.
+ * Higher-level DOM interfaces and mixins are layered on top via scripts/edge-js/dom/ modules.
+ * Exposed as `__native.dom`.
  *
  * Included by qjsdom.c after htmlparse.h (it reuses the parser's events).
  */

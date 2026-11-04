@@ -530,127 +530,14 @@
     return XHR;
   })();
 
-  // streams: queue-based, enough for readers, pipes and the text transforms (no byte streams, no backpressure)
-  if (!g.ReadableStream) {
-    var ReadableStream = class {
-      constructor(src) {
-        var self = this;
-        this._q = []; this._waiting = []; this._closed = false; this._err = null; this._locked = false;
-        var settle = function () {
-          while (self._waiting.length && (self._q.length || self._closed || self._err)) {
-            var w = self._waiting.shift();
-            if (self._err) w.reject(self._err);
-            else if (self._q.length) w.resolve({ value: self._q.shift(), done: false });
-            else w.resolve({ value: undefined, done: true });
-          }
-        };
-        this._settle = settle;
-        var ctrl = {
-          enqueue: function (v) { if (self._closed) throw new TypeError("The stream is closed"); self._q.push(v); settle(); },
-          close: function () { self._closed = true; settle(); },
-          error: function (e) { self._err = e; settle(); },
-          get desiredSize() { return 1; },
-        };
-        src = src || {};
-        this._src = src;
-        try { var r = src.start && src.start(ctrl); if (r && r.then) r.then(null, ctrl.error); } catch (e) { ctrl.error(e); }
-        this._ctrl = ctrl;
-      }
-      get locked() { return this._locked; }
-      getReader() {
-        var self = this;
-        if (this._locked) throw new TypeError("ReadableStream is locked");
-        this._locked = true;
-        return {
-          read: function () {
-            return new Promise(function (resolve, reject) {
-              self._waiting.push({ resolve: resolve, reject: reject });
-              if (!self._q.length && !self._closed && !self._err && self._src.pull) {
-                try { var r = self._src.pull(self._ctrl); if (r && r.then) r.then(null, self._ctrl.error); } catch (e) { self._ctrl.error(e); }
-              }
-              self._settle();
-            });
-          },
-          releaseLock: function () { self._locked = false; },
-          cancel: function (why) { self._closed = true; self._q.length = 0; self._settle(); return Promise.resolve(self._src.cancel && self._src.cancel(why)); },
-          get closed() { return new Promise(function () {}); },
-        };
-      }
-      cancel(why) { return this.getReader().cancel(why); }
-      pipeTo(dest) {
-        var reader = this.getReader(), w = dest.getWriter();
-        var step = function () {
-          return reader.read().then(function (r) {
-            if (r.done) return w.close();
-            return Promise.resolve(w.write(r.value)).then(step);
-          });
-        };
-        return step();
-      }
-      pipeThrough(t) { this.pipeTo(t.writable).catch(function () {}); return t.readable; }
-      tee() {
-        var chunks = [], self = this, reader = null, done = false;
-        var make = function () {
-          var i = 0;
-          return new ReadableStream({
-            pull: function (c) {
-              reader = reader || self.getReader();
-              if (i < chunks.length) { c.enqueue(chunks[i++]); return; }
-              if (done) { c.close(); return; }
-              return reader.read().then(function (r) { if (r.done) { done = true; c.close(); } else { chunks.push(r.value); c.enqueue(chunks[i++]); } });
-            },
-          });
-        };
-        return [make(), make()];
-      }
-      values() {
-        var reader = this.getReader();
-        return { next: function () { return reader.read(); }, return: function () { reader.releaseLock(); return Promise.resolve({ done: true }); }, [Symbol.asyncIterator]: function () { return this; } };
-      }
-      [Symbol.asyncIterator]() { return this.values(); }
-    };
-    var WritableStream = class {
-      constructor(sink) {
-        sink = sink || {};
-        this._sink = sink; this._locked = false;
-        this._ctrl = { error: function () {} };
-        if (sink.start) sink.start(this._ctrl);
-      }
-      get locked() { return this._locked; }
-      getWriter() {
-        var self = this;
-        this._locked = true;
-        return {
-          write: function (c) { return Promise.resolve(self._sink.write && self._sink.write(c, self._ctrl)); },
-          close: function () { return Promise.resolve(self._sink.close && self._sink.close()); },
-          abort: function (e) { return Promise.resolve(self._sink.abort && self._sink.abort(e)); },
-          releaseLock: function () { self._locked = false; },
-          get ready() { return Promise.resolve(); },
-          get closed() { return new Promise(function () {}); },
-          get desiredSize() { return 1; },
-        };
-      }
-      close() { return this.getWriter().close(); }
-      abort(e) { return this.getWriter().abort(e); }
-    };
-    var TransformStream = class {
-      constructor(tr) {
-        tr = tr || {};
-        var rc;
-        this.readable = new g.ReadableStream({ start: function (c) { rc = c; } });
-        var ctrl = { enqueue: function (v) { rc.enqueue(v); }, error: function (e) { rc.error(e); }, terminate: function () { rc.close(); } };
-        if (tr.start) tr.start(ctrl);
-        this.writable = new g.WritableStream({
-          write: function (c) { return tr.transform ? tr.transform(c, ctrl) : ctrl.enqueue(c); },
-          close: function () { var r = tr.flush && tr.flush(ctrl); return Promise.resolve(r).then(function () { rc.close(); }); },
-        });
-      }
-    };
-    g.ReadableStream = ReadableStream; g.WritableStream = WritableStream; g.TransformStream = TransformStream;
+  // TextEncoderStream and TextDecoderStream (TransformStream is provided by web-streams-polyfill)
+  if (!g.TextEncoderStream) {
     g.TextEncoderStream = function TextEncoderStream() {
       var e = new g.TextEncoder(), t = new g.TransformStream({ transform: function (c, ctrl) { ctrl.enqueue(e.encode(String(c))); } });
       this.readable = t.readable; this.writable = t.writable; this.encoding = "utf-8";
     };
+  }
+  if (!g.TextDecoderStream) {
     g.TextDecoderStream = function TextDecoderStream(label) {
       var d = new g.TextDecoder(label), t = new g.TransformStream({ transform: function (c, ctrl) { ctrl.enqueue(d.decode(c)); } });
       this.readable = t.readable; this.writable = t.writable; this.encoding = "utf-8";

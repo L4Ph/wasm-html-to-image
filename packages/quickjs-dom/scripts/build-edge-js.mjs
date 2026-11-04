@@ -18,12 +18,20 @@ const read = (path) => readFileSync(path, "utf8");
 // The guest has no DOM library: the DOM is csrc/nativedom*.h with scripts/edge-js/nativedom.js on top.
 
 const streamsPath = join(dirname(require.resolve("web-streams-polyfill/package.json")), "dist", "polyfill.js");
+const domParts = [
+  "01-core.js",
+  "02-classes.js",
+  "03-interaction.js",
+  "04-xpath.js",
+  "05-html.js",
+].map((file) => read(join(here, "edge-js", "dom", file)));
+
 const parts = [
   read(join(here, "edge-js", "shims.js")),
   read(streamsPath),
-  read(join(here, "edge-js", "boot.js")),
-  read(join(here, "edge-js", "nativedom.js")),
+  ...domParts,
   read(join(here, "edge-js", "computed.js")),
+  read(join(here, "edge-js", "boot.js")),
   read(join(here, "edge-js", "rpc.js")),
 ];
 const source = parts.join("\n;\n");

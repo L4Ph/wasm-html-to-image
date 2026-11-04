@@ -393,6 +393,28 @@ EXPORT("qd_eval") int qd_eval(const char *code, size_t len, const char *name, in
 
 /* Call the global function __rpc (scripts/edge-js/rpc.js) with a string; its string answer is the result. This is the way in
    for the bridge: no code to compile, and it may be called again from inside a host callback. 0: ok; 1: it threw. */
+static JSValue rpc_decode_token(JSContext *c, JSValueConst byid, const char *p, size_t toklen) {
+    if (toklen == 0) return JS_UNDEFINED;
+    char tc = p[0];
+    if (tc == 'N') return JS_NULL;
+    if (tc == 'T') return JS_TRUE;
+    if (tc == 'F') return JS_FALSE;
+    if (tc == 's') return JS_NewStringLen(c, p + 1, toklen - 1);
+    if (tc == 'n') {
+        char buf[32];
+        size_t copylen = toklen - 1 < sizeof(buf) - 1 ? toklen - 1 : sizeof(buf) - 1;
+        memcpy(buf, p + 1, copylen);
+        buf[copylen] = 0;
+        return JS_NewFloat64(c, strtod(buf, NULL));
+    }
+    if (tc == 'h') {
+        uint32_t hid = 0;
+        for (size_t k = 1; k < toklen; k++) hid = hid * 10 + (uint32_t)(p[k] - '0');
+        return JS_GetPropertyUint32(c, byid, hid);
+    }
+    return JS_UNDEFINED;
+}
+
 /* Reads (g) and method calls without arguments (c) of the bridge are done here: the interpreter has nothing to do for them
    unless the answer is an object (rpc.js: __reply makes its handle). The handle table is the array __byId of rpc.js. */
 static int rpc_set_prefixed(char prefix, const char *s, size_t n) {
@@ -492,24 +514,7 @@ EXPORT("qd_rpc") int qd_rpc(const char *req, size_t len) {
                         } else {
                             const char *tok = sep2 + 2;
                             size_t toklen = (size_t)(req + len - tok);
-                            if (toklen > 0) {
-                                char tc = tok[0];
-                                if (tc == 'N') v = JS_NULL;
-                                else if (tc == 'T') v = JS_TRUE;
-                                else if (tc == 'F') v = JS_FALSE;
-                                else if (tc == 's') v = JS_NewStringLen(ctx, tok + 1, toklen - 1);
-                                else if (tc == 'n') {
-                                    char buf[32];
-                                    size_t copylen = toklen - 1 < sizeof(buf) - 1 ? toklen - 1 : sizeof(buf) - 1;
-                                    memcpy(buf, tok + 1, copylen);
-                                    buf[copylen] = 0;
-                                    v = JS_NewFloat64(ctx, strtod(buf, NULL));
-                                } else if (tc == 'h') {
-                                    uint32_t hid = 0;
-                                    for (size_t k = 1; k < toklen; k++) hid = hid * 10 + (uint32_t)(tok[k] - '0');
-                                    v = JS_GetPropertyUint32(ctx, byid, hid);
-                                }
-                            }
+                            v = rpc_decode_token(ctx, byid, tok, toklen);
                         }
                         JSAtom atom = JS_NewAtomLen(ctx, key, keylen);
                         int set_res = JS_SetProperty(ctx, obj, atom, v);
@@ -569,27 +574,7 @@ EXPORT("qd_rpc") int qd_rpc(const char *req, size_t len) {
                             const char *stop = memchr(p, 2, (size_t)(end - p));
                             if (!stop) stop = end;
                             size_t toklen = (size_t)(stop - p);
-                            if (toklen == 0) { argv[i] = JS_UNDEFINED; }
-                            else {
-                                char tc = p[0];
-                                if (tc == 'N') argv[i] = JS_NULL;
-                                else if (tc == 'T') argv[i] = JS_TRUE;
-                                else if (tc == 'F') argv[i] = JS_FALSE;
-                                else if (tc == 's') argv[i] = JS_NewStringLen(ctx, p + 1, toklen - 1);
-                                else if (tc == 'n') {
-                                    char buf[32];
-                                    size_t copylen = toklen - 1 < sizeof(buf) - 1 ? toklen - 1 : sizeof(buf) - 1;
-                                    memcpy(buf, p + 1, copylen);
-                                    buf[copylen] = 0;
-                                    argv[i] = JS_NewFloat64(ctx, strtod(buf, NULL));
-                                } else if (tc == 'h') {
-                                    uint32_t hid = 0;
-                                    for (size_t k = 1; k < toklen; k++) hid = hid * 10 + (uint32_t)(p[k] - '0');
-                                    argv[i] = JS_GetPropertyUint32(ctx, byid, hid);
-                                } else {
-                                    argv[i] = JS_UNDEFINED;
-                                }
-                            }
+                            argv[i] = rpc_decode_token(ctx, byid, p, toklen);
                             p = stop + 1;
                         }
                     }
