@@ -181,14 +181,164 @@
     g.EventSource.CLOSED = g.EventSource.prototype.CLOSED = 2;
     g.EventSource.prototype.close = function () { this.readyState = 2; };
   }
-  ["Worker", "SharedWorker"].forEach(function (Name) {
-    if (g[Name]) return;
-    var W = unavailable(Name, function () { this.onmessage = null; this.onerror = null; this.port = this; });
-    W.prototype.postMessage = function () {};
-    W.prototype.terminate = function () {};
-    W.prototype.start = function () {};
-    g[Name] = W;
-  });
+  if (!g.SharedWorker) {
+    var SW = unavailable("SharedWorker", function () { this.onmessage = null; this.onerror = null; this.port = this; });
+    SW.prototype.postMessage = function () {};
+    SW.prototype.terminate = function () {};
+    SW.prototype.start = function () {};
+    g.SharedWorker = SW;
+  }
+  if (!g.Worker) {
+    var cloneMsg = function (v) {
+      if (v === undefined || v === null || typeof v !== "object") return v;
+      try { return g.structuredClone(v); } catch (e) { return v; }
+    };
+    var WorkerClass = class extends g.EventTarget {
+      constructor(url, opts) {
+        super();
+        if (arguments.length === 0) throw new TypeError("Failed to construct 'Worker': 1 argument required, but only 0 present.");
+        var self = this;
+        this.url = String(url);
+        this.onmessage = null;
+        this.onerror = null;
+        this.onmessageerror = null;
+        this._terminated = false;
+        this._ready = false;
+        this._queue = [];
+        this._deliver = null;
+
+        var resolved = this.url;
+        var proto = "";
+        try {
+          if (resolved.slice(0, 5) === "blob:" || resolved.slice(0, 5) === "data:") {
+            proto = resolved.slice(0, 5);
+          } else {
+            var u = new g.URL(resolved, g.location.href);
+            resolved = u.href;
+            proto = u.protocol;
+          }
+        } catch (e) {
+          proto = "";
+        }
+
+        var fail = function () {
+          if (g.console && g.console.warn) g.console.warn("Worker closed with an error; network and worker APIs are not available in wasm-quickjs-dom (" + self.url + ")");
+          self.dispatchEvent(new g.Event("error"));
+        };
+
+        if (proto !== "http:" && proto !== "https:" && proto !== "blob:" && proto !== "data:") {
+          if (g.console && g.console.warn) g.console.warn("Worker is not available in wasm-quickjs-dom (" + this.url + ")");
+          g.setTimeout(fail, 0);
+          return;
+        }
+
+        g.fetch(resolved)
+          .then(function (r) {
+            if (!r || !r.ok) throw new Error("HTTP " + (r ? r.status : 0));
+            return r.text();
+          })
+          .then(function (code) {
+            if (self._terminated) return;
+            var workerLoc;
+            try { workerLoc = new g.URL(resolved); } catch (e) { workerLoc = new g.URL(g.location.href); }
+            var wSelf = new g.EventTarget();
+            wSelf.self = wSelf;
+            wSelf.globalThis = wSelf;
+            wSelf.window = undefined;
+            wSelf.document = undefined;
+            wSelf.name = opts && opts.name != null ? String(opts.name) : "";
+            wSelf.location = workerLoc;
+            wSelf.navigator = {
+              userAgent: (g.navigator && g.navigator.userAgent) || "",
+              language: (g.navigator && g.navigator.language) || "en-US",
+              languages: (g.navigator && g.navigator.languages) || ["en-US"],
+              onLine: true,
+              hardwareConcurrency: 4,
+            };
+            wSelf.onmessage = null;
+            wSelf.onerror = null;
+            wSelf.onmessageerror = null;
+            wSelf.close = function () { self._terminated = true; };
+            wSelf.postMessage = function (data) {
+              if (self._terminated) return;
+              var cloned = cloneMsg(data);
+              g.setTimeout(function () {
+                if (self._terminated) return;
+                var ev = new g.MessageEvent("message", { data: cloned });
+                self.dispatchEvent(ev);
+              }, 0);
+            };
+            wSelf.fetch = function (input, init) {
+              var target = input && typeof input === "object" && "url" in input ? input.url : String(input);
+              try { if (target.slice(0, 5) !== "blob:" && target.slice(0, 5) !== "data:") target = new g.URL(target, workerLoc.href).href; } catch (e) {}
+              return g.fetch(target, init);
+            };
+            wSelf.XMLHttpRequest = class XMLHttpRequest extends g.XMLHttpRequest {
+              open(m, u) {
+                var target = String(u);
+                try { if (target.slice(0, 5) !== "blob:" && target.slice(0, 5) !== "data:") target = new g.URL(target, workerLoc.href).href; } catch (e) {}
+                return super.open(m, target);
+              }
+            };
+            wSelf.importScripts = function () {};
+            var reportErr = function (err) {
+              var msg = err && err.message ? err.message : String(err);
+              var errEv = new g.ErrorEvent("error", { message: msg, filename: resolved, error: err });
+              wSelf.dispatchEvent(errEv);
+              if (!errEv.defaultPrevented) {
+                self.dispatchEvent(new g.ErrorEvent("error", { message: msg, filename: resolved, error: err }));
+              }
+            };
+            self._deliver = function (data) {
+              g.setTimeout(function () {
+                if (self._terminated) return;
+                try {
+                  var ev = new g.MessageEvent("message", { data: data });
+                  wSelf.dispatchEvent(ev);
+                } catch (err) {
+                  reportErr(err);
+                }
+              }, 0);
+            };
+            try {
+              var fn = new Function(
+                "self", "globalThis", "window", "document",
+                "postMessage", "close", "addEventListener", "removeEventListener", "dispatchEvent",
+                "location", "navigator", "fetch", "XMLHttpRequest", "importScripts",
+                "with (self) {\n" + code + "\n}\n//# sourceURL=" + resolved
+              );
+              fn.call(
+                wSelf, wSelf, wSelf, undefined, undefined,
+                wSelf.postMessage, wSelf.close,
+                wSelf.addEventListener.bind(wSelf), wSelf.removeEventListener.bind(wSelf), wSelf.dispatchEvent.bind(wSelf),
+                wSelf.location, wSelf.navigator, wSelf.fetch, wSelf.XMLHttpRequest, wSelf.importScripts
+              );
+            } catch (err) {
+              reportErr(err);
+              return;
+            }
+            self._ready = true;
+            var q = self._queue.splice(0);
+            for (var i = 0; i < q.length; i++) self._deliver(q[i]);
+          })
+          .catch(function () {
+            if (!self._terminated) fail();
+          });
+      }
+      postMessage(data) {
+        if (this._terminated) return;
+        var cloned = cloneMsg(data);
+        if (this._ready && this._deliver) this._deliver(cloned);
+        else this._queue.push(cloned);
+      }
+      terminate() {
+        this._terminated = true;
+        this._queue.length = 0;
+      }
+    };
+    Object.defineProperty(WorkerClass, "name", { value: "Worker" });
+    g.Worker = WorkerClass;
+  }
   if (!g.BroadcastChannel) {
     g.BroadcastChannel = class extends g.EventTarget {
       constructor(name) { super(); this.name = String(name); this.onmessage = null; }

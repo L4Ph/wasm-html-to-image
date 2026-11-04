@@ -399,9 +399,17 @@
     entries() { return this.l[Symbol.iterator](); }
     [Symbol.iterator]() { return this.entries(); }
   };
+  var blobUrls = new Map();
   if (g.URL && !g.URL.canParse) { g.URL.canParse = function (u, b) { try { new g.URL(u, b); return true; } catch (e) { return false; } }; }
   if (g.URL && !g.URL.parse) { g.URL.parse = function (u, b) { try { return new g.URL(u, b); } catch (e) { return null; } }; }
-  if (g.URL && !g.URL.createObjectURL) { g.URL.createObjectURL = function () { return "blob:null/" + Math.random().toString(16).slice(2); }; g.URL.revokeObjectURL = function () {}; }
+  if (g.URL && !g.URL.createObjectURL) {
+    g.URL.createObjectURL = function (obj) {
+      var u = "blob:null/" + Math.random().toString(16).slice(2);
+      if (obj && typeof obj === "object" && obj._u instanceof Uint8Array) blobUrls.set(u, obj);
+      return u;
+    };
+    g.URL.revokeObjectURL = function (u) { blobUrls.delete(String(u)); };
+  }
 
   // crypto: random values only (no digest/subtle)
   g.crypto = g.crypto || {
@@ -435,6 +443,26 @@
     constructor(u, init) { init = init || {}; this.url = String((u && u.url) || u); this.method = init.method || "GET"; this.headers = new g.Headers(init.headers); }
   };
   g.fetch = function (input, init) {
+    var rawUrl = String((input && input.url) || input);
+    if (rawUrl.slice(0, 5) === "blob:" && blobUrls.has(rawUrl)) {
+      var b = blobUrls.get(rawUrl);
+      return g.__nativePromise.resolve(new g.Response(b._u.slice(), { status: 200, headers: b.type ? { "content-type": b.type } : {}, url: rawUrl }));
+    }
+    if (rawUrl.slice(0, 5) === "data:") {
+      var comma = rawUrl.indexOf(",");
+      if (comma > 0) {
+        var meta = rawUrl.slice(5, comma), payload = rawUrl.slice(comma + 1), bytes;
+        if (/;base64/i.test(meta)) {
+          var bin = g.atob(decodeURIComponent(payload));
+          bytes = new Uint8Array(bin.length);
+          for (var bi = 0; bi < bin.length; bi++) bytes[bi] = bin.charCodeAt(bi);
+        } else {
+          bytes = new g.TextEncoder().encode(decodeURIComponent(payload));
+        }
+        var mime = meta.split(";")[0] || "text/plain";
+        return g.__nativePromise.resolve(new g.Response(bytes, { status: 200, headers: { "content-type": mime }, url: rawUrl }));
+      }
+    }
     // the host gets the URL and one string: a plain method, or {m, h, b} JSON when the request has headers or a body
     var method = String((init && init.method) || (input && input.method) || "GET").toUpperCase(), headers = {}, body = init && init.body;
     var hs = (init && init.headers) || (input && input.headers);
@@ -449,7 +477,7 @@
       else body = String(body);
     }
     var packed = Object.keys(headers).length || (body !== undefined && body !== null) ? JSON.stringify({ m: method, h: headers, b: body === undefined ? null : body }) : method;
-    return __host.fetch(String((input && input.url) || input), packed)
+    return __host.fetch(rawUrl, packed)
       .then(function (j) { return JSON.parse(j); })
       .then(function (r) {
         var bin = g.atob(r.body), u = new Uint8Array(bin.length);

@@ -743,6 +743,46 @@ describe("createDOM: WebSocket, EventSource and Worker fail the way a dead conne
     );
     dom.close();
   });
+
+  it("executes in-process Worker scripts from Blob and data URLs with postMessage round-trips", async () => {
+    const dom = await createDOM(
+      {
+        html: page(
+          '<div id="out"></div>',
+          `var blob = new Blob([
+             "var count = 0; addEventListener('message', function (e) {" +
+             "  count++;" +
+             "  postMessage({ reply: e.data.x * 2, count: count, win: typeof window, doc: typeof document });" +
+             "});"
+           ], { type: "application/javascript" });
+           var url = URL.createObjectURL(blob);
+           var w = new Worker(url);
+           window.results = [];
+           w.onmessage = function (e) {
+             window.results.push(e.data);
+             if (e.data.count === 1) {
+               w.postMessage({ x: 21 });
+             } else {
+               w.terminate();
+               w.postMessage({ x: 99 });
+               document.getElementById("out").textContent = "done:" + e.data.reply;
+             }
+           };
+           w.postMessage({ x: 5 });`,
+        ),
+      },
+      { settleMs: 100 },
+    );
+    try {
+      expect(await dom.eval("results")).toEqual([
+        { reply: 10, count: 1, win: "undefined", doc: "undefined" },
+        { reply: 42, count: 2, win: "undefined", doc: "undefined" },
+      ]);
+      expect(dom.serialize()).toContain('<div id="out">done:42</div>');
+    } finally {
+      dom.close();
+    }
+  });
 });
 
 describe("createDOM: silent losses in a snapshot are warned about", () => {

@@ -1,55 +1,47 @@
 # cloudflare-prerender
 
-A Cloudflare Worker that returns the HTML of a web page **after its scripts ran**.
+A Cloudflare Worker that **compares web pages when JavaScript is disabled vs when JavaScript is enabled**.
 
 ```
-GET /?url=https://example.com&wait=%23app
-→ 200 text/html
+GET /
+→ 200 text/html (Top page with URL input form)
+
+GET /?url=https://example.com
+→ 200 text/html (Diff Viewer UI)
 ```
 
 A Worker cannot `eval`, so the page's scripts run in QuickJS (WebAssembly) on a DOM written in C
-([`wasm-quickjs-dom`](../quickjs-dom)); the response is that DOM serialized as HTML. Unlike
-`cloudflare-screenshot`, it does not include the image engine, so the Worker is small. This is not a
-browser: there is no layout and no canvas, heavy pages are slow, and a page that needs a feature the
-engine lacks comes back as it was before the failing script. Pages that build their content with
-JavaScript (React, Vue, Vite and Next.js builds among them) are the target.
-
-The HTML gets a `<base href>` of the page's final URL (unless it has one), so relative links and
-resources in it still resolve.
+([`wasm-quickjs-dom`](../quickjs-dom)). The Worker fetches the initial page without running scripts,
+renders it with QuickJS, and outputs a visual diff comparison of both the **visible text** and the
+**HTML source code**.
 
 ## Query parameters
 
-| Parameter | Default | |
-| --------- | ------- | --- |
-| `url` | (required) | The page. Only `http` and `https`; `localhost`, private addresses and hosts without a dot are refused. The page's scripts (and the scripts and modules they load) and every redirect are held to the same rule, with caps on the number and size of their requests. |
-| `wait` | | A CSS selector to wait for after the scripts start (up to `timeout`). |
+| Parameter | Default | Description |
+| --------- | ------- | ----------- |
+| `url` | (required) | Target page URL (`http` and `https` only). |
+| `format` | `ui` | `ui` (Diff Viewer HTML UI), `json` (diff data, stats, and logs), or `raw` (rendered HTML only, backward compatible). |
+| `wait` | | A CSS selector to wait for after scripts start (up to `timeout`). |
 | `settle` | `1000` | Milliseconds to let timers and requests run after load, up to 5000 (ignored with `wait`). |
-| `timeout` | `10000` | Upper limit for the scripts, 1000–20000 ms. |
-| `trackers` | | `1` lets the page load analytics, ad and tracking scripts. They are skipped by default (a list of well-known hosts in `src/index.ts`): most of a real page's script time goes to them and a render does not need them. |
-| `base` | `1` | `0` leaves out the `<base href>`. |
-| `debug` | | `1` answers JSON instead: `{ url, finalUrl, html, logs }`, where `logs` are the page's console output, script errors, unhandled rejections and requests. Use it to find out why a page came back empty. Not cached. |
+| `timeout` | `10000` | Upper limit for fetch and script execution (1000–20000 ms). |
+| `trackers` | | `1` lets the page load analytics, ads, and tracker scripts. Skipped by default. |
+| `base` | `1` | `0` leaves out `<base href>` in `format=raw`. |
+| `debug` | | `1` is an alias for `format=json`. |
 
-The response carries `x-final-url` (the page's URL after redirects). Errors are JSON: `400` for a bad
-request, `502` when the page could not be rendered, `504` on a timeout. Results are cached for five
-minutes with the Workers cache.
+## Diff Viewer UI features
+
+- **Text Content Diff**: Compares visible content extracted after stripping scripts, styles, and tags. Ideal for seeing what content requires client-side JavaScript (e.g. for SEO or accessibility checks).
+- **HTML Source Diff**: Compares initial raw HTML vs post-execution serialized DOM.
+- **Layout Switcher**: Toggle between side-by-side (split) and unified inline diffs.
+- **Title and Character Stats**: Tracks `<title>` mutations and total character changes.
 
 ## Run and deploy
 
 ```bash
 pnpm --filter cloudflare-prerender dev      # local workerd
 pnpm --filter cloudflare-prerender deploy
-pnpm --filter cloudflare-prerender test     # smoke test: a local page whose script builds its content
+pnpm --filter cloudflare-prerender test     # smoke assertions
 ```
 
 `ALLOW_PRIVATE_HOSTS=1` (a `.dev.vars` entry; the smoke test writes it for its run) lets the Worker reach
 localhost and private addresses. Never set it on a deployed Worker.
-
-## Things to know
-
-- **Anyone who can call the Worker can make it fetch pages**, and run their scripts. Put it behind your
-  own authentication or an allow list before exposing it (the host checks stop requests to private
-  networks, not to the public internet).
-- The CPU time of a request can be long for heavy pages. Workers' free plan (10 ms) is too little: use
-  a paid plan.
-- The page's scripts can `fetch`; the limits above are what holds them back. Pages that need a feature
-  the engine lacks (`WebSocket`, `Worker`, canvas, layout) will not behave as in a browser.
