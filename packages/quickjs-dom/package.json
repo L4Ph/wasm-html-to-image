@@ -1,6 +1,6 @@
 {
   "name": "wasm-quickjs-dom",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "A small JSDOM for runtimes without Node or eval: QuickJS-ng (WebAssembly) with a DOM written in C, for Cloudflare Workers, Vercel Edge, Deno, Bun and browsers",
   "type": "module",
   "main": "./dist/index.js",
