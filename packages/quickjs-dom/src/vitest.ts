@@ -3,8 +3,13 @@
  *
  * ```ts
  * // vitest.config.ts
- * export default { test: { environment: "./node_modules/wasm-quickjs-dom/dist/vitest.js" } };
+ * import { defineConfig } from "vitest/config";
+ * export default defineConfig({ test: { environment: "wasm-quickjs-dom/vitest" } });
  * ```
+ *
+ * Prefer the `wasm-quickjs-dom/vitest` subpath export: it resolves the installed copy (including pnpm's
+ * non-hoisted layout). Pointing at `./node_modules/wasm-quickjs-dom/dist/vitest.js` directly still works
+ * but is deprecated.
  *
  * Options go in `test.environmentOptions.wasmQuickjsDom` (those of {@link JSDOMOptions}: `url`, `html`, ...).
  */

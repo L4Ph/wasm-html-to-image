@@ -267,7 +267,8 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    environment: "./node_modules/wasm-quickjs-dom/dist/vitest.js",
+    // Recommended: resolve the environment through the package's subpath export.
+    environment: "wasm-quickjs-dom/vitest",
     environmentOptions: {
       wasmQuickjsDom: {
         url: "http://localhost:3000",
@@ -280,6 +281,11 @@ export default defineConfig({
   },
 });
 ```
+
+> [!IMPORTANT]
+> Use `environment: "wasm-quickjs-dom/vitest"`. It goes through the package's `./vitest` subpath export, so Vitest resolves the copy that is actually installed — including pnpm's non-hoisted `node_modules/.pnpm` layout, where a hard-coded `./node_modules/wasm-quickjs-dom/dist/vitest.js` may not exist or may point at a different copy.
+>
+> Pointing `environment` at the file directly (for example `"./node_modules/wasm-quickjs-dom/dist/vitest.js"`) still works but is **deprecated**; prefer the subpath form in new configurations.
 
 > [!NOTE]
 > Options are resolved in this order: `environmentOptions.wasmQuickjsDom`, then `environmentOptions.jsdom` (the options of Vitest's `jsdom` environment), then the top-level `environmentOptions.url`; the first value present wins. `html` likewise falls back to `jsdom.html`, so a config written for `jsdom` does not need to move either option.
