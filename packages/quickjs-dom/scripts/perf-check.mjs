@@ -61,7 +61,14 @@ const build = (document) => {
     times[name] = built + read;
     console.log(`3000 nodes (${name}): build ${built.toFixed(1)} ms, read ${read.toFixed(1)} ms, query-sweep ${sweep.toFixed(1)} ms (html ${html})`);
   }
-  console.log(`ratio ours/jsdom (build+read, the render shape): ${(times.ours / times.jsdom).toFixed(2)}x (guard: <= 2x)`);
+  const ratio = times.ours / times.jsdom;
+  console.log(`ratio ours/jsdom (build+read, the render shape): ${ratio.toFixed(2)}x (guard: <= 2x)`);
+  if (!Number.isFinite(ratio) || ratio > 2) {
+    console.error(`perf-check: FAIL — ${ratio.toFixed(2)}x exceeds the 2x guard`);
+    process.exitCode = 1;
+  } else {
+    console.log("perf-check: PASS (host-driven DOM work within 2x of jsdom)");
+  }
   ours.close();
 }
 

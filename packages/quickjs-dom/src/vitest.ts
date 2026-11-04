@@ -23,7 +23,7 @@ export default {
   setup(global, options) {
     const given = (options?.wasmQuickjsDom ?? {}) as JSDOMOptions & { html?: string };
     const dom = new JSDOM(given.html ?? "<!DOCTYPE html>", {
-      url: "http://localhost:3000",
+      url: "http://localhost/",
       pretendToBeVisual: true,
       runScripts: "dangerously",
       ...given,
@@ -31,6 +31,8 @@ export default {
     const uninstall = installWindow(global, dom.window);
     return {
       teardown() {
+        // Teardown target: the synchronous close of this page only. The timer is unref'd where it is armed,
+        // and the shared fragment context is left alone.
         uninstall();
         dom.close();
       },

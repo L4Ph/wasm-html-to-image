@@ -105,6 +105,7 @@ const dom2 = await JSDOM.fromURL(url, options);
 - `wasm-quickjs-dom/jest`: `jest-environment-*` 形式。
 - グローバルに写すのは、jsdom 環境と同じ一覧(`document`、`window`、`HTMLElement`、`Event` 系、`MutationObserver`、`getComputedStyle`、`requestAnimationFrame` など)。Node 側に既にあるもの(`fetch`、`URL`、`TextEncoder`)は上書きしない。
 - 型は `lib.dom.d.ts` をそのまま使えるようにし、独自の型は作らない(クラスの名前と形が同じため)。
+- 環境のトリアージと4方針(fake timers、rAF、外部資源、teardown)は [environment-triage.md](./environment-triage.md) に記録する。real-timer のテストは移行し、fake-timer は jsdom に残す。外部資源は env 未対応、teardown は同期 `close()` だけでは不足する(要再現)。
 
 ## 9. 必要になる実装(段階)
 
