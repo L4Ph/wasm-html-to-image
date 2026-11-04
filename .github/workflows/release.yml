@@ -58,7 +58,7 @@ jobs:
         with:
           node-version: "22"
 
-      - name: Check package version and git tag
+      - name: Check package version on npm
         id: check
         run: |
           VERSION=$(node -p "require('./packages/html-to-image/package.json').version")
@@ -66,15 +66,55 @@ jobs:
           echo "Package version: $VERSION"
           echo "Target tag: $TAG"
 
+          # npm can lag behind the registry right after a publish, so an empty/failed `npm view` must not be taken as
+          # "not published" immediately: retry with exponential backoff and only trust an explicit 404.
+          PUBLISHED=""
+          for attempt in 1 2 3 4 5; do
+            set +e
+            OUT=$(npm view "wasm-html-to-image@$VERSION" version 2>&1)
+            STATUS=$?
+            set -e
+            if [ "$STATUS" -eq 0 ] && [ -n "$OUT" ]; then
+              PUBLISHED=true
+              break
+            fi
+            if printf '%s\n' "$OUT" | grep -Eq 'E404|404 Not Found|is not in this registry|No match found'; then
+              PUBLISHED=false
+              break
+            fi
+            if [ "$attempt" -lt 5 ]; then
+              DELAY=$((30 * (1 << (attempt - 1))))
+              if [ "$DELAY" -gt 120 ]; then
+                DELAY=120
+              fi
+              echo "npm view for wasm-html-to-image@$VERSION did not answer (attempt $attempt/5). Retrying in ${DELAY}s."
+              printf '%s\n' "$OUT" | sed 's/^/    /'
+              sleep "$DELAY"
+            fi
+          done
+          if [ -z "$PUBLISHED" ]; then
+            echo "::warning::Could not confirm whether wasm-html-to-image@$VERSION is on npm after 5 attempts. Assuming it is not, so publish runs; an already-published result is tolerated there."
+            PUBLISHED=false
+          fi
+
           EXISTS=$(git ls-remote --tags origin "refs/tags/$TAG")
           if [ -n "$EXISTS" ]; then
-            echo "Tag $TAG already exists on remote. Skipping release."
+            echo "Tag $TAG already exists on remote."
+          else
+            echo "Tag $TAG does not exist on remote."
+          fi
+
+          # The tag is not a gate: a tag left behind by a failed run must not block publishing the version.
+          # version/tag are always emitted so the backfill job can repair a missing tag/Release for a version that is
+          # already on npm.
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          if [ "$PUBLISHED" = "true" ]; then
+            echo "wasm-html-to-image@$VERSION is already on npm. Nothing to publish."
             echo "should_release=false" >> "$GITHUB_OUTPUT"
           else
-            echo "Tag $TAG does not exist on remote. Proceeding with release."
+            echo "wasm-html-to-image@$VERSION is not on npm. It will be published."
             echo "should_release=true" >> "$GITHUB_OUTPUT"
-            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-            echo "tag=$TAG" >> "$GITHUB_OUTPUT"
           fi
 
       # wasm-quickjs-dom is versioned on its own: a new version there is published even when wasm-html-to-image has none
@@ -82,12 +122,40 @@ jobs:
         id: qjs
         run: |
           QJS_VERSION=$(node -p "require('./packages/quickjs-dom/package.json').version")
-          if [ -z "$(npm view "wasm-quickjs-dom@$QJS_VERSION" version 2>/dev/null)" ]; then
-            echo "wasm-quickjs-dom@$QJS_VERSION is not on npm. It will be published."
-            echo "publish_qjs=true" >> "$GITHUB_OUTPUT"
-          else
+          PUBLISHED=""
+          for attempt in 1 2 3 4 5; do
+            set +e
+            OUT=$(npm view "wasm-quickjs-dom@$QJS_VERSION" version 2>&1)
+            STATUS=$?
+            set -e
+            if [ "$STATUS" -eq 0 ] && [ -n "$OUT" ]; then
+              PUBLISHED=true
+              break
+            fi
+            if printf '%s\n' "$OUT" | grep -Eq 'E404|404 Not Found|is not in this registry|No match found'; then
+              PUBLISHED=false
+              break
+            fi
+            if [ "$attempt" -lt 5 ]; then
+              DELAY=$((30 * (1 << (attempt - 1))))
+              if [ "$DELAY" -gt 120 ]; then
+                DELAY=120
+              fi
+              echo "npm view for wasm-quickjs-dom@$QJS_VERSION did not answer (attempt $attempt/5). Retrying in ${DELAY}s."
+              printf '%s\n' "$OUT" | sed 's/^/    /'
+              sleep "$DELAY"
+            fi
+          done
+          if [ -z "$PUBLISHED" ]; then
+            echo "::warning::Could not confirm whether wasm-quickjs-dom@$QJS_VERSION is on npm after 5 attempts. Assuming it is not, so publish runs; an already-published result is tolerated there."
+            PUBLISHED=false
+          fi
+          if [ "$PUBLISHED" = "true" ]; then
             echo "wasm-quickjs-dom@$QJS_VERSION is already on npm."
             echo "publish_qjs=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "wasm-quickjs-dom@$QJS_VERSION is not on npm. It will be published."
+            echo "publish_qjs=true" >> "$GITHUB_OUTPUT"
           fi
 
   release:
@@ -136,31 +204,156 @@ jobs:
             cp -r "release-dist/$pkg/dist" "packages/$pkg/dist"
           done
 
+      # --ignore-scripts: the packages' prepublishOnly would build them again; they are built already
+      - name: Publish to npm (Trusted Publishing / OIDC)
+        run: |
+          npm install -g npm@latest
+
+          # A publish that the registry already recorded (an earlier run, or another race) is not a failure.
+          publish_pkg() {
+            local name="$1" log status
+            log="$(mktemp)"
+            echo "Publishing $name ..."
+            set +e
+            pnpm --filter "$name" publish --provenance --access public --no-git-checks --ignore-scripts 2>&1 | tee "$log"
+            status=${PIPESTATUS[0]}
+            set -e
+            if [ "$status" -eq 0 ]; then
+              echo "$name: published."
+              rm -f "$log"
+              return 0
+            fi
+            if grep -Eqi 'E409|previously staged|previously published|EPUBLISHCONFLICT|already exists|E403.*already' "$log"; then
+              echo "::warning::$name publish exited $status, but the version is already on npm or staged. Treating as success."
+              grep -Ei 'E409|previously staged|previously published|EPUBLISHCONFLICT|already exists|E403.*already' "$log" | head -n 5 || true
+              rm -f "$log"
+              return 0
+            fi
+            echo "::error::$name publish failed (exit $status)."
+            rm -f "$log"
+            return "$status"
+          }
+
+          # wasm-html-to-image depends on wasm-quickjs-dom, so that one goes first (only when its version is new)
+          if [ "${{ needs.check-version.outputs.publish_qjs }}" = "true" ]; then
+            publish_pkg wasm-quickjs-dom
+          fi
+          if [ "${{ needs.check-version.outputs.should_release }}" = "true" ]; then
+            publish_pkg wasm-html-to-image
+          fi
+
+      # The tag and the Release are created only after a successful publish, so a failed publish stays retryable.
       - name: Create and push git tag
         if: needs.check-version.outputs.should_release == 'true'
         run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git tag "${{ needs.check-version.outputs.tag }}"
-          git push origin "${{ needs.check-version.outputs.tag }}"
+          TAG="${{ needs.check-version.outputs.tag }}"
+          if [ -n "$(git ls-remote --tags origin "refs/tags/$TAG")" ]; then
+            echo "Tag $TAG already exists on remote; leaving it as is."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "github-actions[bot]@users.noreply.github.com"
+            git tag "$TAG"
+            set +e
+            git push origin "$TAG"
+            STATUS=$?
+            set -e
+            if [ "$STATUS" -ne 0 ]; then
+              # Another run may have created the tag between ls-remote and push. If it exists now, this is not a failure.
+              if [ -n "$(git ls-remote --tags origin "refs/tags/$TAG")" ]; then
+                echo "::warning::git push of tag $TAG failed (exit $STATUS), but the tag now exists on remote (concurrent run). Treating as success."
+              else
+                echo "::error::Failed to push tag $TAG (exit $STATUS)."
+                exit "$STATUS"
+              fi
+            fi
+          fi
 
       - name: Create GitHub Release
         if: needs.check-version.outputs.should_release == 'true'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release create "${{ needs.check-version.outputs.tag }}" \
-            --title "${{ needs.check-version.outputs.tag }}" \
-            --generate-notes
-
-      # --ignore-scripts: the packages' prepublishOnly would build them again; they are built already
-      - name: Publish to npm (Trusted Publishing / OIDC)
-        run: |
-          npm install -g npm@latest
-          # wasm-html-to-image depends on wasm-quickjs-dom, so that one goes first (only when its version is new)
-          if [ "${{ needs.check-version.outputs.publish_qjs }}" = "true" ]; then
-            pnpm --filter wasm-quickjs-dom publish --provenance --access public --no-git-checks --ignore-scripts
+          TAG="${{ needs.check-version.outputs.tag }}"
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; leaving it as is."
+          else
+            set +e
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --generate-notes
+            STATUS=$?
+            set -e
+            if [ "$STATUS" -ne 0 ]; then
+              # Another run may have created the Release between view and create; that race is not a failure.
+              if gh release view "$TAG" >/dev/null 2>&1; then
+                echo "::warning::gh release create failed for $TAG (exit $STATUS), but the Release now exists (concurrent run). Treating as success."
+              else
+                echo "::error::Failed to create Release $TAG (exit $STATUS)."
+                exit "$STATUS"
+              fi
+            fi
           fi
-          if [ "${{ needs.check-version.outputs.should_release }}" = "true" ]; then
-            pnpm --filter wasm-html-to-image publish --provenance --access public --no-git-checks --ignore-scripts
+
+  # Backfill for a run that published to npm but failed before creating the tag/Release. On a rerun after such a
+  # failure should_release is false (npm already has the version), so the `release` job above is skipped and the
+  # tag/Release would never be created. This job repairs exactly that: it never publishes, it only adds a missing tag
+  # or Release for a version that is already on npm, and it is a no-op when both exist.
+  backfill:
+    needs: check-version
+    if: needs.check-version.outputs.should_release != 'true' && needs.check-version.outputs.tag != ''
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.check-version.outputs.sha }}
+
+      - name: Create the missing tag and Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="${{ needs.check-version.outputs.tag }}"
+          echo "wasm-html-to-image is already on npm for $TAG; verifying the tag and Release exist."
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          if [ -n "$(git ls-remote --tags origin "refs/tags/$TAG")" ]; then
+            echo "Tag $TAG already exists on remote; leaving it as is."
+          else
+            echo "::warning::Tag $TAG is missing although the version is on npm (backfill). Creating it."
+            git tag "$TAG"
+            set +e
+            git push origin "$TAG"
+            STATUS=$?
+            set -e
+            if [ "$STATUS" -ne 0 ]; then
+              if [ -n "$(git ls-remote --tags origin "refs/tags/$TAG")" ]; then
+                echo "::warning::git push of tag $TAG failed (exit $STATUS), but the tag now exists on remote (concurrent run). Treating as success."
+              else
+                echo "::error::Failed to push backfilled tag $TAG (exit $STATUS)."
+                exit "$STATUS"
+              fi
+            fi
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists; leaving it as is."
+          else
+            echo "::warning::Release $TAG is missing although the version is on npm (backfill). Creating it."
+            set +e
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --generate-notes
+            STATUS=$?
+            set -e
+            if [ "$STATUS" -ne 0 ]; then
+              if gh release view "$TAG" >/dev/null 2>&1; then
+                echo "::warning::gh release create failed for $TAG (exit $STATUS), but the Release now exists (concurrent run). Treating as success."
+              else
+                echo "::error::Failed to create backfilled Release $TAG (exit $STATUS)."
+                exit "$STATUS"
+              fi
+            fi
           fi
