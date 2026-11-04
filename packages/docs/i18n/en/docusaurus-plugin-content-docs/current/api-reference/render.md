@@ -70,12 +70,12 @@ Returns a `string` for `svg` format, and `Uint8Array` for all other formats (`pn
 
 | Option | Type | Description |
 | ------ | ---- | ----------- |
-| `javascript` | `boolean \| { timeout?: number, settleMs?: number, waitFor?: string, engine?: "jsdom" \| "quickjs" }` | Run the page's `<script>`s in jsdom before rendering (Node.js `single` entry and the CLI's `--js`; needs the optional dependency `jsdom`). `true` waits 1 s after `load`. `timeout` bounds the whole phase (default 10000 ms), `settleMs` is the wait after `load` (default 1000 ms), `waitFor` is a CSS selector to wait for (replaces `settleMs`). `engine: "quickjs"` runs them in QuickJS (WebAssembly) on a DOM written in C instead of jsdom ([running scripts on edge runtimes](#running-scripts-on-edge-runtimes-cloudflare-workers-and-others)). jsdom has no layout and is not a sandbox: use it with trusted pages only |
+| `javascript` | `boolean \| { timeout?: number, settleMs?: number, waitFor?: string, engine?: "quickjs", limits?, skip? }` | Run the page's `<script>`s in QuickJS (WebAssembly) on a DOM written in C before rendering (the Node.js `single` entry and the CLI's `--js` do it for you; on edge entries, call `applyJavaScript()` first). `true` waits 1 s after `load`. `timeout` bounds the whole phase (default 10000 ms), `settleMs` is the wait after `load` (default 1000 ms), `waitFor` is a CSS selector to wait for (replaces `settleMs`). `engine` accepts only `"quickjs"` (kept for one release; `"jsdom"` throws at runtime) — there is no other engine. `limits` / `skip` bound what the page may fetch. There is no layout and no sandbox: use it with trusted pages only |
 | `mermaid` | `{ source, theme?, padding?, background?, accent?, mode?, directives?, onWarning?, maxLines?, maxSourceBytes? }` | Draw a Mermaid diagram (instead of `value`), as an image sized to the diagram. See [Mermaid conversion](./mermaid.md) |
 
 #### Running scripts on edge runtimes (Cloudflare Workers and others)
 
-jsdom is Node.js only. Where `eval` is not allowed, such as Workers, `wasm-html-to-image/javascript` runs the page's scripts in QuickJS (WebAssembly) on a DOM written in C. A React / Next.js client has been checked to run through hydration and its `useEffect`s.
+The QuickJS (WebAssembly) engine runs on every runtime. Where `eval` is not allowed, such as Workers, `applyJavaScript()` from `wasm-html-to-image/javascript` runs the page's scripts in QuickJS on a DOM written in C. A React / Next.js client has been checked to run through hydration and its `useEffect`s.
 
 ```ts
 import { applyJavaScript } from "wasm-html-to-image/javascript";
@@ -85,16 +85,17 @@ const options = await applyJavaScript({ url: "https://example.com/", javascript:
 const { data } = await render(options);
 ```
 
-- The package picks the QuickJS wasm for the runtime (`#quickjs-wasm` in the `imports` of `package.json`): a pre-compiled module on Workers and on Vercel / Next.js Edge, read from disk on Node.js and Bun, fetched on Deno and in browsers. To use a module of your own, pass it as `applyJavaScript(options, { quickjsWasm })`. The Node.js `single` entry also selects this engine with `javascript: { engine: "quickjs" }`.
-- The engine itself is the separate package [`wasm-quickjs-dom`](https://www.npmjs.com/package/wasm-quickjs-dom) (a small JSDOM that knows nothing about images), installed as a dependency of `wasm-html-to-image`. `createDOM` can also be used straight from `wasm-quickjs-dom`.
-- Limits: no layout of its own (`getBoundingClientRect` returns 0 until `measureLayout()` supplies boxes; see below), no `canvas`, `type="module"` scripts run, but only `import`s with literal specifiers (fetched up front) resolve. The DOM is a small one written in C, smaller than jsdom's, and QuickJS is an interpreter, so heavy pages are slower.
+- The package picks the QuickJS wasm for the runtime (`#quickjs-wasm` in the `imports` of `package.json`): a pre-compiled module on Workers and on Vercel / Next.js Edge, read from disk on Node.js and Bun, fetched on Deno and in browsers. To use a module of your own, pass it as `applyJavaScript(options, { quickjsWasm })`. The Node.js `single` entry and the CLI's `--js` run the same phase for you.
+- The engine itself is the separate package [`wasm-quickjs-dom`](https://www.npmjs.com/package/wasm-quickjs-dom) (a small DOM implementation that knows nothing about images), installed as a dependency of `wasm-html-to-image`. `createDOM` can also be used straight from `wasm-quickjs-dom`.
+- The Node.js `single` entry's `runPageScripts` is now an alias of `wasm-quickjs-dom`'s `runPageScriptsQuickJS`. Its third argument `viewportWidth` defaults to `undefined` (the options' `width` is used, then 800) instead of 800, so `matchMedia` can answer differently than before.
+- Limits: no layout of its own (`getBoundingClientRect` returns 0 until `measureLayout()` supplies boxes; see below), no `canvas`, `type="module"` scripts run, but only `import`s with literal specifiers (fetched up front) resolve. The DOM is a small one written in C, and QuickJS is an interpreter, so heavy pages are slower.
 - More limits: `attachShadow()` works, but `serialize()` and the rendered HTML leave shadow trees out (a warning is logged when a root is attached). `document.fonts` is a stub (`ready` resolves at once, `check()` is always `true`, `load()` resolves to an empty array) and `FontFace` does not exist. Interaction pseudo-classes (`:hover`, `:focus`, `:active`, `:visited`, `:target`, `:focus-within`, `:focus-visible`) and pseudo-elements never match, in selectors or in `getComputedStyle()` (`matchMedia("(hover: hover)")` still reports `true`). `document.elementFromPoint()` returns `null` and `elementsFromPoint()` returns `[]`; `scroll()`, `scrollTo()`, `scrollBy()`, and `scrollIntoView()` do nothing (`scrollTop` / `scrollLeft` read `0`). An `<iframe>`'s `contentWindow` / `contentDocument` are `null`, and `srcdoc` is kept as an attribute only, never loaded. XPath cannot resolve namespace prefixes (`namespace-uri()` is `""`, `createNSResolver()` returns `null`). `crypto.getRandomValues()` / `crypto.randomUUID()` are built on `Math.random`, so they are not cryptographically secure. Canvas `getContext()` returns `null` (and `toDataURL()` `"data:,"`), so calling a method on the context throws a `TypeError`. SVG `getBBox()` / `getTotalLength()` / `getPointAtLength()` are approximate: a path's `A` command is its chord, `transform`s are ignored, and `<text>` is `0 × 0`.
-- As with jsdom, use it with trusted pages only (the scripts can `fetch`). For pages you do not control, always add the fetch limits below.
+- Use it with trusted pages only (the scripts can `fetch`). For pages you do not control, always add the fetch limits below, or `javascript: { limits, skip }`.
 - `IntersectionObserver` and `ResizeObserver` report once when you `observe()` (the page is meant to be seen whole, without scrolling, so everything counts as intersecting and lazy content gets to load). `matchMedia` answers for the viewport `width` (`min-width` / `max-width` / `orientation` ..., with a light-mode, no-motion user). `getComputedStyle` computes the cascade of `<style>` and the element's own `style`, inheritance and initial values, but does not lay out: a `width` / `height` of `auto` or `%` comes back as written (`auto`, `50%`, ...), so take real sizes from the boxes `measureLayout()` returns.
 
 #### Keeping the DOM open (`createDOM`)
 
-Without rendering anything, the page can be kept open and driven, like JSDOM. The DOM lives inside QuickJS, so you talk to it through `eval()` and JSON values rather than a live `dom.window`.
+Without rendering anything, the page can be kept open and driven, like a browser page. The DOM lives inside QuickJS, so you talk to it through `eval()` and JSON values rather than a live `dom.window`.
 
 ```ts
 import { createDOM } from "wasm-html-to-image/javascript";
@@ -117,6 +118,9 @@ try {
 - `settle(ms?)` lets the page's timers and fetches run. The page's clock runs only during `eval()` / `settle()`, not in between.
 - `serialize()` is the current HTML; `toOptions(options)` gives render options you can pass to `render()` as they are.
 - The second argument of `createDOM` is the `javascript` option (`timeout` / `settleMs` / `waitFor`) plus `width` and `quickjsWasm`. `timeout` counts per call.
+- `bridge()` gives the host synchronous access to the page's DOM (each property read, write or method call is one call into QuickJS; the same node is always the same wrapper).
+
+**Moving from jsdom**: the DOM lives inside QuickJS, so there is no `window` to hand around. Values cross the boundary as JSON, so `dom.eval(fn, ...args)` returns only what JSON can carry (no DOM nodes), and a function travels as source text, so it cannot close over outer variables. Give the page host functions with `dom.expose(name, fn)` (`await window[name](...args)`), and use `dom.bridge()` when the host wants to touch the DOM itself. There is no `beforeParse` hook: prepend a `<script>` to the HTML, or `eval()` your setup into the page after `createDOM()` and let `settle()` carry it into the page's pending work.
 
 **Command line**: `npx wasm-quickjs-dom <URL | file | ->` prints the HTML after the scripts ran (`-e` prints a value, `--json` adds the logs, `--wait` / `--settle` / `--timeout`, and the limits `--block-private` / `--allow-host` / `--skip` ...). `--help` lists everything.
 

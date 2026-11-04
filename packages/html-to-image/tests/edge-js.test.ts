@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { applyJavaScript } from "../src/edge-js.js";
+import { applyJavaScript, runPageScriptsQuickJS as runPageScripts } from "../src/edge-js.js";
+import { resolveJavaScript } from "../src/cli-options.js";
 
 const page = (body: string, script: string) => `<!doctype html><html><body>${body}<script>${script}</script></body></html>`;
 
@@ -15,13 +16,13 @@ describe("javascript option, QuickJS engine (wasm-quickjs-dom)", () => {
     expect(await applyJavaScript(plain)).toBe(plain);
   });
 
-  it('is what `javascript: { engine: "quickjs" }` selects in the Node entry', async () => {
-    const { applyJavaScript: applyAny } = await import("../src/js-page.js");
-    const out = await applyAny({
-      value: page('<p id="p">0</p>', 'document.getElementById("p").textContent = typeof process + "," + typeof document.createElement;'),
-      javascript: { engine: "quickjs", settleMs: 0 },
-    });
-    expect(String(out.value)).toContain(">undefined,function<"); // QuickJS has no `process`; jsdom would say "object"
+  it("rejects the removed jsdom engine", async () => {
+    await expect(
+      applyJavaScript({
+        value: page('<p id="p">0</p>', ""),
+        javascript: { engine: "jsdom" as never },
+      }),
+    ).rejects.toThrow(/no longer supported/);
   });
 
   it("re-exports createDOM, whose page can become render options", async () => {
@@ -33,6 +34,121 @@ describe("javascript option, QuickJS engine (wasm-quickjs-dom)", () => {
     } finally {
       dom.close();
     }
+  });
+});
+
+// Moved from js-page.test.ts: the QuickJS engine is now the only one, so these page-level cases live here.
+describe("javascript option, QuickJS engine: pages and browser APIs", () => {
+  it("serializes the DOM after the scripts ran", async () => {
+    const out = await runPageScripts(
+      { html: page('<div id="a">before</div>', 'document.getElementById("a").textContent = "after";') },
+      { settleMs: 0 },
+    );
+    expect(out.html).toContain(">after<");
+    expect(out.html).not.toContain(">before<");
+  });
+
+  it("runs timers within the settle time", async () => {
+    const out = await runPageScripts(
+      { html: page('<p id="t">wait</p>', 'setTimeout(() => { document.getElementById("t").className = "done"; }, 30);') },
+      { settleMs: 200 },
+    );
+    expect(out.html).toContain('class="done"');
+  });
+
+  it("waits for a selector", async () => {
+    const out = await runPageScripts(
+      { html: page("", 'setTimeout(() => { document.body.insertAdjacentHTML("beforeend", "<i id=late></i>"); }, 80);') },
+      { waitFor: "#late", timeout: 3000 },
+    );
+    expect(out.html).toContain('id="late"');
+  });
+
+  it("drops <noscript>, survives script errors and answers matchMedia from the width", async () => {
+    const out = await runPageScripts(
+      {
+        html: page(
+          "<noscript><b>no js</b></noscript><p id=p>x</p>",
+          'throw new Error("boom");',
+        ) + '<script>document.getElementById("p").textContent = String(window.matchMedia("(min-width: 1px)").matches);</script>',
+      },
+      { settleMs: 0 },
+    );
+    expect(out.html).not.toContain("no js");
+    expect(out.html).toContain(">true<"); // the QuickJS matchMedia knows the 800px viewport
+  });
+
+  it("lends fetch/Request and survives a page's unhandled rejection", async () => {
+    const out = await runPageScripts(
+      {
+        html: page(
+          '<p id="f"></p>',
+          'document.getElementById("f").textContent = [typeof fetch, typeof Request, typeof Response].join(",");' +
+            'Promise.reject(new Error("boom")); setTimeout(() => { throw new Error("late"); }, 10);',
+        ),
+      },
+      { settleMs: 100 },
+    );
+    expect(out.html).toContain(">function,function,function<");
+  });
+
+  it("has Web Streams", async () => {
+    const out = await runPageScripts(
+      { html: page("<p id=s></p>", 'document.getElementById("s").textContent = typeof ReadableStream + "," + typeof TransformStream;') },
+      { settleMs: 0 },
+    );
+    expect(out.html).toContain(">function,function<");
+  });
+
+  it("runs module scripts (jsdom did not)", async () => {
+    const out = await runPageScripts(
+      { html: '<!doctype html><body><script type="module">document.body.setAttribute("data-module", "ran");</script></body>' },
+      { settleMs: 100 },
+    );
+    expect(out.html).toContain('data-module="ran"');
+  });
+
+  it("fires IntersectionObserver and ResizeObserver on observe", async () => {
+    const out = await runPageScripts(
+      {
+        html: page(
+          '<div id="a"></div>',
+          'new IntersectionObserver((e) => { document.body.setAttribute("data-io", String(e[0].isIntersecting)); }).observe(document.getElementById("a"));' +
+            'new ResizeObserver((e) => { document.body.setAttribute("data-ro", String(e[0].contentRect.width)); }).observe(document.getElementById("a"));',
+        ),
+      },
+      { settleMs: 30 },
+    );
+    expect(out.html).toContain('data-io="true"');
+    expect(out.html).toContain('data-ro="0"'); // no layout yet: the same 0 getBoundingClientRect answers
+  });
+
+  it("clears document.currentScript after the script ran", async () => {
+    const { createServer } = await import("node:http");
+    const server = createServer((req, res) => {
+      res.setHeader("content-type", req.url === "/chunk.js" ? "text/javascript" : "text/html");
+      res.end(
+        req.url === "/chunk.js"
+          ? 'setTimeout(() => { document.body.setAttribute("data-cs", String(document.currentScript && document.currentScript.tagName)); }, 20);'
+          : '<!doctype html><body><script src="/chunk.js" async></script></body>',
+      );
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const { port } = server.address() as { port: number };
+      const out = await runPageScripts({ url: `http://127.0.0.1:${port}/` }, { settleMs: 300 });
+      expect(out.html).toContain('data-cs="null"'); // a browser clears it once the script returns
+    } finally {
+      server.close();
+    }
+  });
+});
+
+describe("CLI --js-wait", () => {
+  it("maps --js-wait to settleMs or a selector", () => {
+    expect(resolveJavaScript(undefined)).toBe(true);
+    expect(resolveJavaScript("500")).toEqual({ settleMs: 500 });
+    expect(resolveJavaScript("#app .ready")).toEqual({ waitFor: "#app .ready" });
   });
 });
 
@@ -95,6 +211,30 @@ describe("the render `limits` also bound what the page's scripts fetch (QuickJS 
       server.close();
     }
   });
+});
+
+// Smoke test for the `single` entry: with no `quickjsWasm` given, Node.js resolves the engine's
+// conditional import `#quickjs-wasm` to `wasm-quickjs-dom/dist/quickjs-node.js` (the wasm read from disk
+// and compiled). If that path broke, `javascript: true` would throw before drawing anything.
+describe("single entry: Node renders with the QuickJS wasm (dist/quickjs-node.js)", () => {
+  const html =
+    '<!doctype html><html><body style="margin:0;font:20px sans-serif"><p id="p">before</p>' +
+    '<script>document.getElementById("p").textContent = "after";</script></body></html>';
+  const PNG = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
+
+  it.each([false, true])("render({ javascript: %s }) draws the page", async (javascript) => {
+    const { render } = await import("../src/single.js");
+    const { data } = await render({ value: html, width: 240, height: 60, format: "png", javascript, fontMap: {} });
+    expect([...(data as Uint8Array).subarray(0, 8)]).toEqual(PNG);
+  }, 60_000);
+
+  it("runPageScripts is the wasm-quickjs-dom runPageScriptsQuickJS alias, and runs the page", async () => {
+    const { runPageScripts } = await import("../src/single.js");
+    const { runPageScriptsQuickJS } = await import("wasm-quickjs-dom");
+    expect(runPageScripts).toBe(runPageScriptsQuickJS);
+    const out = await runPageScripts({ html }, { settleMs: 0 });
+    expect(out.html).toContain(">after<");
+  }, 60_000);
 });
 
 describe("measureLayout: inline elements", () => {

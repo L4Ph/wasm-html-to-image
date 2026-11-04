@@ -100,12 +100,12 @@ export interface RenderResult<T = Uint8Array | string> {
 
 | オプション   | 型                                                       | 説明 |
 | ------------ | -------------------------------------------------------- | ---- |
-| `javascript` | `boolean \| { timeout?: number, settleMs?: number, waitFor?: string, engine?: "jsdom" \| "quickjs" }` | ページの `<script>` を jsdom で実行してから描画する（Node.js の `single` 入口と CLI の `--js`。任意依存の `jsdom` が要る）。`true` は `load` の後 1 秒待つ。`timeout` は全体の上限（既定 10000 ms）、`settleMs` は `load` の後の待ち時間（既定 1000 ms）、`waitFor` は待つ CSS セレクタ（指定すると `settleMs` の代わりになる）。`engine: "quickjs"` は、jsdom の代わりに QuickJS（WebAssembly）と C 実装の DOM で実行する（[Edge で使う](#edgecloudflare-workers-などでスクリプトを実行する)）。jsdom にはレイアウトも安全な隔離もないので、信頼できるページだけに使う |
+| `javascript` | `boolean \| { timeout?: number, settleMs?: number, waitFor?: string, engine?: "quickjs", limits?, skip? }` | ページの `<script>` を QuickJS（WebAssembly）と C 実装の DOM で実行してから描画する（Node.js の `single` 入口と CLI の `--js` は自動で行い、Edge の入口では `applyJavaScript()` を先に通す）。`true` は `load` の後 1 秒待つ。`timeout` は全体の上限（既定 10000 ms）、`settleMs` は `load` の後の待ち時間（既定 1000 ms）、`waitFor` は待つ CSS セレクタ（指定すると `settleMs` の代わりになる）。`engine` は `"quickjs"` だけを受け付け（1 リリースの移行用。`"jsdom"` は実行時にエラー）、エンジンはほかに選べない。`limits` / `skip` はページが取得できる先を絞る。レイアウトも安全な隔離もないので、信頼できるページだけに使う |
 | `mermaid`    | `{ source, theme?, padding?, background?, accent?, mode?, directives?, onWarning?, maxLines?, maxSourceBytes? }` | Mermaid の図を描く（`value` の代わり）。図の大きさに合わせた画像になる。詳しくは [Mermaid 変換](./mermaid.md) |
 
 #### Edge（Cloudflare Workers など）でスクリプトを実行する
 
-jsdom は Node.js 専用です。Workers のように `eval` できない環境では、`wasm-html-to-image/javascript` が、QuickJS（WebAssembly）と C 実装の DOM の上でページのスクリプトを実行します。React / Next.js のクライアントも、ハイドレーションと `useEffect` まで動くことを確認しています。
+QuickJS（WebAssembly）のエンジンは、すべての実行環境で動きます。`eval` を使えない Workers でも、`wasm-html-to-image/javascript` の `applyJavaScript()` が、QuickJS と C 実装の DOM の上でページのスクリプトを実行します。React / Next.js のクライアントも、ハイドレーションと `useEffect` まで動くことを確認しています。
 
 ```ts
 import { applyJavaScript } from "wasm-html-to-image/javascript";
@@ -115,16 +115,17 @@ const options = await applyJavaScript({ url: "https://example.com/", javascript:
 const { data } = await render(options);
 ```
 
-- QuickJS の wasm は、実行環境に合わせてパッケージが選びます（`package.json` の `imports` の `#quickjs-wasm`）。Workers と Vercel / Next.js の Edge ではコンパイル済みのモジュールを取り込み、Node.js と Bun ではファイルを読み、Deno とブラウザでは `fetch` します。自前のモジュールを使うなら `applyJavaScript(options, { quickjsWasm })` で渡せます。Node.js の `single` 入口では、`javascript: { engine: "quickjs" }` でも選べます。
-- エンジン本体は別パッケージの [`wasm-quickjs-dom`](https://www.npmjs.com/package/wasm-quickjs-dom)（画像とは無関係の小さな JSDOM）で、`wasm-html-to-image` の依存として入ります。`createDOM` はそのまま `wasm-quickjs-dom` からも使えます。
-- 制限: 自前のレイアウトはなく（`getBoundingClientRect` は 0。`measureLayout()` でボックスを渡すと実測値になります）、`canvas` は使えません。`type="module"` のスクリプトは実行しますが、`import` は先に取得できる（リテラルの指定子の）ものだけです。DOM は C 実装で jsdom より小さく、QuickJS はインタプリタなので、重いページは遅くなります。
+- QuickJS の wasm は、実行環境に合わせてパッケージが選びます（`package.json` の `imports` の `#quickjs-wasm`）。Workers と Vercel / Next.js の Edge ではコンパイル済みのモジュールを取り込み、Node.js と Bun ではファイルを読み、Deno とブラウザでは `fetch` します。自前のモジュールを使うなら `applyJavaScript(options, { quickjsWasm })` で渡せます。Node.js の `single` 入口と CLI の `--js` は、同じ実行を自動で行います。
+- エンジン本体は別パッケージの [`wasm-quickjs-dom`](https://www.npmjs.com/package/wasm-quickjs-dom)（画像とは無関係の小さな DOM 実装）で、`wasm-html-to-image` の依存として入ります。`createDOM` はそのまま `wasm-quickjs-dom` からも使えます。
+- Node.js の `single` 入口が公開する `runPageScripts` は `wasm-quickjs-dom` の `runPageScriptsQuickJS` の別名です。第 3 引数 `viewportWidth` の既定は 800 から `undefined`（未指定ならオプションの `width`、どちらもなければ 800）に変わったため、`matchMedia` の答えが以前と異なる場合があります。
+- 制限: 自前のレイアウトはなく（`getBoundingClientRect` は 0。`measureLayout()` でボックスを渡すと実測値になります）、`canvas` は使えません。`type="module"` のスクリプトは実行しますが、`import` は先に取得できる（リテラルの指定子の）ものだけです。DOM は C 実装で小さく、QuickJS はインタプリタなので、重いページは遅くなります。
 - そのほかの制限: `attachShadow()` で shadow root は作れますが、`serialize()` とレンダリングされる HTML に shadow tree は入りません（作ったときに警告をログへ出します）。`document.fonts` はスタブ（`ready` はすぐ解決、`check()` は常に `true`、`load()` は空配列）で、`FontFace` はありません。`:hover` / `:focus` / `:active` / `:visited` / `:target` / `:focus-within` / `:focus-visible` と擬似要素は、セレクタでも `getComputedStyle()` でも一致しません（`matchMedia("(hover: hover)")` は `true` を返します）。`elementFromPoint()` は `null`、`elementsFromPoint()` は `[]` を返し、`scroll()` / `scrollTo()` / `scrollBy()` / `scrollIntoView()` は何もしません（`scrollTop` / `scrollLeft` は `0`）。`<iframe>` の `contentWindow` / `contentDocument` は `null` で、`srcdoc` は属性として持つだけで読み込みません。XPath は名前空間接頭辞を解決できません（`namespace-uri()` は `""`、`createNSResolver()` は `null`）。`crypto.getRandomValues()` / `crypto.randomUUID()` は `Math.random` を使うため暗号学的に安全ではありません。`canvas` の `getContext()` は `null`（`toDataURL()` は `"data:,"`）を返すので、コンテキストのメソッドを呼ぶと `TypeError` になります。SVG の `getBBox()` / `getTotalLength()` / `getPointAtLength()` は近似で、パスの `A` は弦、`transform` は無視、`<text>` のボックスは `0 × 0` です。
-- jsdom と同じく、信頼できるページだけに使ってください（スクリプトは `fetch` できます）。信頼できないページには、下の「取得の制限」を必ず付けてください。
+- 信頼できるページだけに使ってください（スクリプトは `fetch` できます）。信頼できないページには、下の「取得の制限」か `javascript: { limits, skip }` を必ず付けてください。
 - `IntersectionObserver` と `ResizeObserver` は、`observe()` したときに 1 回だけ通知します（スクロールのないページ全体を見る前提なので、すべて「交差している」扱いです。遅延読み込みの中身が出てきます）。`matchMedia` は表示幅（`width`）で答えます（`min-width` / `max-width` / `orientation` など、ライトモードで動きを減らさない設定のユーザーとして答えます）。`getComputedStyle` は `<style>` と要素自身の `style` のカスケード、継承、初期値を計算しますが、レイアウトはしません。`width` / `height` が `auto` や `%` ならそのまま（`auto`、`50%` などで）返るので、実寸は `measureLayout()` が返すボックスの値を使ってください。
 
 #### DOM を開いたまま使う（`createDOM`）
 
-画像にしなくても、JSDOM のようにページを開いたまま操作できます。DOM は QuickJS の中にあるので、`dom.window` のような生のオブジェクトではなく、`eval()` と JSON の値でやり取りします。
+画像にしなくても、ブラウザのページのように開いたまま操作できます。DOM は QuickJS の中にあるので、`dom.window` のような生のオブジェクトではなく、`eval()` と JSON の値でやり取りします。
 
 ```ts
 import { createDOM } from "wasm-html-to-image/javascript";
@@ -147,6 +148,9 @@ try {
 - `settle(ms?)`: ページのタイマーと `fetch` を進めます。ページの時計は `eval()` / `settle()` の間だけ進み、呼び出しの間は止まっています。
 - `serialize()` は現在の HTML、`toOptions(options)` は `render()` にそのまま渡せるオプションを返します。
 - `createDOM` の第 2 引数は `javascript` オプション（`timeout` / `settleMs` / `waitFor`）に `width` と `quickjsWasm` を足したものです。`timeout` は 1 回の呼び出しごとに数えます。
+- `bridge()`: ホスト側からページの DOM を同期で触れる入口です（プロパティの読み書きやメソッド呼び出しが 1 回ずつの呼び出しになり、同じノードは同じラッパーです）。
+
+**jsdom から移行する**: DOM は QuickJS の中にあり、ホストに `window` をそのまま渡すことはできません。値は JSON の境界を越えるので、`dom.eval(fn, ...args)` が返せるのは JSON になる値だけです（DOM ノードは返せません）。関数はソース文字列として送られるため、クロージャ（外側の変数）は使えません。ホスト側の関数をページに渡すときは `dom.expose(name, fn)` で `await window[name](...args)` として呼ばせ、ホスト側から DOM を触りたいときは `dom.bridge()` を使います。jsdom の `beforeParse` に当たるフックはないので、HTML の先頭に `<script>` を足すか、`createDOM()` のあとに `eval()` で初期化を流し込み、`settle()` でページの保留中の処理へ届けてください。
 
 **コマンドライン**: `npx wasm-quickjs-dom <URL | ファイル | ->` で、スクリプト実行後の HTML を標準出力に出せます（`-e` で値、`--json` でログつき、`--wait` / `--settle` / `--timeout`、制限の `--block-private` / `--allow-host` / `--skip` など）。`--help` で一覧が出ます。
 

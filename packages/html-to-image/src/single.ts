@@ -15,7 +15,7 @@ import {
   type RenderResult,
 } from "./core.js";
 import { isImageInput } from "./input.js";
-import { applyJavaScript } from "./js-page.js";
+import { applyJavaScript } from "./edge-js.js";
 
 export type {
   OutputFormat,
@@ -32,8 +32,13 @@ export type {
 } from "./core.js";
 export { DIAGNOSTIC_CODES, LogLevel, htmlToImage } from "./core.js";
 export { isImageInput };
-export type { JavaScriptOptions, ScriptedPage } from "./js-page.js";
-export { runPageScripts } from "./js-page.js";
+export type { JavaScriptOptions, ScriptedPage } from "./js-apply.js";
+/**
+ * Run a page's scripts in QuickJS and return the resulting HTML: an alias of `wasm-quickjs-dom`'s
+ * `runPageScriptsQuickJS`. Its optional third argument `viewportWidth` defaults to `undefined` (the
+ * `width` of the options is used, then 800), so `matchMedia` follows that width.
+ */
+export { runPageScriptsQuickJS as runPageScripts } from "wasm-quickjs-dom";
 export { clearResourceCache } from "./core-resources.js";
 export type { HtmlToImageModule } from "./loader.js";
 export { dropCachedModule, loadHtmlToImageModule } from "./loader.js";

@@ -48,7 +48,7 @@ npx wasm-html-to-image <input> [options]
 | `--mermaid-mode <mode>` | - | `strict` | How much a broken source is forgiven: `strict`, `compat`, `recover` |
 | `--mermaid-directives` | - | off | Honour `%%{init}%%` and frontmatter `config:` in the source |
 | `--font <path>` | - | None | A local font file or glob (e.g. `'./fonts/*.woff2'`); repeatable. `'Family=path'` registers it under that family name (e.g. `'Segoe UI=C:/Windows/Fonts/segoeui.ttf'`). Repeat a family for each weight and `font-weight` picks the nearest file |
-| `--js` | - | off | Run the page's scripts in jsdom before rendering (needs the optional dependency `jsdom`; trusted pages only) |
+| `--js` | - | off | Run the page's scripts in QuickJS (WebAssembly) before rendering (nothing extra to install; trusted pages only) |
 | `--js-wait <ms\|selector>` | - | `1000` | With `--js`: milliseconds to wait after `load`, or a CSS selector to wait for |
 
 ## Examples

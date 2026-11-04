@@ -126,7 +126,7 @@ npx wasm-html-to-image https://go.dev/ --font "Segoe UI=C:/Windows/Fonts/segoeui
 npx wasm-html-to-image https://go.dev/ -w 1600 -o go.png \
   --font "Segoe UI=C:/Windows/Fonts/segoeui.ttf" --font "Segoe UI=C:/Windows/Fonts/segoeuib.ttf"
 
-# Run the page's scripts first (Node only; jsdom is an optional dependency, trusted pages only)
+# Run the page's scripts first (QuickJS in WebAssembly, no extra install; trusted pages only)
 npx wasm-html-to-image https://go.dev/ --js -w 1600 -o go.png
 npx wasm-html-to-image https://example.com/ --js --js-wait '#app .ready' -o app.png   # or --js-wait 2000 (ms)
 
@@ -183,7 +183,7 @@ interface RenderResult {
 | `wasm-html-to-image/markdown` | Markdown input | GitHub-flavoured Markdown to a styled HTML page (`markdownToHtml`); pure JS, runs in browsers and Workers |
 | `wasm-html-to-image/single`, `/workers` | Mermaid diagrams | `renderMermaid(source, options)`: one diagram as an SVG string or an image (any entry's `render({ mermaid: { source } })` does the same) |
 | `wasm-html-to-image/markdown-math` | Maths in Markdown | KaTeX renderer for `markdownToHtml({ math })`: `$...$` and `$$...$$` (`katexMath`); pure JS, runs in browsers and Workers |
-| `wasm-html-to-image/javascript` | Scripts on edge runtimes | `applyJavaScript(options)`: runs a page's scripts in QuickJS (WebAssembly) on linkedom, where jsdom cannot (Workers); the QuickJS wasm is chosen for the runtime automatically. `createDOM()` keeps the page open (a small JSDOM); the engine is the standalone package `wasm-quickjs-dom` |
+| `wasm-html-to-image/javascript` | Scripts on any runtime | `applyJavaScript(options)`: runs a page's scripts in QuickJS (WebAssembly) on a DOM written in C, on Node, Workers, Deno, Bun and browsers alike; the QuickJS wasm is chosen for the runtime automatically. `createDOM()` keeps the page open (`eval`, `expose`, `bridge`); the engine is the standalone package `wasm-quickjs-dom` |
 
 ---
 
@@ -389,10 +389,12 @@ Try every diagram (33 samples), theme and format in the [playground](https://sor
 </details>
 
 <details>
-<summary><b>0. Pages that build themselves with JavaScript (jsdom, Node only)</b></summary>
+<summary><b>0. Pages that build themselves with JavaScript (QuickJS, every runtime)</b></summary>
 
-The engine never runs scripts. The `javascript` option loads the page into [jsdom](https://github.com/jsdom/jsdom)
-(an optional dependency, installed with the package by default; `npm i --omit=optional` skips it), lets its scripts run, and renders the resulting DOM:
+The engine never runs scripts on its own. The `javascript` option runs the page's scripts in
+[QuickJS](https://github.com/quickjs-ng/quickjs) compiled to WebAssembly, on a DOM written in C, and renders the
+resulting DOM. There is nothing to install and no engine to choose: it works wherever WebAssembly does (Node.js,
+Cloudflare Workers, Vercel Edge, Deno, Bun, browsers).
 
 ```typescript
 import { render } from "wasm-html-to-image/single";
@@ -405,14 +407,23 @@ const { data } = await render({
 ```
 
 - It waits for `load`, then `settleMs` (default 1000 ms) or until `waitFor` matches, at most `timeout` (default 10 s).
-- Only scripts are fetched by jsdom; stylesheets, images and fonts stay with the renderer. `<noscript>` content is dropped.
-- jsdom has no layout (`getBoundingClientRect` returns zeros, `ResizeObserver` / `IntersectionObserver` are stubs) and does not run
-  `type="module"` scripts. Failing scripts are ignored.
-- jsdom is not a security sandbox (`runScripts: "dangerously"`): use it only with pages you trust.
-- Available from the `single` entry point and the CLI (`--js`, `--js-wait`); the edge/worker entry points ignore it.
-- On Workers and other runtimes without `eval`, use `wasm-html-to-image/javascript` instead: it runs the scripts in QuickJS (WebAssembly)
-  on a linkedom DOM (a React / Next.js client runs through hydration). `javascript: { engine: "quickjs" }` selects it in the `single` entry too.
-  See the *render()* page of the documentation.
+- Only scripts and stylesheets are fetched for the page (stylesheets so that `getComputedStyle` sees the cascade);
+  images and fonts stay with the renderer. `<noscript>` content is dropped.
+- QuickJS has no layout of its own (`getBoundingClientRect` returns zeros until `measureLayout()` supplies boxes;
+  `ResizeObserver` / `IntersectionObserver` notify once) and `canvas` is unavailable. `type="module"` scripts run.
+  Failing scripts are ignored.
+- It is not a security sandbox: use it only with pages you trust, or pass `javascript: { limits, skip }` to bound what
+  the page may fetch.
+- Available from the `single` entry point and the CLI (`--js`, `--js-wait`). On the edge / worker entry points, call
+  `applyJavaScript(options)` from `wasm-html-to-image/javascript` before `render()`.
+- `engine: "quickjs"` is still accepted for one release; `engine: "jsdom"` now throws, because QuickJS is the only
+  engine. See the *render()* page of the documentation.
+- **Moving from the old jsdom engine:** the DOM lives in QuickJS, so a live `window` is gone. Values cross the boundary
+  as JSON, so `dom.eval(fn, ...args)` returns plain data (no nodes, no closures — the function is sent as source, so it
+  cannot capture outer variables). Host functions reach the page through `dom.expose(name, fn)` and are awaited as
+  `await window[name](...args)`, `dom.bridge()` gives synchronous host-side access to the page's DOM, and jsdom's
+  `beforeParse` has no equivalent: prepend a `<script>` to the HTML, or `eval()` your setup into the page after
+  `createDOM()` and let `settle()` carry it into the page's pending work.
 
 </details>
 

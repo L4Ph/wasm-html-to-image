@@ -1,7 +1,7 @@
 /**
- * What every engine of the `javascript` option shares: its options, the result of the script phase, and how the
- * result replaces the render input. No engine is imported here (jsdom, QuickJS), so the edge entry points can use
- * this without a bundler following an import to jsdom.
+ * What the `javascript` option shares across entry points: its options, the result of the script phase, and how the
+ * result replaces the render input. The engine itself (QuickJS) is imported by the entry points, so this module stays
+ * free of the wasm bundle.
  */
 import type { FetchLimits } from "wasm-quickjs-dom";
 import type { HtmlToImageOptions } from "./core.js";
@@ -32,11 +32,10 @@ export interface JavaScriptOptions {
   /** CSS selector to wait for after `load`; replaces `settleMs` when given. */
   waitFor?: string;
   /**
-   * What runs the scripts. `"jsdom"` (default, Node only, needs `jsdom`) or `"quickjs"`: QuickJS compiled to
-   * WebAssembly on a native C DOM, which also works where `eval` is not allowed (Cloudflare Workers; see
-   * `wasm-html-to-image/javascript`). It is a smaller DOM than jsdom's and an interpreter, so heavy pages are slower.
+   * Script engine: always `"quickjs"` (QuickJS compiled to WebAssembly on a native C DOM, which works where `eval` is
+   * not allowed). The key only remains for one release: `"jsdom"` is rejected at runtime.
    */
-  engine?: "jsdom" | "quickjs";
+  engine?: "quickjs";
   /**
    * What the page's scripts may fetch (QuickJS engine): the same names as the render `limits` (`allowedHosts`, ...) plus
    * `blockPrivateHosts`. The render `limits` of the same call are the defaults, so `limits.allowedHosts` applies to the
@@ -58,7 +57,7 @@ export interface ScriptedPage {
   baseUrl: string;
 }
 
-/** Runs a page's scripts and returns the resulting HTML (the jsdom engine, or the QuickJS one). */
+/** Runs a page's scripts in QuickJS and returns the resulting HTML. */
 export type ScriptRunner = (
   source: { url?: string; html?: string; baseUrl?: string },
   option: true | JavaScriptOptions,
@@ -73,6 +72,14 @@ export async function applyScripted<T extends HtmlToImageOptions>(options: T, ru
   const { javascript, ...rest } = options;
   if (!javascript) return options;
   const base = javascript === true ? {} : javascript;
+  // One-release guard: the option used to choose a Node jsdom engine. JS callers can still send the old value even
+  // though the type no longer allows it, so fail loudly instead of silently running QuickJS.
+  const requestedEngine = (base as { engine?: string }).engine;
+  if (requestedEngine !== undefined && requestedEngine !== "quickjs") {
+    throw new Error(
+      `wasm-html-to-image: \`javascript.engine: "${requestedEngine}"\` is no longer supported; scripts always run in QuickJS.`,
+    );
+  }
   const l = options.limits;
   const fromRender: FetchLimits | undefined = l && {
     allowedProtocols: l.allowedProtocols,

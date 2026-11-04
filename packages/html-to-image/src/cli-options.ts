@@ -8,6 +8,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { isImageInput } from "./input.js";
 import type { HtmlToImageOptions, OutputFormat } from "./core.js";
+import type { JavaScriptOptions } from "./js-apply.js";
 import { MERMAID_THEMES, type MermaidOptions, type MermaidTheme } from "./mermaid.js";
 
 /** Flags as parsed by commander (see `./cli.ts`). */
@@ -36,7 +37,7 @@ export interface CliFlags {
   animationLoop?: number;
   /** `--font <path-or-glob>` (repeatable); local font files to register. */
   font?: string[];
-  /** `--js`: run the page's scripts (jsdom) before rendering. */
+  /** `--js`: run the page's scripts (QuickJS) before rendering. */
   js?: boolean;
   /** `--markdown`: treat the input as Markdown (implied by a `.md` / `.markdown` file). */
   markdown?: boolean;
@@ -77,7 +78,7 @@ export interface CliFlags {
 }
 
 /** `--js-wait`: milliseconds to settle after load, or a CSS selector to wait for. */
-export function resolveJavaScript(wait: string | undefined): true | { settleMs?: number; waitFor?: string } {
+export function resolveJavaScript(wait: string | undefined): true | JavaScriptOptions {
   if (wait === undefined || wait === "") return true;
   return /^\d+(\.\d+)?$/.test(wait) ? { settleMs: Number(wait) } : { waitFor: wait };
 }

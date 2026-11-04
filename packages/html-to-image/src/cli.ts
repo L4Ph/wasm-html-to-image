@@ -122,7 +122,7 @@ program
   .option("--mermaid-directives", "honour %%{init}%% and frontmatter config (theme, themeVariables) in a Mermaid source")
   .option(
     "--js",
-    "run the page's scripts in jsdom before rendering (needs the optional dependency jsdom; trusted pages only)",
+    "run the page's scripts in QuickJS before rendering (trusted pages only)",
   )
   .option(
     "--js-wait <ms|selector>",

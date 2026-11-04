@@ -142,12 +142,12 @@ export interface HtmlToImageOptions extends RenderOptions {
    */
   fitContent?: number;
   /**
-   * Run the page's scripts before rendering (Node only; `single` entry point and the CLI's `--js`).
-   * The page is loaded into jsdom (optional dependency `jsdom`), its scripts run, and the resulting
-   * DOM is rendered. `true` waits for `load` plus 1 s; pass `{ timeout, settleMs, waitFor }` to tune it.
-   * jsdom has no layout and is not a security sandbox: only use it with pages you trust.
+   * Run the page's scripts before rendering (`single` entry point and the CLI's `--js`).
+   * The page's scripts run in QuickJS on a native C DOM, and the resulting DOM is rendered.
+   * `true` waits for `load` plus 1 s; pass `{ timeout, settleMs, waitFor, limits, skip }` to tune it.
+   * The engine is an interpreter and not a security sandbox: only use it with pages you trust.
    */
-  javascript?: boolean | import("./js-page.js").JavaScriptOptions;
+  javascript?: boolean | import("./js-apply.js").JavaScriptOptions;
   /** Encode quality 0-100 (encode stage only, default 85; ignored for svg/pdf). */
   quality?: number;
   /** Encode speed 0-10 for AVIF, JXL and animated (lossy) WebP (encode stage only; default 8 for AVIF, 6 otherwise). Animated WebP uses libwebp method `8 - speed`: the default 6 is method 2, 5 is method 3 (Skia's, smaller by ~4%), 9 is method 0 (fastest, ~30% larger). */
