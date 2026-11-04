@@ -34,15 +34,33 @@ export class VirtualConsole extends EventEmitter {
   }
 }
 
+export interface ResourcesOptions {
+  /** Not read: see {@link JSDOMOptions.resources}. */
+  [option: string]: unknown;
+}
+
 export interface JSDOMOptions {
   /** The page's URL (what `location` and relative addresses use). Default `about:blank`. */
   url?: string;
+  /**
+   * What `document.referrer` reports. `JSDOM.fromURL` also sends it as the request's `Referer` header.
+   */
   referrer?: string;
   contentType?: string;
   /** `"dangerously"` runs the page's scripts, `"outside-only"` only `window.eval`; unset runs none, as in jsdom. */
   runScripts?: "dangerously" | "outside-only";
-  /** `"usable"` loads the scripts with a `src` (the only subresource that is loaded). */
-  resources?: "usable";
+  /**
+   * `"usable"` loads the scripts with a `src` (the only subresource that is loaded).
+   * jsdom's `ResourcesOptions` object form (a custom `ResourceLoader` and its fetch options) is not supported:
+   * only the string `"usable"` is honoured. The object form is accepted so that a jsdom config can be reused, but
+   * it emits a `jsdomError` of type `"not-implemented"` on the virtual console instead of being ignored silently.
+   */
+  resources?: "usable" | ResourcesOptions;
+  /**
+   * Not supported: jsdom's quota for `localStorage` / `sessionStorage`. This page's storage is in-memory and
+   * unquota'd; the option is accepted and ignored.
+   */
+  storageQuota?: number;
   /**
    * The page pretends to be visual: `requestAnimationFrame` exists, the document is `"visible"` and focused.
    * Without it (jsdom's default) there are no animation frames, `visibilityState` is `"prerender"` and
@@ -98,6 +116,14 @@ export class JSDOM {
 
   constructor(html?: string | Uint8Array, options: JSDOMOptions = {}) {
     this.virtualConsole = options.virtualConsole === null ? new VirtualConsole() : (options.virtualConsole ?? new VirtualConsole().sendTo(console));
+    // jsdom's object form of `resources` (a custom ResourceLoader) cannot be honoured: only the string "usable" is.
+    // Say so on the virtual console rather than ignoring the option silently.
+    if (options.resources !== undefined && typeof options.resources === "object" && options.resources !== null) {
+      this.virtualConsole.emit(
+        "jsdomError",
+        classified(new Error('resources: the ResourcesOptions object form is not supported; pass "usable" to load scripts with a src.'), "not-implemented"),
+      );
+    }
     const engine = options.engine ?? {};
     const report = (entry: PageLogEntry) => {
       try {
@@ -114,8 +140,16 @@ export class JSDOM {
       }
     };
     const url = options.url ?? "about:blank";
+    const referrer = options.referrer;
+    // document.referrer: the page has no referrer of its own, so it is written into the document before any of its
+    // scripts run. beforeScripts runs after the markup is parsed and before the page's own scripts, which is the
+    // earliest point the page side offers; the engine's own beforeScripts still run, after this one.
+    const beforeScripts =
+      referrer === undefined
+        ? engine.beforeScripts
+        : [`Object.defineProperty(document, "referrer", { value: ${JSON.stringify(referrer)}, configurable: true });`, ...[engine.beforeScripts ?? []].flat()];
     this.cookieJar = options.cookieJar ?? engine.cookieJar ?? new CookieJar();
-    this.page = openPage(decodeHtml(html, options.contentType), url, engine.quickjsWasm ?? defaultWasm(), { ...engine, cookieJar: this.cookieJar, onLog: report, stylesheets: options.resources === "usable", visual: options.pretendToBeVisual ?? false });
+    this.page = openPage(decodeHtml(html, options.contentType), url, engine.quickjsWasm ?? defaultWasm(), { ...engine, beforeScripts, cookieJar: this.cookieJar, onLog: report, stylesheets: options.resources === "usable", visual: options.pretendToBeVisual ?? false });
     const bridge = this.page.dom.bridge({ timeout: engine.timeout });
     this.bridgeWindow = bridge.window;
     // the page's `window.close()` ends the page

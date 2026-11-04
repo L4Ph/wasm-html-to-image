@@ -33,8 +33,15 @@ describe("JSDOM: the constructor and the window", () => {
     expect(window.location.href).toBe("https://example.org/a/b?c=d#e");
     expect(window.location.hostname).toBe("example.org");
     expect(window.document.URL).toBe("https://example.org/a/b?c=d#e");
+    expect(window.document.referrer).toBe("https://r.test/");
     expect(window.document.querySelector("a").href).toBe("https://example.org/x?y=1");
     expect(window.document.querySelector("a").pathname).toBe("/x");
+  });
+
+  it("writes document.referrer before the page's own scripts run", () => {
+    const dom = make("<script>document.title = document.referrer</script>", { referrer: "https://r.test/from", runScripts: "dangerously" });
+    expect(dom.window.document.referrer).toBe("https://r.test/from");
+    expect(dom.window.document.title).toBe("https://r.test/from");
   });
 
   it("runs no script unless asked, and window.eval with outside-only", () => {
@@ -120,6 +127,9 @@ describe("JSDOM: what happens after the constructor", () => {
       const withScripts = await JSDOM.fromURL(base, { virtualConsole: null, runScripts: "dangerously", resources: "usable" });
       open.push(withScripts);
       expect(withScripts.window.location.href).toBe(base);
+      // resources: "usable" is asynchronous: the constructor (and fromURL) return before the fetched script has
+      // run. Tests must await `ready` rather than sleep a fixed time, which is what makes this test stable.
+      expect(withScripts.window.document.getElementById("p").textContent).toBe("no");
       await withScripts.ready;
       expect(withScripts.window.document.getElementById("p").textContent).toBe("loaded");
     } finally {
@@ -138,6 +148,16 @@ describe("JSDOM: the virtual console", () => {
     make("<script>console.log('a'); console.warn('b'); throw new Error('boom')</script>", { runScripts: "dangerously", virtualConsole: vc });
     await sleep(10);
     expect(seen).toEqual(["log a", "warn b", expect.stringMatching(/^error .*boom/)]);
+  });
+
+  it("warns on the jsdom object form of resources instead of ignoring it silently", () => {
+    const vc = new VirtualConsole();
+    const seen: { type?: string; message: string }[] = [];
+    vc.on("jsdomError", (e: Error & { type?: string }) => seen.push({ type: e.type, message: e.message }));
+    make("<p>x</p>", { virtualConsole: vc, resources: { runScripts: "dangerously" } as any });
+    expect(seen).toHaveLength(1);
+    expect(seen[0].type).toBe("not-implemented");
+    expect(seen[0].message).toContain('pass "usable"');
   });
 
   it("sendTo forwards to a console", () => {
