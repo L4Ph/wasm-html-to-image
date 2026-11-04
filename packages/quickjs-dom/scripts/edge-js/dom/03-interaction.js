@@ -67,7 +67,7 @@
     var inner = label.querySelector(LABELABLE);
     return inner && !(inner.localName === "input" && inner.getAttribute("type") === "hidden") ? inner : null;
   };
-  ["HTMLInputElement", "HTMLSelectElement", "HTMLTextAreaElement", "HTMLButtonElement"].forEach(function (name) {
+  ["HTMLInputElement", "HTMLSelectElement", "HTMLTextAreaElement", "HTMLButtonElement", "HTMLOutputElement"].forEach(function (name) {
     var LABELS = Symbol("labels");
     getter(P[name], "labels", function () {
       var el = this;
@@ -140,7 +140,7 @@
   var activatable = function (el) {
     if (el.nodeType !== 1) return false;
     var tag = el.localName, type = (el.getAttribute("type") || "").toLowerCase();
-    if (tag === "input") return !el.hasAttribute("disabled") && (type === "checkbox" || type === "radio" || type === "submit" || type === "reset");
+    if (tag === "input") return !el.hasAttribute("disabled") && (type === "checkbox" || type === "radio" || type === "submit" || type === "image" || type === "reset");
     if (tag === "button") return !el.hasAttribute("disabled");
     if (tag === "label") return true;
     if (tag === "summary") return !!el.parentNode && el.parentNode.localName === "details";
@@ -170,9 +170,9 @@
         el.dispatchEvent(new W.Event("input", { bubbles: true }));
         el.dispatchEvent(new W.Event("change", { bubbles: true }));
       }
-    } else if ((tag === "input" && (type === "submit" || type === "reset")) || tag === "button") {
+    } else if ((tag === "input" && (type === "submit" || type === "image" || type === "reset")) || tag === "button") {
       var kind = tag === "button" ? (type || "submit") : type, form = el.form;
-      if (form && kind === "submit") form.requestSubmit(el);
+      if (form && (kind === "submit" || kind === "image")) form.requestSubmit(el);
       else if (form && kind === "reset") form.reset();
     } else if (tag === "label") {
       var control = controlOf(el);

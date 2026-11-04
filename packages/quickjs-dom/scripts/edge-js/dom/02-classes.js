@@ -762,6 +762,20 @@
   W.HTMLCollection = function HTMLCollection() { illegal(); };
   W.HTMLOptionsCollection = function HTMLOptionsCollection() { illegal(); };
   Object.setPrototypeOf(W.HTMLOptionsCollection.prototype, W.HTMLCollection.prototype);
+  // the interface's own remove(index); a live options collection answers it through its proxy,
+  // this copy keeps the member on the prototype (surface and prototype walks). index is a required
+  // long: no argument throws TypeError, undefined converts to 0 (WebIDL), out of range does nothing.
+  Object.defineProperty(W.HTMLOptionsCollection.prototype, "remove", {
+    value: function (index) {
+      if (arguments.length === 0) throw new TypeError("Failed to execute 'remove' on 'HTMLOptionsCollection': 1 argument required, but only 0 present.");
+      index = +index;
+      if (index !== index) index = 0;
+      index = index < 0 ? Math.ceil(index) : Math.floor(index);
+      var el = this[index];
+      if (el) el.remove();
+    },
+    writable: true, configurable: true,
+  });
   W.HTMLFormControlsCollection = function HTMLFormControlsCollection() { illegal(); };
   Object.setPrototypeOf(W.HTMLFormControlsCollection.prototype, W.HTMLCollection.prototype);
   W.NamedNodeMap = function NamedNodeMap() { illegal(); };

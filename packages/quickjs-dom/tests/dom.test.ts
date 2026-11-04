@@ -257,6 +257,78 @@ describe("javascript option, QuickJS engine: forms", () => {
       foreign: "NotFoundError",
     });
   });
+
+  it("select.remove/options.remove, output state and reset, fieldset.elements/type, image submit, range and date values", async () => {
+    const out = await runPageScriptsQuickJS(
+      {
+        html: page(
+          '<form id="f"><select id="s"><option>a</option><option>b</option><option>c</option></select>' +
+            '<output id="o">7</output>' +
+            '<fieldset id="fs"><legend>l</legend><input name="y"><select name="z"><option>q</option></select></fieldset>' +
+            '<input id="img" type="image">' +
+            '<input id="r" type="range" min="10" max="0" value="5">' +
+            '<input id="r2" type="range" min="10" max="0">' +
+            '<input id="d" type="date" value="2024-02-30">' +
+            '<input id="d2" type="date" value="2024-02-29">' +
+            "</form>",
+          `const $ = (id) => document.getElementById(id), f = $("f"), s = $("s"), o = $("o");
+           const texts = (sel) => Array.prototype.map.call(sel.options, (x) => x.textContent);
+           const before = texts(s);
+           s.remove(1);
+           const afterIndex = texts(s);
+           let noArg = "none";
+           try { s.options.remove(); } catch (e) { noArg = e.name; }
+           s.options.remove(undefined);
+           const afterUndefined = texts(s);
+           s.remove();
+           const selectRemoved = !s.isConnected;
+
+           const output = [o.value, o.defaultValue, o.type, o.willValidate];
+           o.value = "9";
+           output.push(o.value, o.defaultValue);
+           f.reset();
+           output.push(o.value, o.defaultValue);
+           o.defaultValue = "8";
+           output.push(o.value, o.defaultValue);
+           o.value = "10";
+           output.push(o.value, o.defaultValue);
+           f.reset();
+           output.push(o.value, o.defaultValue);
+
+           const fs = $("fs");
+           const fieldset = [fs.type, fs.elements.length, Array.prototype.map.call(fs.elements, (e) => e.name), fs.willValidate, fs.validity.valid];
+
+           const submits = [];
+           f.addEventListener("submit", (ev) => { submits.push([ev.submitter && ev.submitter.id, ev.submitter && ev.submitter.type]); ev.preventDefault(); });
+           $("img").click();
+
+           const values = [$("r").value, $("r2").value, $("d").value, $("d2").value];
+           document.body.setAttribute("data-r", encodeURIComponent(JSON.stringify({
+             before: before, afterIndex: afterIndex, noArg: noArg, afterUndefined: afterUndefined, selectRemoved: selectRemoved,
+             output: output, fieldset: fieldset, submits: submits, values: values,
+           })));`,
+        ),
+      },
+      { settleMs: 0 },
+    );
+    const info = JSON.parse(decodeURIComponent(/data-r="([^"]*)"/.exec(out.html)![1]));
+    expect(info).toEqual({
+      before: ["a", "b", "c"],
+      afterIndex: ["a", "c"],
+      noArg: "TypeError",
+      // WebIDL's long conversion of undefined is 0, so this removes the first option
+      afterUndefined: ["c"],
+      // select.remove() with no argument is ChildNode.remove(): the select itself leaves the tree
+      selectRemoved: true,
+      // value is the text; defaultValue is the text until a value write takes a snapshot of it, which reset restores
+      output: ["7", "7", "output", false, "9", "7", "7", "7", "8", "8", "10", "8", "8", "8"],
+      // a fieldset is a listed element but is not submittable; its elements are the controls inside it
+      fieldset: ["fieldset", 2, ["y", "z"], false, true],
+      submits: [["img", "image"]],
+      // a reversed range answers min (not max); invalid dates sanitise to ""
+      values: ["10", "10", "", "2024-02-29"],
+    });
+  });
 });
 
 describe("javascript option, QuickJS engine: client-side routing", () => {

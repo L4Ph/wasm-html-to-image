@@ -485,6 +485,38 @@ describe("native DOM: style, forms and shadow roots", () => {
     ).toEqual(["b", "a", "bye", "hi", "x", false, true, true]);
   });
 
+  it("select.remove/options.remove, output reset, fieldset.elements, image submit and range/date values", async () => {
+    expect(
+      await run(`
+        var doc = N.parse('<form id=f><select id=s><option>a<option>b<option>c</select><output id=o>7</output><fieldset id=fs><input name=y><select name=z><option>q</select></fieldset><input id=img type=image><input id=r type=range min=10 max=0 value=5><input id=r2 type=range min=10 max=0><input id=d type=date value="2024-02-30"><input id=d2 type=date value="2024-02-29"></form>');
+        var $ = function (id) { return doc.getElementById(id); };
+        var texts = function (s) { return Array.prototype.map.call(s.options, function (x) { return x.textContent; }); };
+        var s = $("s"), before = texts(s), noArg;
+        s.remove(1); var afterIndex = texts(s);
+        try { s.options.remove(); noArg = "none"; } catch (e) { noArg = e.name; }
+        s.options.remove(undefined); var afterUndefined = texts(s);
+        s.remove();
+        var o = $("o"), output = [o.value, o.defaultValue, o.type];
+        o.value = "9"; output.push(o.value, o.defaultValue);
+        $("f").reset(); output.push(o.value, o.defaultValue);
+        var fs = $("fs"), fieldset = [fs.type, fs.elements.length, Array.prototype.map.call(fs.elements, function (e) { return e.name; })];
+        var submits = [], f = $("f");
+        f.addEventListener("submit", function (ev) { submits.push([ev.submitter && ev.submitter.id, ev.submitter && ev.submitter.type]); ev.preventDefault(); });
+        $("img").click();
+        return [before, afterIndex, noArg, afterUndefined, !s.isConnected, output, fieldset, submits, [$("r").value, $("r2").value, $("d").value, $("d2").value]];`),
+    ).toEqual([
+      ["a", "b", "c"],
+      ["a", "c"],
+      "TypeError",
+      ["c"],
+      true,
+      ["7", "7", "output", "9", "7", "7", "7"],
+      ["fieldset", 2, ["y", "z"]],
+      [["img", "image"]],
+      ["10", "10", "", "2024-02-29"],
+    ]);
+  });
+
   it("attachShadow: the root belongs to the host, not to the tree, and events go through the host", async () => {
     expect(
       await run(`

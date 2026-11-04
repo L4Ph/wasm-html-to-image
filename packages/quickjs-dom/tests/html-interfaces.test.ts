@@ -249,6 +249,96 @@ describe("tables and selects", () => {
   });
 });
 
+describe("forms: select, output, fieldset and submit buttons", () => {
+  it("select.remove/options.remove, output value/defaultValue and reset, fieldset.elements, image submit", () => {
+    same(
+      '<body><form id=f><select id=s><option>a<option>b<option>c</select><output id=o>7</output>' +
+        '<fieldset id=fs><legend>l</legend><input name=y><select name=z><option>q</select></fieldset>' +
+        '<input id=img type=image></form></body>',
+      (w) => {
+        const d = w.document;
+        const texts = (s: any) => Array.from(s.options).map((o: any) => o.textContent);
+        const s = d.getElementById("s");
+        const log: unknown[] = [texts(s)];
+        s.remove(1);
+        log.push(texts(s));
+        let noArg = "none";
+        try {
+          s.options.remove();
+        } catch (e: any) {
+          noArg = e.name;
+        }
+        log.push(noArg);
+        s.options.remove(undefined);
+        log.push(texts(s));
+        s.remove();
+        log.push(d.getElementById("s") === null);
+
+        const o = d.getElementById("o");
+        log.push(o.value, o.defaultValue, o.type);
+        o.value = "9";
+        log.push(o.value, o.defaultValue);
+        d.getElementById("f").reset();
+        log.push(o.value, o.defaultValue);
+
+        const fs = d.getElementById("fs");
+        log.push(fs.type, fs.elements.length, Array.from(fs.elements).map((e: any) => e.name));
+
+        const seen: unknown[] = [];
+        d.getElementById("f").addEventListener("submit", (ev: any) => {
+          seen.push([ev.submitter && ev.submitter.id, ev.submitter && ev.submitter.type]);
+          ev.preventDefault();
+        });
+        d.getElementById("img").click();
+        log.push(seen);
+        return log;
+      },
+    );
+  });
+
+  it("sanitises range and the date/time family like jsdom", () => {
+    same(
+      '<body><input id=r type=range min=10 max=0 value=5><input id=d type=date value="2024-02-30">' +
+        '<input id=d2 type=date value="2024-02-29"><input id=m type=month value="2024-13"><input id=m2 type=month value="2024-12">' +
+        '<input id=t type=time value="25:00"><input id=t2 type=time value="23:59:59.999">' +
+        '<input id=w type=week value="2024-W54"><input id=w2 type=week value="2024-W01">' +
+        '<input id=dl type=datetime-local value="2024-02-29T10:00"></body>',
+      (w) => {
+        const d = w.document;
+        return ["r", "d", "d2", "m", "m2", "t", "t2", "w", "w2", "dl"].map((id) => d.getElementById(id)!.value);
+      },
+    );
+  });
+
+  it("a reversed range with no value answers min (the spec; jsdom answers the midpoint of its default bounds)", () => {
+    const w = ours('<body><input id=range type=range min=10 max=0></body>');
+    // the spec: when max < min the default value is min; jsdom 30 answers "50" here, which is its own gap
+    expect(w.document.getElementById("range")!.value).toBe("10");
+  });
+
+  it("button formAction/formMethod/formEnctype (jsdom 30 has not implemented them)", () => {
+    const w = ours('<body><button id=b formaction="/go" formmethod=POST formenctype=text/plain>go</button></body>');
+    const d = w.document;
+    const b = d.getElementById("b")!;
+    const out: unknown[] = [b.formAction, b.formMethod, b.formEnctype];
+    const c = d.createElement("button");
+    out.push(c.formAction, c.formMethod, c.formEnctype);
+    c.formMethod = "x";
+    out.push(c.getAttribute("formmethod"), c.formMethod);
+    c.formEnctype = "x";
+    out.push(c.getAttribute("formenctype"), c.formEnctype);
+    c.formAction = "rel/x";
+    out.push(c.getAttribute("formaction"), c.formAction);
+    expect(out).toEqual([
+      "https://example.com/go", "post", "text/plain",
+      "https://example.com/dir/page.html", "get", "application/x-www-form-urlencoded",
+      "x", "get",
+      "x", "application/x-www-form-urlencoded",
+      "rel/x", "https://example.com/dir/rel/x",
+    ]);
+  });
+});
+
 describe("setters the sites assign through", () => {
   it("meta.content, option.defaultSelected, select.length are writable; isEqualNode compares like jsdom", () => {
     same(

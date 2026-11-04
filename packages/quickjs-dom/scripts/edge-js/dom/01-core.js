@@ -823,9 +823,54 @@
   // keeps. Before, value and the attribute were one thing, so form.reset() had nothing to
   // restore and a late attribute write moved a value the page had already typed over.
   var VAL = Symbol("value");
+  // an output's defaultValue override: set by a value write, cleared by form.reset (jsdom's model)
+  var OUTDEF = Symbol("outputDefault");
+  var leapYear = function (y) { return y % 4 === 0 && (y % 100 !== 0 || y % 400 === 0); };
+  var validDateString = function (s) {
+    var m = /^(\d{4,})-(\d{2})-(\d{2})$/.exec(s);
+    if (!m) return false;
+    var y = +m[1], mo = +m[2], d = +m[3];
+    if (y < 1 || mo < 1 || mo > 12 || d < 1) return false;
+    var days = [31, leapYear(y) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][mo - 1];
+    return d <= days;
+  };
+  var validMonthString = function (s) {
+    var m = /^(\d{4,})-(\d{2})$/.exec(s);
+    return !!m && +m[1] >= 1 && +m[2] >= 1 && +m[2] <= 12;
+  };
+  var validWeekString = function (s) {
+    var m = /^(\d{4,})-W(\d{2})$/.exec(s);
+    return !!m && +m[1] >= 1 && +m[2] >= 1 && +m[2] <= 53;
+  };
+  var validTimeString = function (s) {
+    var m = /^(\d{2}):(\d{2})(?::(\d{2})(?:\.(\d{1,3}))?)?$/.exec(s);
+    return !!m && +m[1] <= 23 && +m[2] <= 59 && (m[3] === undefined || +m[3] <= 59);
+  };
+  var normalizeLocalDateAndTimeString = function (s) {
+    var m = /^(\d{4,}-\d{2}-\d{2})[T ](\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?)$/.exec(s);
+    return m && validDateString(m[1]) && validTimeString(m[2]) ? m[1] + "T" + m[2] : "";
+  };
   var sanitizeValue = function (el, v) {
     var type = el.localName === "input" ? el.type : "";
     if (type === "number") return /^-?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(v) ? v : "";
+    if (type === "range") {
+      // the spec's range sanitisation: an unparsable value becomes the default (midpoint, or
+      // the minimum in a reversed range), then the value is clamped to [min, max]
+      var min = parseFloat(el.getAttribute("min")), max = parseFloat(el.getAttribute("max"));
+      if (!isFinite(min)) min = 0;
+      if (!isFinite(max)) max = 100;
+      var n = /^-?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(v) ? parseFloat(v) : NaN;
+      // a reversed range (max < min) has its default at min, and clamping to it must not pick max:
+      // Math.min(max, Math.max(min, n)) would always answer max there
+      if (max < min) return String(min);
+      if (!isFinite(n)) n = (min + max) / 2;
+      return String(Math.min(max, Math.max(min, n)));
+    }
+    if (type === "date") return validDateString(v) ? v : "";
+    if (type === "month") return validMonthString(v) ? v : "";
+    if (type === "week") return validWeekString(v) ? v : "";
+    if (type === "time") return validTimeString(v) ? v : "";
+    if (type === "datetime-local") return normalizeLocalDateAndTimeString(v);
     if (/^(text|search|tel|url|email|password)$/.test(type)) return v.replace(/[\r\n]/g, "");
     return v;
   };
@@ -984,6 +1029,18 @@
           for (var i = 0; i < a.length; i++) if (a[i].getAttribute && (a[i].getAttribute("id") === name || a[i].getAttribute("name") === name)) return a[i];
           return null;
         };
+        // HTMLOptionsCollection.remove(index): its own method, which the array the proxy reads
+        // through does not have. index is a required WebIDL long: called with no argument it throws
+        // a TypeError (as browsers do), and an explicit undefined converts to 0, so it removes the
+        // first option; an index outside the collection removes nothing.
+        if (k === "remove" && kind === "HTMLOptionsCollection") return function (index) {
+          if (arguments.length === 0) throw new TypeError("Failed to execute 'remove' on 'HTMLOptionsCollection': 1 argument required, but only 0 present.");
+          index = +index;
+          if (index !== index) index = 0; // ToNumber(undefined) is NaN, and WebIDL's long conversion of NaN is 0
+          index = index < 0 ? Math.ceil(index) : Math.floor(index);
+          var a = arr();
+          if (a[index]) a[index].remove();
+        };
         var a2 = arr(), v2 = a2[k];
         if (v2 === undefined && named && typeof k === "string") {
           if (namedItem) { var r2 = namedItem(k, a2); if (r2 !== undefined) return r2; }
@@ -1015,6 +1072,7 @@
     ["HTMLHeadingElement", "h1", "h2", "h3", "h4", "h5", "h6"], ["HTMLTableRowElement", "tr"], ["HTMLTableCellElement", "td", "th"],
     ["HTMLVideoElement", "video"], ["HTMLAudioElement", "audio"], ["HTMLSourceElement", "source"], ["HTMLPreElement", "pre"],
     ["HTMLHRElement", "hr"], ["HTMLDialogElement", "dialog"], ["HTMLDetailsElement", "details"], ["HTMLFieldSetElement", "fieldset"],
+    ["HTMLObjectElement", "object"], ["HTMLOutputElement", "output"], ["HTMLDataListElement", "datalist"],
     ["HTMLTableCaptionElement", "caption"], ["HTMLTableColElement", "col", "colgroup"], ["HTMLTableSectionElement", "thead", "tbody", "tfoot"],
     ["HTMLDirectoryElement", "dir"], ["HTMLFrameElement", "frame"], ["HTMLFrameSetElement", "frameset"], ["HTMLMarqueeElement", "marquee"],
   ];
@@ -1191,6 +1249,12 @@
       else if (c.localName === "select") {
         var opts = c.querySelectorAll("option");
         for (var j = 0; j < opts.length; j++) opts[j][SEL] = undefined;
+      }
+      else if (c.localName === "output") {
+        // an output's value is its text; reset restores the default text and forgets the
+        // override a value write left behind (jsdom's model)
+        c.textContent = c.defaultValue;
+        c[OUTDEF] = undefined;
       }
     }
   });

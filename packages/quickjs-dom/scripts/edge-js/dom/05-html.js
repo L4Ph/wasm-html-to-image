@@ -251,6 +251,19 @@
     ["min", "max", "step", "pattern", "accept", "autocomplete"].forEach(function (n) { if (!Object.getOwnPropertyDescriptor(P.HTMLInputElement, n)) reflectString(P.HTMLInputElement, n, n); });
     reflectString(P.HTMLInputElement, "formTarget", "formtarget");
     reflectBool(P.HTMLInputElement, "formNoValidate", "formnovalidate");
+    reflectString(P.HTMLInputElement, "dirName", "dirname");
+    reflectString(P.HTMLInputElement, "inputMode", "inputmode");
+    reflectString(P.HTMLInputElement, "useMap", "usemap");
+    reflectString(P.HTMLInputElement, "align", "align");
+    // input.size: the positive-integer reflection with a default of 20 and IndexSizeError on 0
+    getter(P.HTMLInputElement, "size", function () {
+      var n = parseInt(this.getAttribute("size"), 10);
+      return isFinite(n) && n >= 1 && n <= 2147483647 ? n : 20;
+    }, function (v) {
+      var n = Number(v) >>> 0;
+      if (n === 0) throw domError("IndexSizeError", "The value " + n + " cannot be set for the size property.");
+      this.setAttribute("size", String(n >= 1 && n <= 2147483647 ? n : 20));
+    });
     attrNumber(P.HTMLInputElement, "maxLength", "maxlength", -1, 0);
     attrNumber(P.HTMLInputElement, "minLength", "minlength", -1, 0);
     attrNumber(P.HTMLTextAreaElement, "maxLength", "maxlength", -1, 0);
@@ -259,6 +272,26 @@
     attrNumber(P.HTMLTextAreaElement, "cols", "cols", 20, 1);
     attrNumber(P.HTMLSelectElement, "size", "size", 0, 0);
     reflectString(P.HTMLTextAreaElement, "wrap", "wrap");
+    reflectString(P.HTMLTextAreaElement, "autocomplete", "autocomplete");
+    reflectString(P.HTMLTextAreaElement, "dirName", "dirname");
+    reflectString(P.HTMLTextAreaElement, "inputMode", "inputmode");
+    reflectString(P.HTMLSelectElement, "autocomplete", "autocomplete");
+    reflectString(P.HTMLButtonElement, "formTarget", "formtarget");
+    reflectBool(P.HTMLButtonElement, "formNoValidate", "formnovalidate");
+    // the button's form overrides: formAction is a URL (absolute, as form.action), formMethod and
+    // formEnctype are enumerated with the form's defaults for a value that is not one of theirs
+    getter(P.HTMLButtonElement, "formAction", function () {
+      var a = this.getAttribute("formaction");
+      return a ? new URL(a, this.ownerDocument.baseURI || undefined).href : (this.ownerDocument.URL || "");
+    }, function (v) { this.setAttribute("formaction", String(v)); });
+    getter(P.HTMLButtonElement, "formMethod", function () {
+      var m = (this.getAttribute("formmethod") || "").toLowerCase();
+      return m === "post" || m === "dialog" ? m : "get";
+    }, function (v) { this.setAttribute("formmethod", String(v)); });
+    getter(P.HTMLButtonElement, "formEnctype", function () {
+      var m = (this.getAttribute("formenctype") || "").toLowerCase();
+      return m === "multipart/form-data" || m === "text/plain" ? m : "application/x-www-form-urlencoded";
+    }, function (v) { this.setAttribute("formenctype", String(v)); });
     getter(P.HTMLInputElement, "defaultValue", function () { return this.getAttribute("value") || ""; }, function (v) { this.setAttribute("value", String(v)); });
     getter(P.HTMLInputElement, "defaultChecked", function () { return this.hasAttribute("checked"); }, function (v) { if (v) this.setAttribute("checked", ""); else this.removeAttribute("checked"); });
     getter(P.HTMLTextAreaElement, "defaultValue", function () { return this.textContent; }, function (v) { this.textContent = String(v); });
@@ -318,7 +351,7 @@
       }
       return f;
     };
-    var barred = function (el) { return el.hasAttribute("disabled") || el.hasAttribute("readonly") && el.localName !== "select" || (el.localName === "input" && /^(hidden|reset|button|image|submit)$/.test(el.type)) || el.localName === "button" && el.type !== "submit" || !!el.closest("datalist"); };
+    var barred = function (el) { return el.hasAttribute("disabled") || el.hasAttribute("readonly") && el.localName !== "select" || (el.localName === "input" && /^(hidden|reset|button|image|submit)$/.test(el.type)) || el.localName === "button" && el.type !== "submit" || el.localName === "fieldset" || el.localName === "output" || !!el.closest("datalist"); };
     var ValidityState = function ValidityState() { illegal(); };
     var VS = new WeakMap();
     var validity = function (el) {
@@ -333,7 +366,7 @@
       return o;
     };
     W.ValidityState = ValidityState;
-    ["HTMLInputElement", "HTMLSelectElement", "HTMLTextAreaElement", "HTMLButtonElement", "HTMLFieldSetElement"].forEach(function (n) {
+    ["HTMLInputElement", "HTMLSelectElement", "HTMLTextAreaElement", "HTMLButtonElement", "HTMLFieldSetElement", "HTMLOutputElement"].forEach(function (n) {
       var p = P[n];
       getter(p, "validity", function () { return validity(this); });
       getter(p, "willValidate", function () { return !barred(this); });
@@ -356,7 +389,50 @@
     });
     def(P.HTMLSelectElement, "item", function (i) { return this.options[i] || null; });
     def(P.HTMLSelectElement, "namedItem", function (n) { return Array.prototype.find.call(this.options, function (o) { return o.id === n || o.getAttribute("name") === n; }) || null; });
+    // HTMLSelectElement.remove(index): an index outside the options removes nothing; with no
+    // argument it is ChildNode.remove(), which removes the select itself (it must not be shadowed
+    // by an early return, or select.remove() would silently keep the element in the tree)
+    def(P.HTMLSelectElement, "remove", function (index) {
+      if (arguments.length === 0) { P.Element.remove.call(this); return; }
+      var opts = this.querySelectorAll("option");
+      index = +index;
+      if (opts[index]) opts[index].remove();
+    });
     getter(P.HTMLOptionElement, "label", function () { var l = this.getAttribute("label"); return l !== null ? l : this.text; }, function (v) { this.setAttribute("label", String(v)); });
+    // fieldset: its own type, and the listed elements inside it
+    getter(P.HTMLFieldSetElement, "type", function () { return "fieldset"; });
+    getter(P.HTMLFieldSetElement, "elements", function () {
+      var fs = this;
+      return liveCollection(function () { return Array.prototype.slice.call(fs.querySelectorAll(CONTROLS)); }, false, "HTMLCollection");
+    });
+    // output: value is its text, the default is the text until a value write takes an override
+    var OUTPUT_FOR = Symbol("outputFor");
+    getter(P.HTMLOutputElement, "type", function () { return "output"; });
+    getter(P.HTMLOutputElement, "value", function () { return this.textContent; }, function (v) {
+      this[OUTDEF] = this.defaultValue;
+      this.textContent = String(v);
+    });
+    getter(P.HTMLOutputElement, "defaultValue", function () {
+      return this[OUTDEF] !== undefined ? this[OUTDEF] : this.textContent;
+    }, function (v) {
+      if (this[OUTDEF] !== undefined) this[OUTDEF] = String(v);
+      else this.textContent = String(v);
+    });
+    getter(P.HTMLOutputElement, "htmlFor", function () {
+      var el = this;
+      return this[OUTPUT_FOR] || Object.defineProperty(this, OUTPUT_FOR, {
+        value: new TokenList({
+          getAttribute: function () { return el.getAttribute("for"); },
+          hasAttribute: function () { return el.hasAttribute("for"); },
+          setAttribute: function (n, v) { el.setAttribute("for", v); },
+        }),
+      })[OUTPUT_FOR];
+    });
+    // datalist: the options inside it
+    getter(P.HTMLDataListElement, "options", function () {
+      var dl = this;
+      return liveCollection(function () { return Array.prototype.slice.call(dl.querySelectorAll("option")); }, false, "HTMLCollection");
+    });
     // tables
     var rowsOf = function (table) {
       var out = [];
