@@ -13,9 +13,10 @@
 import { EventEmitter } from "node:events";
 import { readFileSync } from "node:fs";
 import { openPage, type CreateDOMOptions, type OpenedPage, type PageLogEntry } from "./index.js";
+import { decodeHtml } from "./decode.js";
+import type { DOMWindow } from "./bridge.js";
 
-/** The page's `window`: every property is looked up in the page when read. */
-export type DOMWindow = any;
+export type { DOMWindow };
 
 /** jsdom's VirtualConsole: the page's console output and errors as events. */
 export class VirtualConsole extends EventEmitter {
@@ -65,28 +66,6 @@ function defaultWasm(): WebAssembly.Module {
   return (compiled = new WebAssembly.Module(bytes as BufferSource));
 }
 
-/**
- * Bytes become text the way jsdom decodes a page: the charset of the content type when there is one, then a
- * byte-order mark, then a `<meta charset>` in the first bytes, then UTF-8.
- */
-const sniffCharset = (bytes: Uint8Array): string | undefined => {
-  if (bytes[0] === 0xef && bytes[1] === 0xbb && bytes[2] === 0xbf) return "utf-8";
-  if (bytes[0] === 0xff && bytes[1] === 0xfe) return "utf-16le";
-  if (bytes[0] === 0xfe && bytes[1] === 0xff) return "utf-16be";
-  const head = new TextDecoder("latin1").decode(bytes.subarray(0, 1024));
-  return /<meta\s[^>]*?charset\s*=\s*["']?\s*([A-Za-z0-9._:-]+)/i.exec(head)?.[1] ?? /charset=([A-Za-z0-9._:-]+)/i.exec(head)?.[1];
-};
-const decode = (html: string | Uint8Array | undefined, contentType?: string): string => {
-  if (html === undefined) return "";
-  if (typeof html === "string") return html;
-  const charset = (contentType ? /charset\s*=\s*"?([^";\s]+)/i.exec(contentType)?.[1] : undefined) ?? sniffCharset(html) ?? "utf-8";
-  try {
-    return new TextDecoder(charset).decode(html);
-  } catch {
-    return new TextDecoder().decode(html);
-  }
-};
-
 /** An error for the virtual console, classified the way jsdom classifies them (its `type` field). */
 const classified = (error: unknown, type: string): Error => {
   const e = (error instanceof Error ? error : new Error(String(error))) as Error & { type?: string };
@@ -121,7 +100,7 @@ export class JSDOM {
       }
     };
     const url = options.url ?? "about:blank";
-    this.page = openPage(decode(html, options.contentType), url, engine.quickjsWasm ?? defaultWasm(), { ...engine, onLog: report, stylesheets: options.resources === "usable", visual: options.pretendToBeVisual ?? false });
+    this.page = openPage(decodeHtml(html, options.contentType), url, engine.quickjsWasm ?? defaultWasm(), { ...engine, onLog: report, stylesheets: options.resources === "usable", visual: options.pretendToBeVisual ?? false });
     const bridge = this.page.dom.bridge({ timeout: engine.timeout });
     this.bridgeWindow = bridge.window;
     // the page's `window.close()` ends the page
@@ -164,6 +143,22 @@ export class JSDOM {
     this.closed = true;
     if (this.timer) clearTimeout(this.timer);
     this.page.dom.close();
+  }
+
+  /** Reconfigure aspects of the window that JSDOM supports changing after construction. */
+  reconfigure(options: { url?: string; windowTop?: DOMWindow }): void {
+    if (options.url) {
+      this.bridgeWindow.history.replaceState(null, "", options.url);
+    }
+    if (options.windowTop) {
+      this.bridgeWindow.top = options.windowTop;
+    }
+  }
+
+  /** Parse HTML into a DocumentFragment using a lightweight synchronous JSDOM context. */
+  static fragment(html = ""): any {
+    const dom = new JSDOM("");
+    return dom.window.document.createRange().createContextualFragment(html);
   }
 
   // The page's timers and requests go on after the constructor returns, and after every call the host makes into it.

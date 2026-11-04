@@ -71,9 +71,12 @@ export interface BridgeOptions {
   onCall?: () => void;
 }
 
+/** The page's `window`: every property is looked up in the page when read. */
+export type DOMWindow = Window & typeof globalThis & Record<string, any>;
+
 export class Bridge {
   /** The page's `window`: the global object of the guest. */
-  readonly window: any;
+  readonly window: DOMWindow;
 
   readonly vm: BridgeVM;
   private readonly timeout: number;
@@ -111,7 +114,7 @@ export class Bridge {
     });
     const schema = cachedSchema ?? (cachedSchema = this.sendJ(["schema"]) as InterfaceSchema[]);
     this.buildClasses(schema);
-    this.window = this.sendJ(["root"]);
+    this.window = this.sendJ(["root"]) as DOMWindow;
   }
 
   /** Let go of the page: the wrappers stop working. */
@@ -397,7 +400,7 @@ export class Bridge {
     const cls = h.c ? this.classes.get(h.c) : undefined;
     if (h.c === "Function") w = this.functionWrapper(cell);
     else if (cls) w = this.classWrapper(cell, cls);
-    else w = this.dynamicWrapper(cell);
+    else w = this.dynamicWrapper(cell, h.c === "Window");
     this.wrappers.set(h.i, new WeakRef(w));
     this.registry.register(w, cell);
     return w;
@@ -445,9 +448,10 @@ export class Bridge {
   }
 
   /** Any other object (a style declaration, `window`, a DOMRect, ...): every property is looked up in the page. */
-  private dynamicWrapper(cell: Cell): object {
+  private dynamicWrapper(cell: Cell, isWindow = false): object {
     const target: Record<PropertyKey, unknown> = {};
     Object.defineProperty(target, HANDLE, { value: cell, configurable: true });
+    let cachedKeys: Set<string> | null = null;
     return new Proxy(target, {
       get: (t, k) => {
         if (k === HANDLE) return cell;
@@ -456,20 +460,40 @@ export class Bridge {
           return undefined;
         }
         if (k === "then") return undefined;
+        if (isWindow && typeof k === "string" && this.classes.has(k)) return this.classes.get(k);
         return this.get(cell, k);
       },
       set: (t, k, v) => {
         if (typeof k === "symbol") return false;
+        cachedKeys = null;
         this.set(cell, k, v);
         return true;
       },
       has: (t, k) => (typeof k === "symbol" ? k === HANDLE : (this.sendJ(["has", cell.id, k]) as boolean)),
-      deleteProperty: (t, k) => (typeof k === "symbol" ? false : (this.sendJ(["del", cell.id, k]) as boolean)),
-      ownKeys: () => this.sendJ(["keys", cell.id]) as string[],
+      deleteProperty: (t, k) => {
+        if (typeof k === "symbol") return false;
+        cachedKeys = null;
+        return this.sendJ(["del", cell.id, k]) as boolean;
+      },
+      ownKeys: () => {
+        const keys = this.sendJ(["keys", cell.id]) as string[];
+        cachedKeys = new Set(keys);
+        return keys;
+      },
       getOwnPropertyDescriptor: (t, k) => {
         if (typeof k === "symbol") return undefined;
-        if (!(this.sendJ(["has", cell.id, k]) as boolean)) return undefined;
-        return { value: this.get(cell, k), writable: true, enumerable: true, configurable: true };
+        if (k in t) return Reflect.getOwnPropertyDescriptor(t, k);
+        if (isWindow && typeof k === "string" && this.classes.has(k)) {
+          return { value: this.classes.get(k), writable: true, enumerable: true, configurable: true };
+        }
+        const exists = cachedKeys ? cachedKeys.has(k as string) : (this.sendJ(["has", cell.id, k]) as boolean);
+        if (!exists) return undefined;
+        return {
+          get: () => this.get(cell, k as string),
+          set: (v: unknown) => this.set(cell, k as string, v),
+          enumerable: true,
+          configurable: true,
+        };
       },
     });
   }

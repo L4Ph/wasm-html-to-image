@@ -39,14 +39,17 @@ export function installWindow(global: Record<string, any>, win: Record<string, a
     // what Node has under the same name (the language's own: Object, Array, Promise, ...) stays
     if (key in global && !/^[A-Z]/.test(key)) continue;
     if (key in global && !isDomName(key)) continue;
-    const value = win[key];
-    if (typeof value === "function" && /^[A-Z]/.test(key)) define(key, { value, writable: true });
-    else {
+    if (/^[A-Z]/.test(key)) {
+      define(key, {
+        get: () => win[key],
+        set: (v: unknown) => (win[key] = v),
+      });
+    } else {
       // a function of the window (addEventListener, getComputedStyle, ...) is called with the page's window as `this`
       define(key, {
         get: () => {
           const v = win[key];
-          return typeof v === "function" && !/^[A-Z]/.test(key) ? v.bind(win) : v;
+          return typeof v === "function" ? v.bind(win) : v;
         },
         set: (v: unknown) => (win[key] = v),
       });

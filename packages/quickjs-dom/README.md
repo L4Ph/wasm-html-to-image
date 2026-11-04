@@ -233,10 +233,12 @@ dom.window.close();
 | `new JSDOM(html, options)` (synchronous parse & inline scripts) | `getInternalVMContext()` (runs in QuickJS WASM, not Node `vm`; use `window.eval`) |
 | `url`, `referrer`, `contentType`, `pretendToBeVisual` | `nodeLocation()` (parser does not retain source offsets) |
 | `runScripts: "dangerously"` \| `"outside-only"` | `cookieJar` (shared/injected jar not supported; see below) |
-| `resources: "usable"` (fetches `<script src>` and `<link rel="stylesheet">`) | `reconfigure()` |
+| `resources: "usable"` (fetches `<script src>` and `<link rel="stylesheet">`) | |
 | `virtualConsole` (`new VirtualConsole().sendTo(console)`) | |
 | `beforeParse(window)` | |
 | `JSDOM.fromURL(url, options)` & `JSDOM.fromFile(path, options)` | |
+| `JSDOM.fragment(html)` (synchronously creates a `DocumentFragment`) | |
+| `dom.reconfigure({ url })` | |
 | `dom.serialize()`, `dom.close()`, `dom.window.close()` | |
 | `await dom.ready` (waits for external scripts and the `load` event) | |
 

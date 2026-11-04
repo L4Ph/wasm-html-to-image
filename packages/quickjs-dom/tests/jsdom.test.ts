@@ -229,4 +229,19 @@ describe("JSDOM: pretendToBeVisual, error classification, charsets", () => {
       server.close();
     }
   });
+
+  it("reconfigures the url", () => {
+    const dom = make("<p>hi</p>", { url: "https://example.com/initial" });
+    expect(dom.window.location.href).toBe("https://example.com/initial");
+    dom.reconfigure({ url: "https://example.com/reconfigured?a=1" });
+    expect(dom.window.location.href).toBe("https://example.com/reconfigured?a=1");
+    expect(dom.window.location.search).toBe("?a=1");
+  });
+
+  it("JSDOM.fragment creates a DocumentFragment synchronously", () => {
+    const frag = JSDOM.fragment("<div class='item'>A</div><div class='item'>B</div>");
+    expect(frag.nodeType).toBe(11);
+    expect(frag.querySelectorAll(".item").length).toBe(2);
+    expect(frag.firstChild.textContent).toBe("A");
+  });
 });

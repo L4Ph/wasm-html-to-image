@@ -25,9 +25,11 @@ import defaultQuickJSWasm from "#quickjs-wasm";
 import { createGuard, type FetchLimits } from "./limits.js";
 import { Bridge, type BridgeOptions } from "./bridge.js";
 import { QuickJSInstance } from "./runtime.js";
-export type { Bridge, BridgeOptions } from "./bridge.js";
+import { decodeHtml, sniffCharset } from "./decode.js";
+export type { Bridge, BridgeOptions, DOMWindow } from "./bridge.js";
 
 export { isPrivateHost, type FetchLimits } from "./limits.js";
+export { decodeHtml, sniffCharset } from "./decode.js";
 
 /** Something that happened in the page, for finding out why it rendered the way it did. */
 export type PageLogEntry =
@@ -244,7 +246,7 @@ export async function createDOM(
         }),
       ]);
       first.push({ ...entry, status: res.status });
-      html = new TextDecoder().decode(await guard.bytes(res));
+      html = decodeHtml(await guard.bytes(res), res.headers?.get?.("content-type") ?? undefined);
       baseUrl = res.url || source.url;
       const hash = source.url.indexOf("#");
       if (hash !== -1 && baseUrl.indexOf("#") === -1) baseUrl += source.url.slice(hash);
