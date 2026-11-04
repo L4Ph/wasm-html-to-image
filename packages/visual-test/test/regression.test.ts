@@ -1340,7 +1340,9 @@ describe("regression: layout and paint probes", () => {
         return d ? (await doc.getPageIndex(d[0] as never)) + 1 : 0;
       };
       const destinations: Record<string, number> = {};
-      for (const [name, d] of Object.entries((await doc.getDestinations()) ?? {})) destinations[name] = await pageOfDest(d);
+      const rawDests = (await doc.getDestinations()) ?? {};
+      const destEntries = rawDests instanceof Map ? rawDests.entries() : Object.entries(rawDests);
+      for (const [name, d] of destEntries) destinations[name] = await pageOfDest(d);
       const links: { page: number; dest: string; rect: number[] }[] = [];
       for (let p = 1; p <= doc.numPages; p++)
         for (const a of await (await doc.getPage(p)).getAnnotations())
