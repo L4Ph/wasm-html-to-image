@@ -1,7 +1,7 @@
 import { createServer } from "node:http";
 import { JSDOM as RealJSDOM } from "jsdom";
 import { afterEach, describe, expect, it } from "vitest";
-import { JSDOM, VirtualConsole } from "../src/jsdom.js";
+import { CookieJar, JSDOM, VirtualConsole } from "../src/jsdom.js";
 
 // `new JSDOM(html, options)` as jsdom's documentation uses it, from the host, with jsdom itself as the reference.
 
@@ -243,5 +243,89 @@ describe("JSDOM: pretendToBeVisual, error classification, charsets", () => {
     expect(frag.nodeType).toBe(11);
     expect(frag.querySelectorAll(".item").length).toBe(2);
     expect(frag.firstChild.textContent).toBe("A");
+  });
+});
+
+describe("JSDOM: cookieJar", () => {
+  it("keeps the page's cookies in dom.cookieJar, scoped the way jsdom scopes them", () => {
+    const dom = make("<p>x</p>", { url: "https://sub.example.com/app/page" });
+    const jar = dom.cookieJar;
+    expect(jar).toBeInstanceOf(CookieJar);
+    const { document } = dom.window;
+    document.cookie = "session=abc; path=/app";
+    document.cookie = "wide=1; domain=example.com; path=/";
+    document.cookie = "gone=1; max-age=0";
+    expect(document.cookie).toBe("session=abc; wide=1");
+    expect(jar.getCookieStringSync("https://sub.example.com/app/other")).toBe("session=abc; wide=1");
+    // the path= cookie does not travel outside /app, the Domain= one reaches the parent and siblings
+    expect(jar.getCookieStringSync("https://sub.example.com/elsewhere")).toBe("wide=1");
+    expect(jar.getCookieStringSync("https://example.com/")).toBe("wide=1");
+    expect(jar.getCookieStringSync("https://other.example.com/")).toBe("wide=1");
+    // a host-only cookie stays on its host, and a Secure one needs https:
+    jar.setCookieSync("hostonly=1", "https://sub.example.com/");
+    jar.setCookieSync("sec=1; secure", "https://sub.example.com/");
+    expect(jar.getCookieStringSync("https://example.com/")).toBe("wide=1");
+    expect(jar.getCookieStringSync("http://sub.example.com/")).toBe("wide=1; hostonly=1");
+    // HttpOnly is in the jar but never in document.cookie, and a script cannot set it
+    jar.setCookieSync("secret=1; httponly", "https://sub.example.com/");
+    expect(jar.getCookieStringSync("https://sub.example.com/")).toContain("secret=1");
+    expect(document.cookie).not.toContain("secret");
+    document.cookie = "scripted=1; httponly";
+    expect(document.cookie).toContain("scripted=1");
+
+    // the same expectations against jsdom with its tough-cookie jar
+    const ref = new RealJSDOM("<p>x</p>", { url: "https://sub.example.com/app/page" });
+    ref.window.document.cookie = "session=abc; path=/app";
+    ref.window.document.cookie = "wide=1; domain=example.com; path=/";
+    expect(ref.cookieJar.getCookieStringSync("https://sub.example.com/elsewhere")).toBe("wide=1");
+    expect(ref.cookieJar.getCookieStringSync("https://other.example.com/")).toBe("wide=1");
+  });
+
+  it("shares a jar between pages, and takes jsdom's own jar", () => {
+    const ref = new RealJSDOM("<p>x</p>", { url: "https://example.com/" });
+    const jar = ref.cookieJar; // tough-cookie's jar, handed to ours
+    const one = make("<p>1</p>", { url: "https://example.com/", cookieJar: jar });
+    one.window.document.cookie = "shared=yes";
+    const two = make("<p>2</p>", { url: "https://example.com/", cookieJar: jar });
+    expect(two.window.document.cookie).toBe("shared=yes");
+    expect(one.cookieJar).toBe(jar);
+    // and in the other direction: our jar inside jsdom
+    const ours = new CookieJar();
+    const three = new RealJSDOM("<p>3</p>", { url: "https://example.com/", cookieJar: ours as never });
+    three.window.document.cookie = "from=jsdom";
+    const four = make("<p>4</p>", { url: "https://example.com/", cookieJar: ours });
+    expect(four.window.document.cookie).toBe("from=jsdom");
+  });
+
+  it("carries cookies through fromURL and through the page's own requests", async () => {
+    const seen: (string | undefined)[] = [];
+    const server = createServer((req, res) => {
+      seen.push(req.headers.cookie);
+      if (req.url === "/set") {
+        res.setHeader("set-cookie", "srv=1; path=/");
+        res.end("<script>fetch('/echo').then(() => { document.title = 'fetched'; })</" + "script><p>set</p>");
+      } else {
+        res.setHeader("set-cookie", "echo=2; path=/");
+        res.end("<p>echo</p>");
+      }
+    });
+    await new Promise<void>((r) => server.listen(0, r));
+    try {
+      const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+      const jar = new CookieJar();
+      const dom = await JSDOM.fromURL(`${base}/set`, { cookieJar: jar, virtualConsole: null, runScripts: "dangerously" });
+      open.push(dom);
+      expect(jar.getCookieStringSync(`${base}/`)).toBe("srv=1");
+      expect(dom.window.document.cookie).toBe("srv=1");
+      // the page's own fetch (its script, above) sends the jar's cookies and keeps the answer's
+      await dom.ready;
+      for (let i = 0; i < 50 && dom.window.document.title !== "fetched"; i++) await sleep(20);
+      expect(dom.window.document.title).toBe("fetched");
+      expect(seen[seen.length - 1]).toBe("srv=1");
+      expect(jar.getCookieStringSync(`${base}/`)).toBe("srv=1; echo=2");
+      expect(dom.window.document.cookie).toBe("srv=1; echo=2");
+    } finally {
+      server.close();
+    }
   });
 });
