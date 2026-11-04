@@ -431,9 +431,9 @@ EXPORT("qd_rpc") int qd_rpc(const char *req, size_t len) {
     JSValue byid = JS_GetPropertyStr(ctx, global, "__byId");
     JS_FreeValue(ctx, global);
     int rc = -1;
-    if (len > 3 && (req[0] == 'g' || req[0] == 'c') && JS_IsFunction(ctx, reply_fn) && JS_IsFunction(ctx, error_fn) && JS_IsObject(byid)) {
+    if (len > 3 && (req[0] == 'g' || req[0] == 'c' || req[0] == 's') && JS_IsFunction(ctx, reply_fn) && JS_IsFunction(ctx, error_fn) && JS_IsObject(byid)) {
         const char *sep1 = memchr(req + 1, 1, len - 1);
-        const char *sep2 = req[0] == 'c' && sep1 ? memchr(sep1 + 1, 1, (size_t)(req + len - sep1 - 1)) : NULL;
+        const char *sep2 = (req[0] == 'c' || req[0] == 's') && sep1 ? memchr(sep1 + 1, 1, (size_t)(req + len - sep1 - 1)) : NULL;
         int ok = sep1 != NULL && (req[0] == 'g' || sep2 != NULL);
         uint32_t id = 0;
         if (ok) {
@@ -447,6 +447,39 @@ EXPORT("qd_rpc") int qd_rpc(const char *req, size_t len) {
             if (JS_IsObject(obj)) {
                 const char *key = sep1 + 1;
                 size_t keylen = (size_t)((req[0] == 'g' ? req + len : sep2) - key);
+
+                if (req[0] == 's') {
+                    /* Property set: s<id>\1<key>\1\3<string> */
+                    if (sep2 + 1 < req + len && sep2[1] == 3) {
+                        const char *val = sep2 + 2;
+                        size_t vallen = (size_t)(req + len - val);
+                        JSAtom atom = JS_NewAtomLen(ctx, key, keylen);
+                        JSValue v = JS_NewStringLen(ctx, val, vallen);
+                        int set_res = JS_SetProperty(ctx, obj, atom, v);
+                        JS_FreeAtom(ctx, atom);
+                        JS_FreeValue(ctx, obj);
+                        if (set_res < 0) {
+                            JSValue exc = JS_GetException(ctx);
+                            JSValue out = JS_Call(ctx, error_fn, JS_UNDEFINED, 1, &exc);
+                            JS_FreeValue(ctx, exc);
+                            if (JS_IsException(out)) {
+                                set_result_error();
+                                rc = 1;
+                            } else {
+                                set_result_value(out);
+                                JS_FreeValue(ctx, out);
+                                rc = 0;
+                            }
+                        } else {
+                            rpc_set_prefixed('N', "", 0);
+                            rc = 0;
+                        }
+                        goto slow;
+                    }
+                    JS_FreeValue(ctx, obj);
+                    goto slow;
+                }
+
                 /* the arguments of a call: a JSON array of strings, numbers, booleans and null (anything else takes the slow way) */
                 JSValue argv_arr = JS_UNDEFINED;
                 JSValue *argv = NULL;
@@ -464,6 +497,42 @@ EXPORT("qd_rpc") int qd_rpc(const char *req, size_t len) {
                             const char *stop = memchr(p, 2, (size_t)(end - p));
                             if (!stop) stop = end;
                             argv[i] = JS_NewStringLen(ctx, p, (size_t)(stop - p));
+                            p = stop + 1;
+                        }
+                    }
+                } else if (req[0] == 'c' && sep2 + 1 < req + len && sep2[1] == 4) {
+                    /* typed simple arguments: "\4" and tokens apart by "\2" */
+                    const char *p = sep2 + 2, *end = req + len;
+                    argc = 1;
+                    for (const char *q = p; q < end; q++) if (*q == 2) argc++;
+                    if (argc > 8) plain = 0;
+                    else {
+                        argv = alloca(sizeof(JSValue) * argc);
+                        for (uint32_t i = 0; i < argc; i++) {
+                            const char *stop = memchr(p, 2, (size_t)(end - p));
+                            if (!stop) stop = end;
+                            size_t toklen = (size_t)(stop - p);
+                            if (toklen == 0) { argv[i] = JS_UNDEFINED; }
+                            else {
+                                char tc = p[0];
+                                if (tc == 'N') argv[i] = JS_NULL;
+                                else if (tc == 'T') argv[i] = JS_TRUE;
+                                else if (tc == 'F') argv[i] = JS_FALSE;
+                                else if (tc == 's') argv[i] = JS_NewStringLen(ctx, p + 1, toklen - 1);
+                                else if (tc == 'n') {
+                                    char buf[32];
+                                    size_t copylen = toklen - 1 < sizeof(buf) - 1 ? toklen - 1 : sizeof(buf) - 1;
+                                    memcpy(buf, p + 1, copylen);
+                                    buf[copylen] = 0;
+                                    argv[i] = JS_NewFloat64(ctx, strtod(buf, NULL));
+                                } else if (tc == 'h') {
+                                    uint32_t hid = 0;
+                                    for (size_t k = 1; k < toklen; k++) hid = hid * 10 + (uint32_t)(p[k] - '0');
+                                    argv[i] = JS_GetPropertyUint32(ctx, byid, hid);
+                                } else {
+                                    argv[i] = JS_UNDEFINED;
+                                }
+                            }
                             p = stop + 1;
                         }
                     }

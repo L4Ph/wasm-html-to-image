@@ -283,12 +283,32 @@
       if (c === 99) { // c
         j = s.indexOf(SEP, i + 1);
         var a = s.slice(j + 1);
-        // "\u0003" and strings apart by "\u0002", or a JSON array
-        return reply(callMethod(+s.slice(1, i), s.slice(i + 1, j), a ? (a.charCodeAt(0) === 3 ? a.slice(1).split("\u0002") : decAll(JSON.parse(a))) : []));
+        var parsedArgs;
+        if (!a) {
+          parsedArgs = [];
+        } else if (a.charCodeAt(0) === 3) { // \u0003: strings separated by \u0002
+          parsedArgs = a.slice(1).split("\u0002");
+        } else if (a.charCodeAt(0) === 4) { // \u0004: simple typed tokens separated by \u0002
+          parsedArgs = a.slice(1).split("\u0002").map(function (tok) {
+            var tc = tok.charCodeAt(0);
+            if (tc === 78) return null; // N
+            if (tc === 84) return true; // T
+            if (tc === 70) return false; // F
+            if (tc === 110) return +tok.slice(1); // n
+            if (tc === 115) return tok.slice(1); // s
+            if (tc === 104) return target(+tok.slice(1)); // h
+            return undefined;
+          });
+        } else {
+          parsedArgs = decAll(JSON.parse(a));
+        }
+        return reply(callMethod(+s.slice(1, i), s.slice(i + 1, j), parsedArgs));
       }
       if (c === 115) { // s
         j = s.indexOf(SEP, i + 1);
-        target(+s.slice(1, i))[s.slice(i + 1, j)] = dec(JSON.parse(s.slice(j + 1)));
+        var valStr = s.slice(j + 1);
+        var val = valStr.charCodeAt(0) === 3 ? valStr.slice(1) : dec(JSON.parse(valStr));
+        target(+s.slice(1, i))[s.slice(i + 1, j)] = val;
         return "N";
       }
       var r = JSON.parse(s.slice(1));

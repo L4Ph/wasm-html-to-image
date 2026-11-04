@@ -62,6 +62,8 @@ const CLASS_NAME = Symbol("wasm-quickjs-dom.class");
 const INDEXED = Symbol("wasm-quickjs-dom.indexed");
 const INDEX = /^(?:0|[1-9][0-9]*)$/;
 
+let cachedSchema: InterfaceSchema[] | undefined;
+
 export interface BridgeOptions {
   /** How long one call from the host may keep the guest busy (ms, default 10000); 0 for no limit. */
   timeout?: number;
@@ -106,7 +108,8 @@ export class Bridge {
       const ref = this.wrappers.get(cell.id);
       if (ref && !ref.deref()) this.wrappers.delete(cell.id);
     });
-    this.buildClasses(this.sendJ(["schema"]) as InterfaceSchema[]);
+    const schema = cachedSchema ?? (cachedSchema = this.sendJ(["schema"]) as InterfaceSchema[]);
+    this.buildClasses(schema);
     this.window = this.sendJ(["root"]);
   }
 
@@ -183,7 +186,6 @@ export class Bridge {
     if (!noReleases && this.released.length) this.sendReleases();
     if (this.fnById.size >= this.fnLimit) this.pruneFunctions();
     const outer = this.depth === 0;
-    if (outer && this.timeout) this.vm.setDeadline(Date.now() + this.timeout);
     this.depth++;
     let result: EvalResult;
     try {
@@ -254,7 +256,11 @@ export class Bridge {
 
   private set(cell: Cell, key: string, value: unknown): void {
     this.invalidate();
-    this.send("s" + cell.id + "\u0001" + key + "\u0001" + JSON.stringify(this.encode(value)));
+    if (typeof value === "string" && !value.includes("\u0001") && !value.includes("\u0002")) {
+      this.send("s" + cell.id + "\u0001" + key + "\u0001\u0003" + value);
+    } else {
+      this.send("s" + cell.id + "\u0001" + key + "\u0001" + JSON.stringify(this.encode(value)));
+    }
   }
 
   /** Arguments that are all strings go as is (no JSON on either side); the rest as a JSON array. */
@@ -267,7 +273,31 @@ export class Bridge {
         break;
       }
     }
-    return strings ? "\u0003" + args.join("\u0002") : JSON.stringify(args.map((a) => this.encode(a)));
+    if (strings) return "\u0003" + args.join("\u0002");
+    // Check if arguments are all simple (strings, numbers, booleans, null, or handles)
+    let simple = true;
+    const parts: string[] = [];
+    for (const a of args) {
+      if (a === null) {
+        parts.push("N");
+      } else if (typeof a === "boolean") {
+        parts.push(a ? "T" : "F");
+      } else if (typeof a === "number" && Number.isFinite(a) && !Object.is(a, -0)) {
+        parts.push("n" + a);
+      } else if (typeof a === "string" && !a.includes("\u0002") && !a.includes("\u0001")) {
+        parts.push("s" + a);
+      } else {
+        const cell = a && typeof a === "object" ? ((a as any)[HANDLE] as Cell | undefined) : undefined;
+        if (cell) {
+          parts.push("h" + cell.id);
+        } else {
+          simple = false;
+          break;
+        }
+      }
+    }
+    if (simple) return "\u0004" + parts.join("\u0002");
+    return JSON.stringify(args.map((a) => this.encode(a)));
   }
 
   private call(cell: Cell, key: string, args: unknown[]): unknown {
