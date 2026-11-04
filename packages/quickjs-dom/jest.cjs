@@ -28,8 +28,28 @@ class WasmQuickJSDomEnvironment extends TestEnvironment {
     await super.setup();
     const { JSDOM } = await import(built("jsdom.js"));
     const { installWindow } = await import(built("globals.js"));
-    const o = this.options;
-    this.dom = new JSDOM(o.html || "<!DOCTYPE html>", { url: "http://localhost/", pretendToBeVisual: true, runScripts: "dangerously", ...o });
+    const o = this.options || {};
+    // Options are resolved in three layers, as in the Vitest environment: wasmQuickjsDom, then jsdom (the options of
+    // jest-environment-jsdom), then this environment's own top level.
+    const given = o.wasmQuickjsDom ?? {};
+    const jsdomOpts = o.jsdom ?? {};
+    // Settle html, url and the defaults here, not in the spreads: an explicit `undefined` in one source must not
+    // erase the fallback the next offers (or the default), so they are taken out of every source and set last.
+    const { html: givenHtml, url: givenUrl, runScripts: givenRunScripts, resources: givenResources, pretendToBeVisual: givenVisual, ...givenRest } = given;
+    const { html: jsdomHtml, url: jsdomUrl, runScripts: jsdomRunScripts, resources: jsdomResources, pretendToBeVisual: jsdomVisual, ...jsdomRest } = jsdomOpts;
+    const { wasmQuickjsDom: _given, jsdom: _jsdom, html: topHtml, url: topUrl, runScripts: topRunScripts, resources: topResources, pretendToBeVisual: topVisual, ...topRest } = o;
+    // External resources are not supported by this environment: setup returns while `dom.ready` is still pending, so
+    // `resources: "usable"` (external scripts and stylesheets) may arrive after the test file has started. Markup and
+    // inline scripts are settled by the JSDOM constructor.
+    this.dom = new JSDOM(givenHtml ?? jsdomHtml ?? topHtml ?? "<!DOCTYPE html>", {
+      ...topRest,
+      ...jsdomRest,
+      ...givenRest,
+      pretendToBeVisual: givenVisual ?? jsdomVisual ?? topVisual ?? true,
+      runScripts: givenRunScripts ?? jsdomRunScripts ?? topRunScripts ?? "dangerously",
+      resources: givenResources ?? jsdomResources ?? topResources,
+      url: givenUrl ?? jsdomUrl ?? topUrl ?? "http://localhost/",
+    });
     this.uninstall = installWindow(this.global, this.dom.window);
   }
 

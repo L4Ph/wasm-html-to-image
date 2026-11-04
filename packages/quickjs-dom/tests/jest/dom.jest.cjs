@@ -8,6 +8,11 @@ test("document and the page's classes are the globals", () => {
   expect(window.document).toBe(document);
 });
 
+test("resolves the three option layers and lets undefined fall through", () => {
+  // wasmQuickjsDom.url and jsdom.url are explicitly undefined in jest.config.cjs
+  expect(document.URL).toBe("http://top.test/");
+});
+
 test("testing-library queries and events", async () => {
   document.body.innerHTML = "<button>Go</button><input aria-label=a />";
   const clicks = [];

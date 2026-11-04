@@ -352,4 +352,45 @@ describe("the Vitest environment: options", () => {
       second.teardown(fromWasm);
     }
   });
+
+  it("resolves three layers and never lets an explicit undefined erase a lower fallback", () => {
+    // layer order: wasmQuickjsDom, then jsdom, then the environment's top level
+    const topOnly: Record<string, any> = {};
+    const top = vitestEnvironment.setup(topOnly, {
+      url: "https://example.test/top",
+      jsdom: { url: undefined },
+      wasmQuickjsDom: { url: undefined, html: undefined },
+    });
+    try {
+      expect(topOnly.document.URL).toBe("https://example.test/top");
+    } finally {
+      top.teardown(topOnly);
+    }
+
+    // undefined in the first layer falls through to the second; a real value there wins over the top level
+    const withJsdom: Record<string, any> = {};
+    const second = vitestEnvironment.setup(withJsdom, {
+      url: "https://example.test/top",
+      jsdom: { url: "https://example.test/jsdom" },
+      wasmQuickjsDom: { url: undefined },
+    });
+    try {
+      expect(withJsdom.document.URL).toBe("https://example.test/jsdom");
+    } finally {
+      second.teardown(withJsdom);
+    }
+
+    // and the first layer's value wins over both when it is there
+    const withWasm: Record<string, any> = {};
+    const third = vitestEnvironment.setup(withWasm, {
+      url: "https://example.test/top",
+      jsdom: { url: "https://example.test/jsdom" },
+      wasmQuickjsDom: { url: "https://example.test/wasm" },
+    });
+    try {
+      expect(withWasm.document.URL).toBe("https://example.test/wasm");
+    } finally {
+      third.teardown(withWasm);
+    }
+  });
 });

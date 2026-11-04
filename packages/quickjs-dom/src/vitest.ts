@@ -23,15 +23,20 @@ export default {
   setup(global, options) {
     const given = (options?.wasmQuickjsDom ?? {}) as JSDOMOptions & { html?: string };
     const jsdomOpts = (options?.jsdom ?? {}) as JSDOMOptions & { html?: string };
-    // html and url are settled here, not left in the spreads: an `undefined` in one source must not erase the
-    // fallback the other offers, so they are taken out of both option objects and set last.
-    const { html: givenHtml, url: givenUrl, ...givenRest } = given;
-    const { html: jsdomHtml, url: jsdomUrl, ...jsdomRest } = jsdomOpts;
+    // html, url and the defaults are settled here, not left in the spreads: an explicit `undefined` in one source
+    // must not erase the fallback the other offers (or the default), so they are taken out of both option objects
+    // and set last.
+    const { html: givenHtml, url: givenUrl, runScripts: givenRunScripts, resources: givenResources, pretendToBeVisual: givenVisual, ...givenRest } = given;
+    const { html: jsdomHtml, url: jsdomUrl, runScripts: jsdomRunScripts, resources: jsdomResources, pretendToBeVisual: jsdomVisual, ...jsdomRest } = jsdomOpts;
+    // External resources are not supported by this environment: setup returns while `dom.ready` is still pending, so
+    // `resources: "usable"` (external scripts and stylesheets) may arrive after the test file has started. Markup and
+    // inline scripts are settled by the JSDOM constructor.
     const dom = new JSDOM(givenHtml ?? jsdomHtml ?? "<!DOCTYPE html>", {
-      pretendToBeVisual: true,
-      runScripts: "dangerously",
       ...jsdomRest,
       ...givenRest,
+      pretendToBeVisual: givenVisual ?? jsdomVisual ?? true,
+      runScripts: givenRunScripts ?? jsdomRunScripts ?? "dangerously",
+      resources: givenResources ?? jsdomResources,
       url: givenUrl ?? jsdomUrl ?? options?.url ?? "http://localhost/",
     });
     const uninstall = installWindow(global, dom.window);
