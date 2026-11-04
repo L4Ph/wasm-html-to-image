@@ -60,22 +60,22 @@ dom.close();
 
 ### Performance Benchmark (Node.js)
 
-*Measured on Node.js v24 against `jsdom` v26.1.0:*
+*Measured on Node.js v24 against `jsdom` v30.1.3:*
 
 | Scenario | `jsdom` | `wasm-quickjs-dom` | Comparison |
 | :--- | :--- | :--- | :--- |
-| **HTML Parsing** (~100 KB, 1,000 table rows, ~4,000 nodes) | 126 ms | **14.6 ms** | **~8.6× faster** ⚡ |
-| **HTML Serialization** (`dom.serialize()`) | 10.7 ms | **1.9 ms** | **~5.6× faster** ⚡ |
-| **Selector Query** (`querySelectorAll("td a")` × 1,000 matches) | 19.7 ms | **6.2 ms** | **~3.2× faster** ⚡ |
-| **Deep Selector Traversal** (`querySelector("tr:nth-child(500) td.name")` × 500) | 1,651 ms | **5.5 ms** | **~300× faster** ⚡ |
-| **In-Page Script DOM Creation** (2,000 elements created in `<script>`) | 43.2 ms | **5.0 ms** | **~8.6× faster** ⚡ |
-| **Warm Instance Creation** (`new JSDOM()` avg over 50 runs) | ~4.5 ms | **~5.5 ms** | Competitive (cached schema) |
-| **Host DOM Mutation** (1,000 `createElement` + `appendChild` from Node host) | ~40 ms | **~38 ms** | **~1.05× faster** ⚡ (C fast-path) |
+| **HTML Parsing** (~100 KB, 1,000 table rows, ~5,000 nodes) | 77.0 ms | **11.0 ms** | **~7.0× faster** ⚡ |
+| **HTML Serialization** (`dom.serialize()`) | 7.1 ms | **1.0 ms** | **~7.1× faster** ⚡ |
+| **Selector Query** (`querySelectorAll("td a")` × 1,000 matches) | 0.83 ms | **< 0.1 ms** | **~8× faster** ⚡ |
+| **Complex Selector Query** (`500 × querySelectorAll("tr.r3 > td a[href]")`) | 471 ms | **102 ms** | **~4.6× faster** ⚡ |
+| **In-Page Script DOM Creation** (2,000 elements created in `<script>`) | 25.6 ms | **2.0 ms** | **~12.8× faster** ⚡ |
+| **Warm Instance Creation** (`new JSDOM()` median over 50 runs) | 4.85 ms | **4.35 ms** | **~1.1× faster** ⚡ |
+| **Testing Library Query Traversal** (`getAllByRole('button')` on 100 cards) | 23.5 ms | **28.7 ms** | **~1.2× jsdom** (cached AST & short-circuit) |
 
 > [!TIP]
 > **When `wasm-quickjs-dom` is faster:** Parsing HTML, serializing, executing CSS selector queries, and running client scripts that generate DOM inside the page (all execute natively in C / WebAssembly without host overhead).
 >
-> **Host-driven DOM mutations:** Earlier versions were bottlenecked by JSON serialization across the WASM boundary. With the current C fast-path, handle tokenization, and schema caching, host-driven node creation and property sets are competitive with (or faster than) pure-JS implementations like JSDOM.
+> **Host-driven DOM queries & mutations:** Earlier versions were bottlenecked by WASM bridge roundtrips and frequent cache invalidations. With C-level AST caching, host-side tag short-circuit evaluation for `Element.matches()`, static Proxy handler pooling, and $O(1)$ tag prototype lookups, host queries (such as `@testing-library/dom` traversals) operate within **1.1x–1.3x** of V8-native JSDOM.
 
 ---
 
@@ -479,8 +479,8 @@ npx wasm-quickjs-dom https://example.com/ --protocol https: --block-private --lo
 | :--- | :--- |
 | **First page in process** | ~120 ms (compiles WASM & initializes snapshot) |
 | **Subsequent pages** | **~3 ms** (cloned from pre-initialized snapshot) |
-| **HTML parsing & DOM build** | **~1.3 MB/s** (~190 ms for a 250 KB HTML document, ~2.5× faster than JS `htmlparser2`) |
-| **Host ↔ WASM bridge call** | **~3 µs** per synchronous property read or method call |
+| **HTML parsing & DOM build** | **~2.5 MB/s** (~11 ms for a 100 KB / 5,000-node HTML document, ~7× faster than JS `parse5`) |
+| **Host ↔ WASM bridge call** | **~0.6 µs** per cached property read, **~3 µs** per cross-boundary call |
 
 ---
 
