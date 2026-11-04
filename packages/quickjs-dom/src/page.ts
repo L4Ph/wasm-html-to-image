@@ -102,7 +102,17 @@ export function openPage(
       throw error;
     }
   };
-  const text = async (res: Response) => new TextDecoder().decode(await guard.bytes(res));
+  // a body refused by the byte limits is not silent: loggedFetch has already reported the request (with its status),
+  // so the refusal itself becomes an error entry, carrying the URL, the size and the limit from limits.ts
+  const bodyBytes = async (res: Response): Promise<Uint8Array> => {
+    try {
+      return await guard.bytes(res);
+    } catch (error) {
+      log({ type: "error", message: String(error), source: res.url || "fetch" });
+      throw error;
+    }
+  };
+  const text = async (res: Response) => new TextDecoder().decode(await bodyBytes(res));
   const remaining = () => Math.max(0, timeout - (Date.now() - started));
 
   let closed = false;
@@ -171,7 +181,7 @@ export function openPage(
         }
         track(
           loggedFetch(new URL(target, baseUrl), { method, ...init })
-            .then(async (r) => ({ status: r.status, url: r.url, headers: Object.fromEntries(r.headers), body: toBase64(await guard.bytes(r)) }))
+            .then(async (r) => ({ status: r.status, url: r.url, headers: Object.fromEntries(r.headers), body: toBase64(await bodyBytes(r)) }))
             .then(
               (o) => settle(true, JSON.stringify(o)),
               (e) => settle(false, String(e)),
@@ -209,11 +219,15 @@ export function openPage(
     pump();
     return result.type !== "error";
   };
+  // the error of the most recent call(), kept for its caller: serialize() explains why the page could not be serialized
+  let callFailure: string | undefined;
   const call = (expression: string): unknown => {
     if (closed) return undefined;
     bridge?.invalidate();
+    callFailure = undefined;
     const result = vm.eval(expression, "call.js");
     if (result.type === "error") {
+      callFailure = result.value;
       // a task cut off by the time limit is worth showing: its stack says where the page (or this engine) spent the time
       if (/interrupted/.test(result.value)) log({ type: "error", message: result.value, source: "task" });
       return undefined;
@@ -376,12 +390,32 @@ export function openPage(
         await tick();
       }
     };
+    // a rough size of the page, for the error a failed serialize() throws: a page that cannot answer leaves it out
+    const elementCount = (): number | undefined => {
+      if (closed) return undefined;
+      try {
+        bridge?.invalidate();
+        const result = vm.eval("document.querySelectorAll('*').length", "serialize-count.js");
+        if (result.type !== "json" && result.type !== "string") return undefined;
+        const n = Number(result.type === "json" ? JSON.parse(result.value) : result.value);
+        return Number.isFinite(n) ? n : undefined;
+      } catch {
+        return undefined;
+      }
+    };
     const serialize = () => {
       if (closed) throw new Error("The DOM is closed.");
       begin();
       const out = call("__edgeSerialize()");
-      if (typeof out !== "string") throw new Error("The QuickJS engine could not serialize the page.");
-      return out;
+      if (typeof out === "string") return out;
+      const failure = callFailure;
+      if (failure === undefined) throw new Error("The QuickJS engine could not serialize the page.");
+      // an interrupted task was already logged by call() as a task error, so it is not reported twice
+      const interrupted = /interrupted/.test(failure);
+      const count = interrupted ? undefined : elementCount();
+      const message = `The QuickJS engine could not serialize the page: ${failure}${count === undefined ? "" : ` (about ${count} elements)`}`;
+      if (!interrupted) log({ type: "error", message, source: "serialize" });
+      throw new Error(message);
     };
 
     // <link rel=stylesheet> sheets, fetched by the host and handed to the page for getComputedStyle

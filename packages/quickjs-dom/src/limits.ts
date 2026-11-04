@@ -94,10 +94,13 @@ export function createGuard(limits: FetchLimits = {}) {
     /** The body of `res`, refused when it is over the size limits. */
     async bytes(res: Response): Promise<Uint8Array> {
       const max = limits.maxResourceBytes;
-      const tooBig = () => new Error(`Blocked by the fetch limits (a response is over ${max} bytes): ${res.url}`);
-      if (max !== undefined && Number(res.headers.get("content-length")) > max) {
+      // the size and the limit that refused it, so a caller can say what happened without guessing
+      const tooBig = (limit: string, size: number) =>
+        new Error(`Blocked by the fetch limits (${limit}: a response is ${size} bytes, over ${max} bytes): ${res.url}`);
+      const contentLength = Number(res.headers.get("content-length"));
+      if (max !== undefined && contentLength > max) {
         await res.body?.cancel();
-        throw tooBig();
+        throw tooBig("maxResourceBytes", contentLength);
       }
       let bytes: Uint8Array;
       if (max !== undefined && res.body) {
@@ -110,7 +113,7 @@ export function createGuard(limits: FetchLimits = {}) {
           size += value.length;
           if (size > max) {
             await reader.cancel();
-            throw tooBig();
+            throw tooBig("maxResourceBytes", size);
           }
           chunks.push(value);
         }
@@ -125,7 +128,7 @@ export function createGuard(limits: FetchLimits = {}) {
       }
       total += bytes.length;
       if (limits.maxTotalResourceBytes !== undefined && total > limits.maxTotalResourceBytes) {
-        throw new Error(`Blocked by the fetch limits (responses together are over ${limits.maxTotalResourceBytes} bytes): ${res.url}`);
+        throw new Error(`Blocked by the fetch limits (maxTotalResourceBytes: responses together are ${total} bytes, over ${limits.maxTotalResourceBytes} bytes): ${res.url}`);
       }
       return bytes;
     },

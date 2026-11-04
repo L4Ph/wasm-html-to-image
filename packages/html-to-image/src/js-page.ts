@@ -178,6 +178,7 @@ export async function runPageScripts(
       await sleep(Math.min(opts.settleMs ?? DEFAULT_SETTLE_MS, remaining()));
     }
     // With scripting on, <noscript> content is inert text; the renderer would show it, a browser would not.
+    // This is the jsdom engine only: the QuickJS engine strips <noscript> in the wasm serializer (boot.js `__edgeSerialize`).
     for (const el of Array.from(window.document.querySelectorAll("noscript")) as Element[]) el.remove();
     return { html: dom.serialize(), baseUrl: window.location.href };
   } finally {
