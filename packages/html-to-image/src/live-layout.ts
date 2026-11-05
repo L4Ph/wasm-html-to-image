@@ -47,6 +47,12 @@ export interface LiveLayoutOptions {
 export interface LiveLayout {
   /** Release the engine's document. Call it when the page is closed (the page must not read layout afterwards). */
   dispose(): void;
+  /**
+   * Fetch the resources (images, style sheets, fonts) the page has added since `enableLiveLayout` or the last call, and lay
+   * the page out again with them. Reads are synchronous and cannot fetch, so await this after the page has put new resources
+   * in (for example after `await dom.settle()`), before reading layout that depends on them.
+   */
+  refreshResources(): Promise<void>;
 }
 
 const PRINT = 1;
@@ -56,7 +62,7 @@ const PRINT = 1;
  * `wasm-html-to-image/workerd`, `loadHtmlToImageModule()` in Node, ...).
  *
  * The page's stylesheets, fonts and images are resolved once, here, from the page as it is now; resources a script adds
- * later are not fetched (their text and images lay out as if empty). From then on every read is answered from the layout
+ * later are fetched by `refreshResources()` (until then their images lay out as if empty). From then on every read is answered from the layout
  * of the page as it is at that moment. If the engine fails or the page is too big (`maxElements`), layout turns itself off:
  * boxes read 0 and the page keeps running.
  *
@@ -83,8 +89,8 @@ export async function enableLiveLayout(
   const mediaTypeInt = options.mediaType === "print" ? PRINT : 0;
   const inst = module.satoru_create_instance();
   let disposed = false;
-  try {
-    // Stylesheets, fonts and images of the page, once. The layout calls that follow are synchronous and fetch nothing.
+  const resolveNow = async (): Promise<void> => {
+    // Stylesheets, fonts and images of the page. The layout calls that follow are synchronous and fetch nothing.
     const ctx: ResolveContext = {
       mediaTypeInt,
       css: options.css,
@@ -110,6 +116,9 @@ export async function enableLiveLayout(
       options.fallbackFonts,
       ctx,
     );
+  };
+  try {
+    await resolveNow();
   } catch (error) {
     module.satoru_destroy_instance(inst);
     throw error;
@@ -137,6 +146,11 @@ export async function enableLiveLayout(
       if (disposed) return;
       disposed = true;
       module.satoru_destroy_instance(inst);
+    },
+    async refreshResources() {
+      if (disposed) return;
+      await resolveNow();
+      await dom.eval("__edgeLiveReset()");
     },
   };
 }

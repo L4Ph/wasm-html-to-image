@@ -1189,6 +1189,8 @@
     for (var k in delta) { if (delta[k] === null) delete boxes[k]; else boxes[k] = delta[k]; }
     layoutRevision = g.__native.dom.version();
   };
+  // The host fetched resources the page added (images, style sheets): the next read opens the document anew.
+  g.__edgeLiveReset = function () { boxes = null; layoutRevision = -1; };
   // maxElements: pages with more elements than this are not laid out (the host's memory decides: a Worker holds about 6000)
   g.__edgeEnableLiveLayout = function (maxElements) {
     if (typeof maxElements === "number" && maxElements > 0) liveMax = maxElements;

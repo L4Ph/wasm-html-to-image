@@ -45,6 +45,21 @@ describe("live layout: enableLiveLayout", () => {
     }
   });
 
+  it("lays out an image a script added, once refreshResources() has fetched it", async () => {
+    const dom = await createDOM({ html: `<!doctype html><html><body style="margin:0"><div id="a">x</div></body></html>` }, { settleMs: 0 });
+    const layout = await enableLiveLayout(dom, module, { width: 400, resolveResource: async (url) => (url.endsWith("pic.png") ? new Uint8Array(Buffer.from("iVBORw0KGgoAAAANSUhEUgAAABQAAAAeCAIAAACjcKk8AAAAIElEQVR4nGP4z8BANiJf56jmUc2jmkc1j2oe1TwENAMAAZtVx1go0W8AAAAASUVORK5CYII=", "base64")) : null) });
+    try {
+      await dom.eval(`const i = document.createElement("img"); i.id = "img"; i.src = "https://example.test/pic.png"; document.body.appendChild(i)`);
+      const h = () => dom.eval(`document.getElementById("img").getBoundingClientRect().height`);
+      expect(await h()).toBe(0); // not fetched yet: laid out as empty
+      await layout.refreshResources();
+      expect(await h()).toBe(30);
+    } finally {
+      layout.dispose();
+      dom.close();
+    }
+  });
+
   it("keeps the layout for a change of paint only, and lays out again when anything else changes with it", async () => {
     const dom = await createDOM({ html: `<!doctype html><html><head><style>.p{color:#00f;background:#eee}.q{color:#f00;height:80px}#a{height:30px}</style></head><body style="margin:0"><div id="a" class="p">A</div><div id="b">B</div></body></html>` }, { settleMs: 0 });
     const layout = await enableLiveLayout(dom, module, { width: 400 });
