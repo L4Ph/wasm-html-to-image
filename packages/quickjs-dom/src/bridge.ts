@@ -43,6 +43,9 @@ interface Cell {
   /** defaultView of a document: fixed when the document is made. `dvSet` tells "null" from "not read yet". */
   dv?: unknown;
   dvSet?: boolean;
+  /** The ownerDocument of a node, as of generation `odg` (see Bridge.odGen). */
+  od?: unknown;
+  odg?: number;
 }
 
 /** A handle as the guest sends it. */
@@ -66,7 +69,7 @@ const PURE_CALLS = new Set([
 
 /** Reads that only the shape of the tree changes (and the document a node belongs to, which a move between trees changes). */
 const STRUCT_KEYS = new Set([
-  "firstChild", "lastChild", "nextSibling", "previousSibling", "parentNode", "parentElement", "ownerDocument",
+  "firstChild", "lastChild", "nextSibling", "previousSibling", "parentNode", "parentElement",
   "firstElementChild", "lastElementChild", "nextElementSibling", "previousElementSibling", "childElementCount", "isConnected",
 ]);
 /** Calls that make a new node (a custom element's constructor could run page code: `fineOk` rules that out). */
@@ -319,11 +322,15 @@ export class Bridge {
   }
 
   /** The page may have changed: forget what was read. (Called by whoever ran code in the page.) */
-  invalidate(keepCe = false): void {
+  invalidate(keepCe = false, keepOd = false): void {
     if (this.reads.size) this.reads.clear();
     if (this.sreads.size) this.sreads.clear();
     if (!keepCe && this.ce === 1) this.ce = 0;
+    // what a node's ownerDocument was (`Cell.od`) is good until a node may have moved to another document
+    if (!keepOd) this.odGen++;
   }
+  /** The generation of the ownerDocument answers kept in the cells; a change that may move a node between documents ends it. */
+  private odGen = 0;
 
   /** A change of attributes only: no page code runs (`fineOk` has checked), so what depends on the tree's shape holds. */
   private invalidateAttrs(): void {
@@ -521,6 +528,15 @@ export class Bridge {
     // React asks every event target for this one (getEventTarget); only an SVG <use> has it, and for anything
     // else the property does not exist. Answering it here is the same answer the page would give, without a call.
     if (key === "correspondingUseElement" && cell.t === 1 && cell.l !== "use") return undefined;
+    if (key === "ownerDocument" && cell.t !== 9) {
+      if (cell.odg === this.odGen && cell.od !== undefined) return cell.od;
+      const value = this.send("g" + cell.id + "\u0001" + key);
+      if (value !== null && typeof value === "object") {
+        cell.od = value;
+        cell.odg = this.odGen;
+      }
+      return value;
+    }
     const k = cell.id + "\u0001" + key;
     const store = STRUCT_KEYS.has(key) ? this.sreads : this.reads;
     if (store.has(k)) return store.get(k);
@@ -570,7 +586,9 @@ export class Bridge {
       (cell.t === 1 ? (FINE_SET_KEYS.has(key) || ON_HANDLER.test(key)) && cell.l !== "select" : (cell.t === 3 || cell.t === 8) && TEXT_SET_KEYS.has(key)) &&
       this.fineOk()
     ) this.invalidateAttrs();
-    else this.invalidate(true); // an assignment runs page code only through a custom element, and `ce` says there is none
+    // an assignment runs page code only through a custom element (`ce` says there is none), and moves a node to another
+    // document only when it is given a node
+    else this.invalidate(true, value === null || (typeof value !== "object" && typeof value !== "function") || !(value as any)[HANDLE]);
     if (typeof value === "string" && !value.includes("\u0001") && !value.includes("\u0002")) {
       this.send("s" + cell.id + "\u0001" + key + "\u0001\u0003" + value);
     } else {
@@ -585,6 +603,17 @@ export class Bridge {
       if (this.sreads.size > 100000) this.sreads.clear();
       this.sreads.set(cell.id + "\u0001set:" + key, value);
     }
+  }
+
+  /** True when the receiver and every node among the arguments are known to belong to one and the same document. */
+  private sameDocument(cell: Cell, args: unknown[]): boolean {
+    if (cell.odg !== this.odGen || cell.od === undefined) return false;
+    for (const a of args) {
+      if (a === null || (typeof a !== "object" && typeof a !== "function")) continue;
+      const c = (a as any)[HANDLE] as Cell | undefined;
+      if (!c || c.odg !== this.odGen || c.od !== cell.od) return false;
+    }
+    return true;
   }
 
   /** Arguments that are all strings go as is (no JSON on either side); the rest as a JSON array. */
@@ -610,7 +639,7 @@ export class Bridge {
     return (fn ? "\u0006" : "\u0004") + parts.join("\u0002");
   }
 
-  private call(cell: Cell, key: string, args: unknown[]): unknown {
+  private call(cell: Cell, key: string, args: unknown[], self?: unknown): unknown {
     if (key === "matches" && cell.t === 1 && typeof cell.l === "string" && typeof args[0] === "string") {
       const check = analyzeSelector(args[0]);
       if (check.alwaysTrue) return true;
@@ -621,6 +650,14 @@ export class Bridge {
       // nothing that was read can have changed (a new node is in no tree, a listener is not read), or only an attribute did
       if (this.fineOk()) {
         const value = this.send("c" + cell.id + "\u0001" + key + "\u0001" + encoded);
+        if (cell.t === 9) {
+          // a node made by a document belongs to it
+          const made = value && typeof value === "object" ? ((value as any)[HANDLE] as Cell | undefined) : undefined;
+          if (made && self) {
+            made.od = self;
+            made.odg = this.odGen;
+          }
+        }
         if (cell.t === 1 && !LISTENER_CALLS.has(key)) {
           this.invalidateAttrs();
           // setAttribute("onclick", "...") replaces the handler the host set
@@ -634,7 +671,10 @@ export class Bridge {
       // the drop after is what makes the calls that follow see the page's new state; dropping before as well
       // only threw away reads that were still good, so it is not done
       const value = this.send("c" + cell.id + "\u0001" + key + "\u0001" + encoded);
-      this.invalidate(TREE_CALLS.has(key)); // these run page code only through a custom element, and `ce` says there is none
+      // a change of the tree runs page code only through a custom element (`ce` says there is none); it moves a node to
+      // another document only when the receiver and a node it was given are not known to be of one document
+      const tree = TREE_CALLS.has(key);
+      this.invalidate(tree, tree && this.sameDocument(cell, args));
       return value;
     }
     const k = cell.id + "\u0001" + key + "\u0001" + encoded;
@@ -863,7 +903,7 @@ export class Bridge {
       for (const [k, kind] of Object.entries(s.props)) {
         if (kind === 3) {
           Object.defineProperty(cls.prototype, k, {
-            value: { [k]: function (this: any, ...args: unknown[]) { return bridge.call(this[HANDLE], k, args); } }[k],
+            value: { [k]: function (this: any, ...args: unknown[]) { return bridge.call(this[HANDLE], k, args, this); } }[k],
             writable: true, configurable: true, enumerable: true,
           });
         } else if (k === "nodeType") {

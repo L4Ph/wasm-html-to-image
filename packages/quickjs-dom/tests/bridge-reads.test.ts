@@ -74,6 +74,27 @@ describe("reads that outlast a change of attributes", () => {
     d.adoptNode(f);
     expect(f.ownerDocument).toBe(d);
   });
+
+  it("see a node move between documents whose ownerDocument is known on both sides", async () => {
+    const w = await open("<body><div id=a></div>");
+    const d = w.document;
+    const other = d.implementation.createHTMLDocument("x");
+    const host = other.body;
+    expect(host.ownerDocument).toBe(other); // known
+    const e = d.createElement("p"); // made by d: known
+    const g = d.createElement("p");
+    expect(e.ownerDocument).toBe(d);
+    d.body.appendChild(g); // the same document on both sides: nothing moves
+    expect(g.ownerDocument).toBe(d);
+    host.appendChild(e); // two documents
+    expect(e.ownerDocument).toBe(other);
+    expect(g.ownerDocument).toBe(d);
+    d.body.insertBefore(e, g); // and back
+    expect(e.ownerDocument).toBe(d);
+    host.replaceChildren(g);
+    expect(g.ownerDocument).toBe(other);
+    expect(host.ownerDocument).toBe(other);
+  });
 });
 
 describe("custom elements run page code on a change of attributes", () => {
