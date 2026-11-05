@@ -183,7 +183,40 @@
     return e;
   };
 
+  // A value that goes to the host as a compact token without being looked at twice: a primitive, or an object whose own
+  // interface is known (a node, an event). Nothing is numbered here, so a value that is not one costs nothing.
+  var plainTokenOk = function (v) {
+    switch (typeof v) {
+      case "undefined": case "boolean": return true;
+      case "number": return v === v && v !== Infinity && v !== -Infinity && !(v === 0 && 1 / v < 0);
+      case "string": return v.indexOf(SEP) < 0 && v.indexOf("") < 0;
+      case "object": return v === null || (v !== g && protoNames !== null && protoNames.has(Object.getPrototypeOf(v)) && !Array.isArray(v) && !(v instanceof Date));
+      default: return false;
+    }
+  };
+  var plainToken = function (v) {
+    switch (typeof v) {
+      case "undefined": return "U";
+      case "boolean": return v ? "T" : "F";
+      case "number": return "n" + v;
+      case "string": return "s" + v;
+      default: return v === null ? "N" : handleString(v, protoNames.get(Object.getPrototypeOf(v)));
+    }
+  };
   var callHost = function (id, self, args) {
+    var plain = plainTokenOk(self);
+    for (var pi = 0; plain && pi < args.length; pi++) plain = plainTokenOk(args[pi]);
+    if (plain) {
+      // the handles go with their class when the host has not seen them (an event listener's event, on its first call)
+      var ptoks = [plainToken(self)];
+      for (pi = 0; pi < args.length; pi++) ptoks.push(plainToken(args[pi]));
+      var preply = g.__host.callback(String(id), "" + ptoks.join(""));
+      if (preply === undefined) throw new Error("the host has no function " + id);
+      if (preply.charCodeAt(0) === 6) return tokenValue(preply.slice(1));
+      var pr = JSON.parse(preply);
+      if (pr.x) throw rebuild(pr.x);
+      return dec(pr.v);
+    }
     var selfEnc = enc(self), list = Array.prototype.map.call(args, enc);
     // A callback whose values are all handles, strings, numbers, booleans or null/undefined (an event listener)
     // goes as compact tokens; anything else falls back to the JSON form both sides already understand.

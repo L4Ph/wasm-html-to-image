@@ -307,10 +307,14 @@
     for (var i = 0; i < list.length; i++) if (list[i].handler) return;
     list.push({ handler: true, capture: false, once: false, passive: false, removed: false });
   };
-  var invoke = function (node, ev, phase, seenTarget) {
+  var invoke = function (node, ev, phase, seenTarget, onType) {
     // an attribute handler claims its slot the first time a dispatch reaches its node
-    if (phase !== 1 && node.nodeType === 1 && node.hasAttribute && node.hasAttribute("on" + ev.type)) ensureHandlerEntry(node, ev.type);
+    if (phase !== 1 && node.nodeType === 1 && node.hasAttribute && node.hasAttribute(onType)) ensureHandlerEntry(node, ev.type);
     var all = LISTENERS.get(node), list = all && all[ev.type];
+    // a node with no listener for the type runs nothing and shows nothing (every node that does sets the event's
+    // currentTarget and phase itself, and dispatch resets them at the end); only an object that is not a node may
+    // still have an on<type> property of its own (below)
+    if (!list && node.nodeType !== undefined) return;
     ev.currentTarget = node;
     ev.eventPhase = phase;
     if (seenTarget) { ev.target = seenTarget; ev.srcElement = seenTarget; }
@@ -385,13 +389,19 @@
     eventPaths.set(ev, path);
     ev.cancelBubble = false;
     if (ev._stopImmediatePropagationFlag) Object.defineProperty(ev, "_stopImmediatePropagationFlag", { value: false, configurable: true });
-    for (i = path.length - 1; i > 0 && !ev.cancelBubble; i--) invoke(path[i], ev, 1, seen ? seen[i] : this);
-    if (!ev.cancelBubble) invoke(this, ev, 2, this);
+    var type = ev.type, onType = "on" + type;
+    for (i = path.length - 1; i > 0 && !ev.cancelBubble; i--) {
+      // the capture pass has nothing to run on a node that listens for no event of this type
+      var held = LISTENERS.get(path[i]);
+      if (held && held[type]) invoke(path[i], ev, 1, seen ? seen[i] : this, onType);
+      else if (path[i].nodeType === undefined) invoke(path[i], ev, 1, seen ? seen[i] : this, onType);
+    }
+    if (!ev.cancelBubble) invoke(this, ev, 2, this, onType);
     // the bubble pass: a node the event is retargeted onto (the host of a tree the event came
     // out of) hears it even when the event does not bubble — in its own tree the host IS the
     // target — while ordinary ancestors of a non-bubbling event hear nothing
     for (i = 1; i < path.length && !ev.cancelBubble; i++) {
-      if (ev.bubbles || (seen && seen[i] === path[i])) invoke(path[i], ev, 3, seen ? seen[i] : this);
+      if (ev.bubbles || (seen && seen[i] === path[i])) invoke(path[i], ev, 3, seen ? seen[i] : this, onType);
     }
     ev.target = ev.srcElement = this;
     ev.currentTarget = null;
