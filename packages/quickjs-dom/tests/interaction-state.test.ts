@@ -82,3 +82,30 @@ describe("window", () => {
     expect(await dom.eval(`try { new Window(); "no error" } catch (e) { e.name }`)).toBe("TypeError");
   });
 });
+
+describe("getComputedStyle(el, pseudo)", () => {
+  const sheet = `<!doctype html><html><head><style>
+    p{color:#123456;font-size:20px}
+    p::before{content:"> ";color:#ff0000;display:inline-block;width:10px}
+    p:after{content:"!";margin-left:4px}
+    p.x::before{color:#00ff00}
+    p:hover::before{color:#0000ff}
+  </style></head><body><p id="a">text</p><p id="b" class="x">other</p><div id="d">plain</div></body></html>`;
+  it("computes the style of ::before and ::after from their own rules and inherits from the element", async () => {
+    const dom = await createDOM({ html: sheet }, { settleMs: 0 });
+    open.push(dom);
+    const cs = (id: string, pseudo: string, props: string[]) =>
+      dom.eval(`(() => { const s = getComputedStyle(document.getElementById(${JSON.stringify(id)}), ${JSON.stringify(pseudo)}); return ${JSON.stringify(props)}.map((p) => s.getPropertyValue(p)) })()`);
+    expect(await cs("a", "::before", ["content", "color", "display", "width", "font-size"])).toEqual(['"> "', "rgb(255, 0, 0)", "inline-block", "10px", "20px"]);
+    expect(await cs("a", "::after", ["content", "color", "margin-left"])).toEqual(['"!"', "rgb(18, 52, 86)", "4px"]); // the colour is inherited from <p>
+    expect(await cs("b", "::before", ["color"])).toEqual(["rgb(0, 255, 0)"]); // the more specific rule wins
+    expect(await cs("a", ":before", ["content"])).toEqual(['"> "']); // the one-colon form
+    expect(await cs("d", "::before", ["content", "display"])).toEqual(["none", "inline"]); // nothing generated
+    expect(await cs("a", "::unknown", ["color"])).toEqual([""]);
+    // the element's own style is not touched by its pseudo-element rules
+    expect(await dom.eval(`getComputedStyle(document.getElementById("a")).color`)).toBe("rgb(18, 52, 86)");
+    // a state selector in front of the pseudo-element
+    await dom.eval(`document.getElementById("a").dispatchEvent(new MouseEvent("mouseover", { bubbles: true }))`);
+    expect(await cs("a", "::before", ["color"])).toEqual(["rgb(0, 0, 255)"]);
+  });
+});

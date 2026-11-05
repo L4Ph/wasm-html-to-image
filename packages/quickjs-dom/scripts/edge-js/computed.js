@@ -599,21 +599,34 @@
     return null;
   };
 
-  var cascade = function (el, depth) {
-    var doc = el.ownerDocument, ua = uaStyle(el), order = 0;
+  // the pseudo-elements getComputedStyle(el, "::before") can answer for: the rules whose selector ends in one are matched against the
+  // element in front of it, and the pseudo-element inherits from that element
+  var PSEUDO_RE = /::?(before|after|first-line|first-letter|marker|placeholder|selection)\s*$/i;
+  var pseudoName = function (arg) {
+    var m = /^::?([a-z-]+)$/i.exec(String(arg).trim());
+    var n = m ? m[1].toLowerCase() : "";
+    return /^(before|after|first-line|first-letter|marker|placeholder|selection)$/.test(n) ? n : "";
+  };
+  var cascade = function (el, depth, pseudo) {
+    var doc = el.ownerDocument, ua = pseudo ? { display: "inline" } : uaStyle(el), order = 0;
     var cands = []; // [prop, value, imp, inline, w, o, hasVar]
     var rules = doc ? documentRules(doc) : [];
     for (var i = 0; i < rules.length; i++) {
       var r = rules[i];
       if (r.media.length && !mediaOk(r.media)) continue;
-      var hit;
-      try { hit = el.matches(r.selector); } catch (e) { hit = false; }
+      var hit, sel = r.selector;
+      if (pseudo) {
+        var pm = PSEUDO_RE.exec(sel);
+        if (!pm || pm[1].toLowerCase() !== pseudo) continue;
+        sel = sel.slice(0, pm.index).trim() || "*";
+      }
+      try { hit = el.matches(sel); } catch (e) { hit = false; }
       if (!hit) continue;
       for (var j = 0; j < r.decls.length; j++) cands.push([r.decls[j][0], r.decls[j][1], r.decls[j][2], false, r.weight, r.order, r.decls[j][3]]);
     }
-    var inline = el.getAttribute("style");
+    var inline = pseudo ? null : el.getAttribute("style");
     if (inline) parseDeclarations(inline).forEach(function (d) { cands.push([d[0], d[1], d[2], true, 0, ++order, d[3]]); });
-    var parent = el.parentElement, parentStyle = parent && depth < 200 ? computedOf(parent, depth + 1) : null;
+    var parent = pseudo ? el : el.parentElement, parentStyle = parent && depth < 200 ? computedOf(parent, depth + 1) : null;
     var out = {}, k;
     // custom properties inherit, and a declaration may use any of them
     var vars = {}, custom = picker(), plain = picker();
@@ -656,6 +669,7 @@
     if (parent && doc && doc.documentElement && doc.documentElement !== el) rootPx = parseFloat(computedOf(doc.documentElement, depth + 1)["font-size"]) || 16;
     for (k in out) if (k !== "font-size" && k.slice(0, 2) !== "--" && k !== "font-family") out[k] = lengthsIn(out[k], ownPx, rootPx);
     for (k in out) if (k === "color" || k === "fill" || k === "stroke" || k.slice(-6) === "-color") { if (out[k] !== "currentcolor") out[k] = normColor(out[k]); }
+    if (pseudo && (pseudo === "before" || pseudo === "after") && (out.content === undefined || out.content === "normal" || out.content === "")) out.content = "none";
     if (out["overflow-x"] === undefined) out["overflow-x"] = "visible";
     out.overflow = out["overflow-x"] === out["overflow-y"] ? out["overflow-x"] : out["overflow-x"] + " " + out["overflow-y"];
     // the display of a floated or absolutely positioned box is block-level
@@ -690,7 +704,10 @@
   };
   var makeComputed = function (el, pseudo) {
     var getValues = function () {
-      if (pseudo) return {};
+      if (pseudo) {
+        var pn = pseudoName(pseudo);
+        return pn ? cascade(el, 0, pn) : {};
+      }
       var values = computedOf(el, 0);
       // live layout: the renderer's used values replace the cascade's guesses for what it computed (see overlayLive)
       var live = g.__edgeLiveStyle ? g.__edgeLiveStyle(el) : null;
@@ -750,7 +767,7 @@
   var computedCache = new WeakMap();
   g.getComputedStyle = function getComputedStyle(el, pseudo) {
     if (!el || el.nodeType !== 1) throw new TypeError("Failed to execute 'getComputedStyle' on 'Window': parameter 1 is not of type 'Element'.");
-    if (pseudo) return makeComputed(el, true);
+    if (pseudo) return makeComputed(el, pseudo);
     var cs = computedCache.get(el);
     if (!cs) {
       cs = makeComputed(el, false);
