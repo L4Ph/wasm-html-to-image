@@ -366,3 +366,32 @@ dom.close();
 - エンジンの wasm に `satoru_live_*` がないと、`enableLiveLayout` は分かるエラーで失敗する。
 
 テスト: `tests/live-layout.test.ts`(4 件)。座標・スタイルの読み取りと追従(属性、テキスト、挿入、削除)、60 ステップの乱数変更で「作り直した文書の結果」と一致、`maxElements`、`dispose()` 後の縮退。html-to-image のテスト全体(210 件)も通る。
+
+## 21. 1 要素あたりのメモリを半分にする(`css_length` の縮小)
+
+調べ方: エンジンの wasm と同じ ABI(wasm32)で `sizeof` を出す小さな C++ を `em++` で作り、Node で動かした(`/tmp` の一時ファイル。ヘッダーだけで足りる)。
+
+見つかったこと(変更前):
+- `element` 基底クラスが **4,884 バイト**で、そのうち `css_properties` が 4,796 バイト。テキストノード(`el_text` 4,948)も空白(`el_space`)も、同じ大きさを持つ。
+- `css_properties` の中身は、`css_length`(**44 バイト**)が多数。`css_margins` 176 ×2、`css_offsets` 176、`css_borders` 608 ×2(中に `css_border` 56 バイトが 4 つ + 角丸)、単体の `css_length` が 24 個、など。
+
+変更: `css_length` の `calc()` / `min()` / `max()` / `clamp()` 用の部分(4 つの float、演算子、`std::vector<css_length>`)を、必要なときだけヒープに置くようにした(`std::unique_ptr<calc_data>`)。普通の長さ(ほぼ全部)は **44 → 12 バイト**。コピーは深いコピー(`calc` の長さだけ割り当てる)、ムーブは既定。公開の関数(`set_calc`、`set_math`、`get_op`、`get_operands`、`calc_*`)は変えていない。
+
+結果:
+| | 変更前 | 変更後 |
+|---|---|---|
+| `css_length` | 44 B | 12 B |
+| `css_margins` / `css_offsets` | 176 B | 48 B |
+| `css_borders` | 608 B | 224 B |
+| `css_properties` | 4,796 B | 2,300 B |
+| `element` | 4,884 B | 2,388 B |
+| 6,000 要素の文書を開いたときの増加(Node、`external`) | +106 MB | **+53 MB** |
+| 6,000 要素の最初のレイアウト読み取りまで(wasm 2 つ + ページ) | 169 MB | **130 MB** |
+
+副産物として速くなった(メモリへの書き込みが減る): 6,000 要素の `color` 変更 1 回が 130 ms → 103 ms、`<body>` への追加が 149 ms → 106 ms。
+
+確認: ビジュアルテスト 1,084 件、html-to-image 全 210 件、quickjs-dom 281 件、差分テスト 300 ステップ、C++ ホストテスト 5 件がすべて通る。
+
+見積り: Workers の上限は、1 要素あたりの増加が半分になったので、概算で 12,000 要素前後まで広がるはず(**本番では未確認**。第 18 節の測り方で確かめる)。
+
+残る大きなメモリ: テキストノード・空白がそれぞれ `css_properties`(約 2.3 KB)を持つこと。親のスタイルを共有する形にすれば、テキストの多いページでさらに減るが、`element::css()` の使われ方が広く、別の大きな変更になる。

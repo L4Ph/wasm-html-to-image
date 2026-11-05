@@ -256,10 +256,10 @@ string css_length::to_string() const
 	if (is_predefined()) return "";
 	if (m_is_calc)
 	{
-		if (m_op == op_min) return "min(...)";
-		if (m_op == op_max) return "max(...)";
-		if (m_op == op_clamp) return "clamp(...)";
-		return "calc(" + std::to_string(m_px) + "px + " + std::to_string(m_percent) + "% + " + std::to_string(m_rem) + "rem + " + std::to_string(m_em) + "em)";
+		if (get_op() == op_min) return "min(...)";
+		if (get_op() == op_max) return "max(...)";
+		if (get_op() == op_clamp) return "clamp(...)";
+		return "calc(" + std::to_string(calc_px()) + "px + " + std::to_string(calc_percent()) + "% + " + std::to_string(calc_rem()) + "rem + " + std::to_string(calc_em()) + "em)";
 	}
 	if (m_units == css_units_percentage) return std::to_string(m_value) + "%";
 	return std::to_string(m_value) + "px";

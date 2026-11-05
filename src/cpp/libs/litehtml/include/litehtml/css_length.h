@@ -3,6 +3,7 @@
 
 #include "types.h"
 #include "css_tokenizer.h"
+#include <memory>
 
 namespace litehtml
 {
@@ -27,10 +28,6 @@ namespace litehtml
 		};
 		css_units	m_units;
 		bool		m_is_predefined;
-		float		m_px;
-		float		m_percent;
-		float		m_rem;
-		float		m_em;
 		bool		m_is_calc;
 
 	public:
@@ -46,12 +43,26 @@ namespace litehtml
 			op_fit_content
 		};
 	private:
-		math_op m_op = op_none;
-		std::vector<css_length> m_operands;
+		// Only a calc() / min() / max() / clamp() has these. Every element holds about seventy lengths (margins, paddings, borders,
+		// offsets, sizes, ...) and almost none of them is a calculation, so the numbers live outside, behind a pointer: a length
+		// costs 16 bytes instead of 44.
+		struct calc_data
+		{
+			float px = 0, percent = 0, rem = 0, em = 0;
+			math_op op = op_none;
+			std::vector<css_length> operands;
+		};
+		std::unique_ptr<calc_data> m_calc;
+		calc_data& calc_mut() { if (!m_calc) m_calc.reset(new calc_data()); return *m_calc; }
+		static const std::vector<css_length>& no_operands() { static const std::vector<css_length> none; return none; }
 
 	public:
 		css_length();
 		css_length(float val, css_units units = css_units_px);
+		css_length(const css_length& other);
+		css_length(css_length&& other) noexcept = default;
+		css_length& operator=(const css_length& other);
+		css_length& operator=(css_length&& other) noexcept = default;
 		css_length&	operator=(float val);
 
 		bool		is_predefined() const;
@@ -71,15 +82,15 @@ namespace litehtml
 		string		to_string() const;
 
 		static void set_viewport(float width, float height);
-		void        set_calc(float px, float percent, float rem, float em = 0) { m_px = px; m_percent = percent; m_rem = rem; m_em = em; m_is_calc = true; m_is_predefined = false; m_op = op_none; m_operands.clear(); }
-		void        set_math(math_op op, std::vector<css_length>&& operands) { m_px = 0; m_percent = 0; m_rem = 0; m_em = 0; m_op = op; m_operands = std::move(operands); m_is_calc = true; m_is_predefined = false; }
+		void        set_calc(float px, float percent, float rem, float em = 0) { calc_data& c = calc_mut(); c.px = px; c.percent = percent; c.rem = rem; c.em = em; c.op = op_none; c.operands.clear(); m_is_calc = true; m_is_predefined = false; }
+		void        set_math(math_op op, std::vector<css_length>&& operands) { calc_data& c = calc_mut(); c.px = 0; c.percent = 0; c.rem = 0; c.em = 0; c.op = op; c.operands = std::move(operands); m_is_calc = true; m_is_predefined = false; }
 		bool        is_calc() const { return m_is_calc; }
-		math_op     get_op() const { return m_op; }
-		const std::vector<css_length>& get_operands() const { return m_operands; }
-		float       calc_px() const { return m_px; }
-		float       calc_percent() const { return m_percent; }
-		float       calc_rem() const { return m_rem; }
-		float       calc_em() const { return m_em; }
+		math_op     get_op() const { return m_calc ? m_calc->op : op_none; }
+		const std::vector<css_length>& get_operands() const { return m_calc ? m_calc->operands : no_operands(); }
+		float       calc_px() const { return m_calc ? m_calc->px : 0; }
+		float       calc_percent() const { return m_calc ? m_calc->percent : 0; }
+		float       calc_rem() const { return m_calc ? m_calc->rem : 0; }
+		float       calc_em() const { return m_calc ? m_calc->em : 0; }
 	};
 
 	using length_vector = vector<css_length>;
@@ -92,12 +103,7 @@ namespace litehtml
 		m_predef		= 0;
 		m_units			= css_units_none;
 		m_is_predefined	= false;
-		m_px            = 0;
-		m_percent       = 0;
-		m_rem           = 0;
-		m_em            = 0;
 		m_is_calc       = false;
-		m_op            = op_none;
 	}
 
 	inline css_length::css_length(float val, css_units units)
@@ -105,12 +111,27 @@ namespace litehtml
 		m_value = val;
 		m_units = units;
 		m_is_predefined = false;
-		m_px            = 0;
-		m_percent       = 0;
-		m_rem           = 0;
-		m_em            = 0;
 		m_is_calc       = false;
-		m_op            = op_none;
+	}
+
+	inline css_length::css_length(const css_length& other)
+		: m_units(other.m_units), m_is_predefined(other.m_is_predefined), m_is_calc(other.m_is_calc),
+		  m_calc(other.m_calc ? new calc_data(*other.m_calc) : nullptr)
+	{
+		m_predef = other.m_predef; // the same bits whichever member of the union was set
+	}
+
+	inline css_length& css_length::operator=(const css_length& other)
+	{
+		if (this != &other)
+		{
+			m_predef = other.m_predef;
+			m_units = other.m_units;
+			m_is_predefined = other.m_is_predefined;
+			m_is_calc = other.m_is_calc;
+			m_calc.reset(other.m_calc ? new calc_data(*other.m_calc) : nullptr);
+		}
+		return *this;
 	}
 
 	inline css_length&	css_length::operator=(float val)
@@ -118,13 +139,8 @@ namespace litehtml
 		m_value = val;
 		m_units = css_units_px;
 		m_is_predefined = false;
-		m_px            = 0;
-		m_percent       = 0;
-		m_rem           = 0;
-		m_em            = 0;
 		m_is_calc       = false;
-		m_op            = op_none;
-		m_operands.clear();
+		m_calc.reset();
 		return *this;
 	}
 
@@ -183,38 +199,39 @@ namespace litehtml
 	{
 		if(!is_predefined())
 		{
-			if (m_is_calc)
+			if (m_is_calc && m_calc)
 			{
-				if (m_op == op_none)
+				const calc_data& c = *m_calc;
+				if (c.op == op_none)
 				{
-					return (pixel_t)(m_px + (width * m_percent / 100.0) + (m_rem * rem_base) + (m_em * em_base));
+					return (pixel_t)(c.px + (width * c.percent / 100.0) + (c.rem * rem_base) + (c.em * em_base));
 				}
-				else if (m_op == op_min && !m_operands.empty())
+				else if (c.op == op_min && !c.operands.empty())
 				{
-					pixel_t res = m_operands[0].calc_percent(width, em_base, rem_base);
-					for (size_t i = 1; i < m_operands.size(); i++)
+					pixel_t res = c.operands[0].calc_percent(width, em_base, rem_base);
+					for (size_t i = 1; i < c.operands.size(); i++)
 					{
-						res = std::min(res, m_operands[i].calc_percent(width, em_base, rem_base));
+						res = std::min(res, c.operands[i].calc_percent(width, em_base, rem_base));
 					}
 					return res;
 				}
-				else if (m_op == op_max && !m_operands.empty())
+				else if (c.op == op_max && !c.operands.empty())
 				{
-					pixel_t res = m_operands[0].calc_percent(width, em_base, rem_base);
-					for (size_t i = 1; i < m_operands.size(); i++)
+					pixel_t res = c.operands[0].calc_percent(width, em_base, rem_base);
+					for (size_t i = 1; i < c.operands.size(); i++)
 					{
-						res = std::max(res, m_operands[i].calc_percent(width, em_base, rem_base));
+						res = std::max(res, c.operands[i].calc_percent(width, em_base, rem_base));
 					}
 					return res;
 				}
-				else if (m_op == op_clamp && m_operands.size() >= 3)
+				else if (c.op == op_clamp && c.operands.size() >= 3)
 				{
-					pixel_t min_v = m_operands[0].calc_percent(width, em_base, rem_base);
-					pixel_t val = m_operands[1].calc_percent(width, em_base, rem_base);
-					pixel_t max_v = m_operands[2].calc_percent(width, em_base, rem_base);
+					pixel_t min_v = c.operands[0].calc_percent(width, em_base, rem_base);
+					pixel_t val = c.operands[1].calc_percent(width, em_base, rem_base);
+					pixel_t max_v = c.operands[2].calc_percent(width, em_base, rem_base);
 					return std::max(min_v, std::min(val, max_v));
 				}
-				return (pixel_t)(m_px + (width * m_percent / 100.0) + (m_rem * rem_base) + (m_em * em_base));
+				return (pixel_t)(c.px + (width * c.percent / 100.0) + (c.rem * rem_base) + (c.em * em_base));
 			}
 			if(units() == css_units_percentage)
 			{
@@ -235,15 +252,16 @@ namespace litehtml
 
 	inline void css_length::resolve_font_units(pixel_t em_base, pixel_t rem_base)
 	{
-		if (!m_is_calc) return;
-		if (m_op == op_none)
+		if (!m_is_calc || !m_calc) return;
+		calc_data& c = *m_calc;
+		if (c.op == op_none)
 		{
-			m_px += (float)(m_em * em_base + m_rem * rem_base);
-			m_em = 0;
-			m_rem = 0;
+			c.px += (float)(c.em * em_base + c.rem * rem_base);
+			c.em = 0;
+			c.rem = 0;
 		} else
 		{
-			for (auto& op : m_operands)
+			for (auto& op : c.operands)
 			{
 				if (op.is_calc())
 				{
