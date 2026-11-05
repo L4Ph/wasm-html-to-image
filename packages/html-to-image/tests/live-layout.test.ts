@@ -4,10 +4,10 @@ import { loadHtmlToImageModule, type HtmlToImageModule } from "../src/loader.js"
 
 const SHEET = `.r{margin:1px}.c1{color:#036;padding:3px}.c2 span{font-weight:bold;font-size:20px}.c3{float:left;width:50px}
 .c4>span{display:inline-block;width:80px}.r:nth-child(odd){background:#eee}#big{height:90px}.hide{display:none}`;
-const rows = (n: number) => {
+const rows = (n: number, extra = "") => {
   let b = "";
   for (let i = 0; i < n; i++) b += `<div class="r c${i % 5}" style="height:${10 + (i % 7)}px;padding:2px"><span>row ${i}</span></div>`;
-  return `<!doctype html><html><head><style>${SHEET}</style></head><body style="margin:0">${b}</body></html>`;
+  return `<!doctype html><html><head><style>${SHEET}${extra}</style></head><body style="margin:0">${b}</body></html>`;
 };
 
 let module: HtmlToImageModule;
@@ -78,9 +78,10 @@ describe("live layout: enableLiveLayout", () => {
     }
   });
 
-  it("matches a layout built from scratch after random changes of attributes, text and the tree", async () => {
+  // (the second sheet looks at positions counted from the end: a different restyle scope after the tree changes)
+  it.each(["", ".r:nth-last-child(3){color:#c00}.r:only-child{color:#0c0}"])("matches a layout built from scratch after random changes of attributes, text and the tree %#", async (extra) => {
     const N = 30;
-    const dom = await createDOM({ html: rows(N) }, { settleMs: 0 });
+    const dom = await createDOM({ html: rows(N, extra) }, { settleMs: 0 });
     const layout = await enableLiveLayout(dom, module, { width: 600 });
     const reference = module.satoru_create_instance();
     try {

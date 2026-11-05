@@ -1854,8 +1854,24 @@ std::vector<std::shared_ptr<element>> document::live_set_children(const std::sha
 	}
 	else if (structural)
 	{
-		restyle.clear();
-		restyle.push_back(parent);
+		// Positions counted from the start only change for the new elements and the siblings after the first change; counted from
+		// the end (or :empty), or with many siblings behind it, the whole parent is restyled.
+		const bool backward = m_master_css.backward_sensitive() || m_styles.backward_sensitive() || m_user_css.backward_sensitive();
+		size_t first = 0;
+		while (!backward && first < old.size() && first < list.size() && old[first] == list[first]) first++;
+		const size_t behind = list.size() > first ? list.size() - first : 0;
+		if (backward || behind > 48)
+		{
+			restyle.clear();
+			restyle.push_back(parent);
+		}
+		else
+		{
+			std::unordered_set<const element*> have;
+			for (const auto& e : restyle) have.insert(e.get());
+			for (size_t i = first; i < list.size(); i++)
+				if (!have.count(list[i].get())) restyle.push_back(list[i]);
+		}
 	}
 	return restyle;
 }

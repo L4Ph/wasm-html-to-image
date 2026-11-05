@@ -45,6 +45,7 @@ class css
 	bool	m_has_container_queries = false;
 	bool	m_sibling_sensitive = false;
 	bool	m_structural_sensitive = false;
+	bool	m_backward_sensitive = false; // the position counted from the end, or "empty": adding a last sibling changes the earlier ones
 public:
 	bool has_container_queries() const { return m_has_container_queries; }
 	// True when a selector looks at siblings (`+`, `~`) or at descendants (`:has()`), so a change to one element can restyle
@@ -53,6 +54,7 @@ public:
 	// True when a selector looks at a position among siblings (:first-child, :nth-child(), :empty, ...): inserting or removing a
 	// child can restyle the children that stay.
 	bool structural_sensitive() const { return m_structural_sensitive; }
+	bool backward_sensitive() const { return m_backward_sensitive; }
 private:
 	css_selector::vector	m_selectors;
 	std::map<string_id, css_selector::vector> m_id_selectors;
@@ -104,7 +106,8 @@ private:
 	bool	evaluate_supports_feature(const css_token& token, shared_ptr<document> doc);
 };
 
-// bit 1: looks at siblings or descendants (+ ~ :has); bit 2: looks at the position among siblings
+// bit 1: looks at siblings or descendants (+ ~ :has); bit 2: looks at the position among siblings;
+// bit 4: the position counted from the end (or :empty), which the siblings after it change
 inline int selector_sensitivity(const css_selector& sel)
 {
 	static const string_id empty_pseudo = _id("empty");
@@ -121,6 +124,10 @@ inline int selector_sensitivity(const css_selector& sel)
 			     attr.name == _only_of_type_ || attr.name == _nth_of_type_ || attr.name == _nth_last_of_type_ ||
 			     attr.name == empty_pseudo))
 				bits |= 2;
+			if (attr.type == select_pseudo_class &&
+			    (attr.name == _last_child_ || attr.name == _only_child_ || attr.name == _nth_last_child_ || attr.name == _last_of_type_ ||
+			     attr.name == _only_of_type_ || attr.name == _nth_last_of_type_ || attr.name == empty_pseudo))
+				bits |= 4;
 			for (const auto& inner : attr.selector_list)
 				if (inner) bits |= selector_sensitivity(*inner);
 		}
@@ -133,6 +140,7 @@ inline void css::add_selector(const css_selector::ptr& selector, int layer)
 	const int sensitivity = selector_sensitivity(*selector);
 	if (sensitivity & 1) m_sibling_sensitive = true;
 	if (sensitivity & 2) m_structural_sensitive = true;
+	if (sensitivity & 4) m_backward_sensitive = true;
 	selector->m_order = (int)m_selectors.size();
 	selector->m_layer = layer;
 	m_selectors.push_back(selector);
