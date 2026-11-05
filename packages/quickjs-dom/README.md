@@ -195,7 +195,7 @@ export default {
 };
 ```
 
-> See [`packages/cloudflare-prerender`](../cloudflare-prerender) in the repository for a complete Cloudflare Worker example.
+> See [`examples/cloudflare-prerender`](../../examples/cloudflare-prerender) in the repository for a complete Cloudflare Worker example.
 
 ---
 

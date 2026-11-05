@@ -86,6 +86,6 @@ tmp/
 # Cloudflare
 .wrangler
 .cloudflare/
-packages/cloudflare-screenshot/.dev.vars
-packages/cloudflare-prerender/.dev.vars
+examples/cloudflare-screenshot/.dev.vars
+examples/cloudflare-prerender/.dev.vars
 

@@ -1,6 +1,6 @@
 // Shared `cf dev` harness for the Cloudflare package smoke scripts.
 //
-// Both `packages/e2e-cloudflare` and `packages/cloudflare-ogp` used to carry a
+// Both `packages/e2e-cloudflare` and `examples/cloudflare-ogp` used to carry a
 // near-identical copy of the start/wait/stop plumbing. This module owns it:
 // the package scripts only declare the route assertions they care about.
 //

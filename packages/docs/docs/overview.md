@@ -170,8 +170,8 @@ const result = await htmlToImage(mod, {
 ## プロジェクト構成
 
 - **`packages/html-to-image`**: 公開 npm パッケージ。TypeScript ファサード、各ランタイム対応、CLI、Worker プール。
-- **`packages/cloudflare-ogp`**: Cloudflare Workers で OGP 画像生成を行うサンプルプロジェクト。
-- **`packages/deno-ogp`**: Deno Deploy での利用サンプル。
+- **`examples/cloudflare-ogp`**: Cloudflare Workers で OGP 画像生成を行うサンプルプロジェクト。
+- **`examples/deno-ogp`**: Deno Deploy での利用サンプル。
 - **`packages/playground`**: ブラウザ上で動作する Web Playground。HTML → 画像 / PDF、画像の最適化、Markdown → PDF（`?mode=markdown`。テンプレート、テーマ、表紙・目次・しおり、数式を、その場で切り替えて PDF を確認できる）、Mermaid（`?mode=mermaid`。全図種のサンプル、テーマ、入力の補正、出力形式を切り替え、ギャラリーで一覧できる）の 4 つのモード。
 - **`packages/visual-test`**: 視覚回帰テストスイート。
 - **`src/cpp`**: C++ / Skia / litehtml コアエンジンおよび Emscripten バインディング。

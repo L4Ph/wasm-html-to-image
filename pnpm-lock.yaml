@@ -24,14 +24,14 @@ importers:
         specifier: ^7.0.2
         version: 7.0.2
 
-  packages/cloudflare-ogp:
+  examples/cloudflare-ogp:
     dependencies:
       preact:
         specifier: ^11.1.1
         version: 11.1.1(preact-render-to-string@6.7.0)
       wasm-html-to-image:
         specifier: workspace:*
-        version: link:../html-to-image
+        version: link:../../packages/html-to-image
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20261103.1
@@ -49,11 +49,11 @@ importers:
         specifier: ^4.157.0
         version: 4.157.0(@cloudflare/workers-types@5.20261103.1)(@types/node@26.6.6)
 
-  packages/cloudflare-prerender:
+  examples/cloudflare-prerender:
     dependencies:
       wasm-quickjs-dom:
         specifier: workspace:*
-        version: link:../quickjs-dom
+        version: link:../../packages/quickjs-dom
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20261103.1
@@ -71,11 +71,11 @@ importers:
         specifier: ^4.157.0
         version: 4.157.0(@cloudflare/workers-types@5.20261103.1)(@types/node@26.6.6)
 
-  packages/cloudflare-screenshot:
+  examples/cloudflare-screenshot:
     dependencies:
       wasm-html-to-image:
         specifier: workspace:*
-        version: link:../html-to-image
+        version: link:../../packages/html-to-image
     devDependencies:
       '@cloudflare/workers-types':
         specifier: ^5.20261103.1
@@ -93,7 +93,7 @@ importers:
         specifier: ^4.157.0
         version: 4.157.0(@cloudflare/workers-types@5.20261103.1)(@types/node@26.6.6)
 
-  packages/deno-ogp: {}
+  examples/deno-ogp: {}
 
   packages/docs:
     dependencies:
@@ -3750,9 +3750,6 @@ packages:
 
   '@types/node@17.0.45':
     resolution: {integrity: sha512-w+tIMs3rq2afQdsPJlODhoUEKzFP1ayaoyl1CcnwtIlsVe7K7bA1NGm4s3PraqTLlXnbIN84zuBlxBWo1u9BLw==}
-
-  '@types/node@26.6.5':
-    resolution: {integrity: sha512-uMzsv9stDdofIZBx4UGh4Z9ZgXnGC9seRDscilBcTHAeOFk67MZg/k9bWVfO+bk4qZmG+l52hRnLwUiH2LnJTg==}
 
   '@types/node@26.6.6':
     resolution: {integrity: sha512-MzQj+8Kx3XI40OmUAE6Qoh58ZMNstNNMwn2nfd3qWsfe7nDNSqJNzes4njhz6AHwrSHOffSLwXU6yb474Q4aog==}
@@ -13140,10 +13137,6 @@ snapshots:
 
   '@types/node@17.0.45': {}
 
-  '@types/node@26.6.5':
-    dependencies:
-      undici-types: 8.9.0
-
   '@types/node@26.6.6':
     dependencies:
       undici-types: 8.9.0
@@ -15636,7 +15629,7 @@ snapshots:
       '@jest/environment': 30.5.2
       '@jest/fake-timers': 30.5.2
       '@jest/types': 30.5.1
-      '@types/node': 26.6.5
+      '@types/node': 26.6.6
       jest-mock: 30.5.2
       jest-util: 30.5.1
       jest-validate: 30.5.1

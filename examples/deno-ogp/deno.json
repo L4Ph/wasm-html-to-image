@@ -7,8 +7,8 @@
     "preact-render-to-string": "npm:preact-render-to-string",
     "@unocss/core": "npm:@unocss/core",
     "@unocss/preset-wind4": "npm:@unocss/preset-wind4",
-    "html-to-image": "../html-to-image/dist/single.js",
-    "html-to-image/preact": "../html-to-image/dist/preact.js",
-    "html-to-image/tailwind": "../html-to-image/dist/tailwind.js"
+    "html-to-image": "../../packages/html-to-image/dist/single.js",
+    "html-to-image/preact": "../../packages/html-to-image/dist/preact.js",
+    "html-to-image/tailwind": "../../packages/html-to-image/dist/tailwind.js"
   }
 }
