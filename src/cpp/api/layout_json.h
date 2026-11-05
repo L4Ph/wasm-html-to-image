@@ -14,6 +14,7 @@
 // With `include_inline`, inline elements are reported too, as the box enclosing all their line fragments.
 // Lays the document out first when it is not ready for these inputs.
 std::string satoru_api_layout_json(SatoruInstance* inst, const std::string& html, int width,
-                                   int height, int mediaType, bool include_inline = false);
+                                   int height, int mediaType, bool include_inline = false,
+                                   bool include_style = false);
 
 #endif  // HTML_TO_IMAGE_LAYOUT_JSON_H

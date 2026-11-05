@@ -1038,8 +1038,17 @@
   // at other elements, so the old boxes are stale and must be measured again from a fresh markForLayout().
   var markRevision = -1, layoutRevision = -1, staleWarned = false;
   var layoutWarn = function (message) { if (g.console && g.console.warn) g.console.warn(message); };
+  // Live layout (prototype): the host registers `window.__layoutProvider(html) -> boxes JSON` (a synchronous call into the
+  // renderer). A layout read then re-measures whenever the DOM moved since the last measurement, so the boxes are never stale.
+  var liveLayout = false, refreshing = false;
+  var ensureLive = function () {
+    if (!liveLayout || refreshing) return;
+    if (boxes !== null && g.__native.dom.version() === layoutRevision) return;
+    refreshing = true;
+    try { g.__edgeSetLayout(g.__layoutProvider(g.__edgeMarkLayout())); } finally { refreshing = false; }
+  };
   var checkLayoutRevision = function () {
-    if (boxes === null || staleWarned) return;
+    if (liveLayout || boxes === null || staleWarned) return;
     if (g.__native.dom.version() !== layoutRevision) {
       staleWarned = true;
       layoutWarn("layout is stale: the DOM changed after setLayout(), so getBoundingClientRect(), offset*, client* and scroll* still report the old boxes; call markForLayout() and setLayout() again");
@@ -1051,7 +1060,7 @@
     // assigns the same numbers again and leaves those boxes valid, so there is nothing to warn about.
     // `markRevision` is the revision right after the clone was marked, so this compares the document alone and not
     // the clone work the previous mark did.
-    if (markRevision !== -1 && markRevision !== g.__native.dom.version()) {
+    if (!liveLayout && markRevision !== -1 && markRevision !== g.__native.dom.version()) {
       layoutWarn("markForLayout(): the DOM changed after an earlier markForLayout(), so boxes measured from it may no longer match the elements; measure again");
     }
     var d = g.document, clone = d.cloneNode(true);
@@ -1071,14 +1080,14 @@
   };
   g.__edgeSetLayout = function (json) {
     var current = g.__native.dom.version();
-    if (markRevision !== -1 && markRevision !== current) {
+    if (!liveLayout && markRevision !== -1 && markRevision !== current) {
       layoutWarn("setLayout(): the DOM changed after markForLayout(), so these boxes were measured from a different document; call markForLayout() again and pass its fresh boxes");
     }
     boxes = JSON.parse(json);
     layoutRevision = current;
     staleWarned = false;
     var P = g.Element.prototype;
-    var box = function (el) { checkLayoutRevision(); return (boxes && el.__qi !== undefined && boxes[el.__qi]) || [0, 0, 0, 0]; };
+    var box = function (el) { ensureLive(); checkLayoutRevision(); return (boxes && el.__qi !== undefined && boxes[el.__qi]) || [0, 0, 0, 0]; };
     var def = function (name, get) { Object.defineProperty(P, name, { configurable: true, get: get }); };
     var rect = function (el) {
       var b = box(el);
@@ -1095,5 +1104,17 @@
     def("clientHeight", function () { return Math.round(box(this)[3]); });
     def("scrollWidth", function () { return Math.round(box(this)[2]); });
     def("scrollHeight", function () { return Math.round(box(this)[3]); });
+  };
+  // the renderer's used style of an element ({display, position, color, ...}) from the last live measurement, or null
+  g.__edgeLiveStyle = function (el) {
+    if (!liveLayout) return null;
+    ensureLive();
+    var b = boxes && el.__qi !== undefined ? boxes[el.__qi] : null;
+    return (b && b[4]) || null;
+  };
+  g.__edgeEnableLiveLayout = function () {
+    liveLayout = true;
+    g.__edgeSetLayout("{}"); // installs the layout accessors
+    layoutRevision = -1; // nothing measured yet: the first read measures
   };
 })(globalThis);

@@ -89,10 +89,109 @@ struct box_entry {
     litehtml::style_display display = litehtml::display_none;
     double x = 0, y = 0, w = 0, h = 0;
     bool has_cells = false;  // table rows only: any direct cell child entry
+    std::string style;       // computed-style object body (with include_style)
 };
 
+const char* display_name(litehtml::style_display d) {
+    using namespace litehtml;
+    switch (d) {
+        case display_none: return "none";
+        case display_block: return "block";
+        case display_inline: case display_inline_text: return "inline";
+        case display_inline_block: return "inline-block";
+        case display_inline_table: return "inline-table";
+        case display_list_item: return "list-item";
+        case display_table: return "table";
+        case display_table_caption: return "table-caption";
+        case display_table_cell: return "table-cell";
+        case display_table_column: return "table-column";
+        case display_table_column_group: return "table-column-group";
+        case display_table_footer_group: return "table-footer-group";
+        case display_table_header_group: return "table-header-group";
+        case display_table_row: return "table-row";
+        case display_table_row_group: return "table-row-group";
+        case display_flex: return "flex";
+        case display_inline_flex: return "inline-flex";
+        case display_webkit_box: return "-webkit-box";
+        case display_webkit_inline_box: return "-webkit-inline-box";
+        case display_grid: return "grid";
+        case display_inline_grid: return "inline-grid";
+        case display_contents: return "contents";
+        case display_flow_root: return "flow-root";
+    }
+    return "block";
+}
+
+const char* overflow_name(litehtml::overflow o) {
+    using namespace litehtml;
+    switch (o) {
+        case overflow_hidden: return "hidden";
+        case overflow_scroll: return "scroll";
+        case overflow_auto: return "auto";
+        case overflow_clip: return "clip";
+        default: return "visible";
+    }
+}
+
+// The used values litehtml computed for an element, as the body of a JSON object (px numbers, CSS keywords).
+std::string style_json(const std::shared_ptr<element>& el, const std::shared_ptr<litehtml::render_item>& ri) {
+    using namespace litehtml;
+    const css_properties& css = el->css();
+    std::string o;
+    auto key = [&](const char* k) {
+        if (!o.empty()) o += ',';
+        o += '"';
+        o += k;
+        o += "\":";
+    };
+    auto str = [&](const char* k, const char* v) {
+        key(k);
+        o += '"';
+        o += v;
+        o += '"';
+    };
+    auto num = [&](const char* k, double v) {
+        key(k);
+        number(o, v);
+    };
+    str("display", display_name(css.get_display()));
+    const char* pos[] = {"static", "relative", "absolute", "fixed"};
+    str("position", pos[css.get_position() & 3]);
+    const char* fl[] = {"none", "left", "right"};
+    str("float", fl[css.get_float() % 3]);
+    const char* vis[] = {"visible", "hidden", "collapse"};
+    str("visibility", vis[css.get_visibility() % 3]);
+    str("overflowX", overflow_name(css.get_overflow_x()));
+    str("overflowY", overflow_name(css.get_overflow_y()));
+    const char* ta[] = {"left", "right", "center", "justify", "start", "end"};
+    str("textAlign", ta[css.get_text_align() % 6]);
+    web_color c = css.get_color();
+    key("color");
+    char buf[64];
+    if (c.alpha == 255) snprintf(buf, sizeof(buf), "\"rgb(%d, %d, %d)\"", c.red, c.green, c.blue);
+    else snprintf(buf, sizeof(buf), "\"rgba(%d, %d, %d, %.3g)\"", c.red, c.green, c.blue, c.alpha / 255.0);
+    o += buf;
+    num("fontSize", css.get_font_size());
+    num("opacity", css.get_opacity());
+    if (ri) {
+        num("marginTop", ri->margin_top());
+        num("marginRight", ri->margin_right());
+        num("marginBottom", ri->margin_bottom());
+        num("marginLeft", ri->margin_left());
+        num("paddingTop", ri->padding_top());
+        num("paddingRight", ri->padding_right());
+        num("paddingBottom", ri->padding_bottom());
+        num("paddingLeft", ri->padding_left());
+        num("borderTop", ri->border_top());
+        num("borderRight", ri->border_right());
+        num("borderBottom", ri->border_bottom());
+        num("borderLeft", ri->border_left());
+    }
+    return o;
+}
+
 void walk(const std::shared_ptr<litehtml::render_item>& ri, path_index& paths,
-          std::vector<box_entry>& entries, bool include_inline) {
+          std::vector<box_entry>& entries, bool include_inline, bool with_style) {
     if (!ri) return;
     const auto& el = ri->src_el();
     if (is_tree_element(el)) {
@@ -111,6 +210,7 @@ void walk(const std::shared_ptr<litehtml::render_item>& ri, path_index& paths,
             e.y = pl.y - ri->padding_top() - ri->border_top();
             e.w = ri->pos().width + ri->padding_left() + ri->padding_right() + ri->border_left() + ri->border_right();
             e.h = ri->pos().height + ri->padding_top() + ri->padding_bottom() + ri->border_top() + ri->border_bottom();
+            if (with_style) e.style = style_json(el, ri);
             entries.push_back(std::move(e));
         } else if (include_inline && display == litehtml::display_inline && strcmp(tag, "br") != 0) {
             // an inline element fragments across lines: report the box that encloses all its fragments
@@ -135,11 +235,12 @@ void walk(const std::shared_ptr<litehtml::render_item>& ri, path_index& paths,
                 e.y = y0;
                 e.w = x1 - x0;
                 e.h = y1 - y0;
+                if (with_style) e.style = style_json(el, ri);
                 entries.push_back(std::move(e));
             }
         }
     }
-    for (const auto& child : ri->children()) walk(child, paths, entries, include_inline);
+    for (const auto& child : ri->children()) walk(child, paths, entries, include_inline, with_style);
 }
 
 bool is_direct_child(const std::string& parent, const std::string& path) {
@@ -273,7 +374,7 @@ void fix_up_table_boxes(std::vector<box_entry>& entries) {
 }  // namespace
 
 std::string satoru_api_layout_json(SatoruInstance* inst, const std::string& html, int width,
-                                   int height, int mediaType, bool include_inline) {
+                                   int height, int mediaType, bool include_inline, bool include_style) {
     if (!inst) return "[]";
     width = normalize_viewport_width(width);
     if (!inst->document_ready_for(html, width, height, mediaType)) {
@@ -282,7 +383,7 @@ std::string satoru_api_layout_json(SatoruInstance* inst, const std::string& html
     if (!inst->doc || !inst->doc->root_render()) return "[]";
     path_index paths;
     std::vector<box_entry> entries;
-    walk(inst->doc->root_render(), paths, entries, include_inline);
+    walk(inst->doc->root_render(), paths, entries, include_inline, include_style);
     fix_up_table_boxes(entries);
     std::string out = "[";
     bool first = true;
@@ -305,6 +406,11 @@ std::string satoru_api_layout_json(SatoruInstance* inst, const std::string& html
         number(out, e.w);
         out += ",\"h\":";
         number(out, e.h);
+        if (include_style) {
+            out += ",\"s\":{";
+            out += e.style;
+            out += '}';
+        }
         out += '}';
     }
     out += ']';

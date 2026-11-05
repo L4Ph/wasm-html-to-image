@@ -24,6 +24,8 @@ std::vector<std::string> val_to_html_vector(emscripten::val htmls);
 
 emscripten::val satoru_render_val(SatoruInstance* inst, emscripten::val htmls, int width,
                                   int height, int format, emscripten::val options_val);
+std::string satoru_layout_style_json_val(SatoruInstance* inst, emscripten::val htmls, int width,
+                                         int height, int mediaType, bool includeInline);
 std::string satoru_layout_json_val(SatoruInstance* inst, emscripten::val htmls, int width,
                                    int height, int mediaType, bool includeInline);
 void satoru_set_font_map_val(SatoruInstance* inst, emscripten::val fontMap);

@@ -670,9 +670,31 @@
   // the element styles' own class (nativedom.js), so el.style and a computed style are instances
   // of the one CSSStyleDeclaration; the fallback is for a layer running without nativedom.js
   var Computed = D.CSSStyleDeclarationCtor || function CSSStyleDeclaration() {};
+  // The used style of the renderer (layout_json's "s") over the JS cascade's values: keywords as litehtml resolved them
+  // (display of a floated box, an inherited color, a font-size in px) and the box metrics the cascade cannot know.
+  var overlayLive = function (values, s) {
+    var out = {}, k;
+    for (k in values) out[k] = values[k];
+    var px = function (n) { return fmtPx(n); };
+    out.display = s.display; out.position = s.position; out["float"] = s["float"]; out.visibility = s.visibility;
+    out["overflow-x"] = s.overflowX; out["overflow-y"] = s.overflowY;
+    out.overflow = s.overflowX === s.overflowY ? s.overflowX : s.overflowX + " " + s.overflowY;
+    out["text-align"] = s.textAlign; out.color = s.color; out["font-size"] = px(s.fontSize); out.opacity = String(s.opacity);
+    ["Top", "Right", "Bottom", "Left"].forEach(function (side) {
+      var l = side.toLowerCase();
+      out["margin-" + l] = px(s["margin" + side]);
+      out["padding-" + l] = px(s["padding" + side]);
+      out["border-" + l + "-width"] = px(s["border" + side]);
+    });
+    return out;
+  };
   var makeComputed = function (el, pseudo) {
     var getValues = function () {
-      return pseudo ? {} : computedOf(el, 0);
+      if (pseudo) return {};
+      var values = computedOf(el, 0);
+      // live layout: the renderer's used values replace the cascade's guesses for what it computed (see overlayLive)
+      var live = g.__edgeLiveStyle ? g.__edgeLiveStyle(el) : null;
+      return live ? overlayLive(values, live) : values;
     };
     var read = function (name) {
       var values = getValues();

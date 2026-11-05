@@ -154,6 +154,14 @@ std::string satoru_layout_json_val(SatoruInstance* inst, val htmls, int width, i
     return satoru_api_layout_json(inst, pages[0], width, height, mediaType, includeInline);
 }
 
+// Same walk with the computed (used) style of every element: `"s":{display,position,color,...}` (see api/layout_json.cpp).
+std::string satoru_layout_style_json_val(SatoruInstance* inst, val htmls, int width, int height,
+                                         int mediaType, bool includeInline) {
+    std::vector<std::string> pages = val_to_html_vector(htmls);
+    if (!inst || pages.empty()) return "[]";
+    return satoru_api_layout_json(inst, pages[0], width, height, mediaType, includeInline, true);
+}
+
 void satoru_set_font_map_val(SatoruInstance* inst, val fontMap) {
     if (!inst || fontMap.isUndefined() || fontMap.isNull()) return;
     std::map<std::string, std::string> m;
