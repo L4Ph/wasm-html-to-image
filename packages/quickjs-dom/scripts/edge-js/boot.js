@@ -1040,7 +1040,14 @@
   var layoutWarn = function (message) { if (g.console && g.console.warn) g.console.warn(message); };
   // Live layout (prototype): the host registers `window.__layoutProvider(html) -> boxes JSON` (a synchronous call into the
   // renderer). A layout read then re-measures whenever the DOM moved since the last measurement, so the boxes are never stale.
-  var liveLayout = false, refreshing = false;
+  var liveLayout = false, refreshing = false, liveMax = Infinity, liveWarned = false;
+  // Live layout stops for good (a page is rendered without layout: boxes are zero, getComputedStyle is the cascade's alone)
+  var disableLive = function (why) {
+    liveLayout = false;
+    boxes = null;
+    try { g.__native.dom.journalOn(false); } catch (e) { /* nothing to undo */ }
+    if (!liveWarned) { liveWarned = true; layoutWarn("live layout is off: " + why); }
+  };
   // The journal as the host reads it: attribute changes first (the elements they name are still in the host's document), then
   // the elements whose children changed, each with its children as HTML and every element in it carrying its id as the
   // first class token. Elements that came after the last mark get ids here.
@@ -1097,8 +1104,15 @@
         else if (r.charAt(0) === "+") { g.__edgeMergeLayout(r.slice(1)); return; }
         else json = r.slice(1);
       }
-      if (json === undefined) json = g.__layoutProvider(g.__edgeMarkLayout(), "").slice(1);
+      if (json === undefined) {
+        // the whole tree goes to the host: a page too big for it (a Worker has 128 MB for both wasm modules) is not laid out
+        if (g.document.getElementsByTagName("*").length > liveMax) { disableLive("the page has more than " + liveMax + " elements"); return; }
+        json = g.__layoutProvider(g.__edgeMarkLayout(), "").slice(1);
+      }
       g.__edgeSetLayout(json);
+    } catch (e) {
+      // the host failed (out of memory, a bug): the page keeps running, without layout
+      disableLive("the renderer failed: " + (e && e.message ? e.message : e));
     } finally { refreshing = false; }
   };
   var checkLayoutRevision = function () {
@@ -1175,7 +1189,9 @@
     for (var k in delta) { if (delta[k] === null) delete boxes[k]; else boxes[k] = delta[k]; }
     layoutRevision = g.__native.dom.version();
   };
-  g.__edgeEnableLiveLayout = function () {
+  // maxElements: pages with more elements than this are not laid out (the host's memory decides: a Worker holds about 6000)
+  g.__edgeEnableLiveLayout = function (maxElements) {
+    if (typeof maxElements === "number" && maxElements > 0) liveMax = maxElements;
     liveLayout = true;
     g.__native.dom.journalOn(true, g.document);
     g.__edgeSetLayout("{}"); // installs the layout accessors
