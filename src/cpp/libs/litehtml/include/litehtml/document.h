@@ -208,6 +208,7 @@ namespace litehtml
 		void create_node(void* gnode, elements_list& elements, bool parseTextNode, bool process_root);
 		bool update_media_lists(const media_features& features);
 		void fix_tables_layout();
+		void drop_render_links();
 		void fix_table_children(const std::shared_ptr<render_item>& el_ptr, style_display disp, const char* disp_str);
 		void fix_table_parent(const std::shared_ptr<render_item> & el_ptr, style_display disp, const char* disp_str);
 	};

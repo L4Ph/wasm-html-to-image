@@ -1,0 +1,20 @@
+import { createDOM } from "wasm-quickjs-dom";
+import { loadHtmlToImageModule } from "../dist/loader.js";
+const ext = () => (process.memoryUsage().external / 1048576).toFixed(0);
+const n = Number(process.argv[2] ?? 3000);
+console.log("start external", ext(), "MB");
+const module = await loadHtmlToImageModule();
+console.log("renderer module loaded:", ext(), "MB");
+const inst = module.satoru_create_instance();
+console.log("renderer instance:", ext(), "MB");
+let b = ""; for (let i = 0; i < n; i++) b += `<div class="r c${i % 5}" style="height:${10 + (i % 7)}px;padding:2px"><span>row ${i}</span></div>`;
+const dom = await createDOM({ html: `<!doctype html><html><head><style>.r{margin:1px}.c1{color:#036}</style></head><body style="margin:0">${b}</body></html>` }, { settleMs: 0 });
+console.log(`QuickJS page with ${2 * n} elements:`, ext(), "MB");
+dom.bridge().window.__layoutProvider = (html, ops) => {
+  if (ops) return "+" + module.satoru_live_sync(inst, true);
+  module.satoru_live_open(inst, html, 600, 0); console.log("   html sent to renderer:", (html.length / 1048576).toFixed(1), "MB; after open", ext(), "MB"); return "=" + module.satoru_live_sync(inst, false);
+};
+await dom.eval("__edgeEnableLiveLayout()");
+await dom.eval("globalThis.els = document.body.children; els[0].getBoundingClientRect()");
+console.log("after the first layout read (mark + open + boxes):", ext(), "MB");
+dom.close();

@@ -1008,6 +1008,7 @@ pixel_t document::render( pixel_t max_width, render_type rt )
 			propagate_body_writing_mode(m_root);
 
 			// Rebuild rendering tree because structure might have changed (e.g. pseudo-elements)
+			drop_render_links();
 			m_root_render = m_root->create_render_item(nullptr);
 			fix_tables_layout();
 			if (m_root_render)
@@ -1051,6 +1052,7 @@ pixel_t document::render( pixel_t max_width, render_type rt )
 				fit(m_root);
 				if (!changed) break;
 				m_root->compute_styles();
+				drop_render_links();
 				m_root_render = m_root->create_render_item(nullptr);
 				fix_tables_layout();
 				if (m_root_render) m_root_render = m_root_render->init();
@@ -1780,6 +1782,20 @@ void document::append_children_from_string(element& parent, const char* str, boo
 	fix_tables_layout();
 }
 
+// The render items of the tree about to be replaced: every element lists them as weak pointers, and a weak pointer keeps the
+// storage of an item made by make_shared alive after the item is gone. A tree built again and again (live layout, container
+// queries, tables) would otherwise keep every old one.
+void document::drop_render_links()
+{
+	std::function<void(const element::ptr&)> drop = [&](const element::ptr& el)
+	{
+		el->m_renders.clear();
+		for (const auto& c : el->m_children) drop(c);
+	};
+	if (m_root) drop(m_root);
+	m_root_render.reset();
+}
+
 bool document::live_set_attr(const std::shared_ptr<element>& el, const char* name, const char* value)
 {
 	if (!el || !name || el->get_document().get() != this) return false;
@@ -1897,6 +1913,7 @@ document::live_timing document::live_relayout(const std::vector<std::shared_ptr<
 	m_live_new.clear();
 	auto t3 = now();
 	m_tabular_elements.clear();
+	drop_render_links();
 	m_root_render = m_root->create_render_item(nullptr);
 	fix_tables_layout();
 	if (m_root_render) m_root_render = m_root_render->init();
@@ -1943,6 +1960,7 @@ document::live_timing document::live_probe(pixel_t max_width, int mode)
 	m_root->compute_styles();
 	auto t3 = now();
 	m_tabular_elements.clear();
+	drop_render_links();
 	m_root_render = m_root->create_render_item(nullptr);
 	fix_tables_layout();
 	if (m_root_render) m_root_render = m_root_render->init();
