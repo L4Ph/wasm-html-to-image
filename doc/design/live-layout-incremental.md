@@ -494,3 +494,16 @@ CPU 時間(`wrangler tail` の `cpuTime`): 最初のリクエスト(isolate の�
 | live、1,500 行 テキスト / `append` | (10 秒超) | 938 / 935 ms |
 
 残り: 表のテキスト・`append` は、`document::render()` の 2 回目が文書全体を再スタイルするため、行数に比例して遅い(1,500 行で約 0.9 秒)。
+
+## 28. 表のための 2 回目のレイアウトをやめる
+
+`document::render()` は、表がある(`m_tabular_elements` が空でない)と、1 回目のレイアウトのあとに文書全体を `refresh_styles` + `compute_styles` し、描画木を作り直してもう一度レイアウトしていた(コンテナクエリがあるときと同じ経路)。表のページが 2 倍かかり、live の変更でも毎回全体の再スタイルが走る原因だった。
+
+表のためだけのこの 2 回目をやめ、コンテナクエリがあるときだけにした。確認: ビジュアルテスト 1,084 件・html-to-image 212 件・quickjs-dom 281 件・C++ 5 件が通る。さらに、colspan/rowspan、`border-collapse`、`table-layout: fixed`、`<col>`、入れ子の表、`display: table*` の div、`caption`、`cellspacing`/`cellpadding` を含む 5 ページの `layout_style_json`(箱とスタイル)を変更前と比べて、バイト単位で同じだった。
+
+| live の変更 1 回(表) | 第 27 節のあと | 今回 |
+|---|---|---|
+| 500 行(1,500 要素)テキスト / `append` | 250 / 247 ms | **166 / 159 ms** |
+| 1,500 行(4,500 要素)テキスト / `append` | 938 / 935 ms | **584 / 634 ms** |
+
+(2 回目が本当に必要な表のページが見つかった場合は、`has_cq || has_tables` に戻せば元の挙動。)

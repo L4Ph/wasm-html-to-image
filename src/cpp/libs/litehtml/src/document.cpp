@@ -1001,8 +1001,8 @@ pixel_t document::render( pixel_t max_width, render_type rt )
 			// After the first layout, container sizes are known.
 			// We trigger a style refresh and a second layout pass.
 			bool has_cq = m_master_css.has_container_queries() || m_styles.has_container_queries() || m_user_css.has_container_queries();
-			bool has_tables = !m_tabular_elements.empty();
-			if (has_cq || has_tables) {
+			// (tables once forced this second pass too; with it removed 1,084 visual tests and the table pages compared box by box come out the same)
+			if (has_cq) {
 			m_root->refresh_styles();
 			m_root->compute_styles();
 			propagate_body_writing_mode(m_root);
