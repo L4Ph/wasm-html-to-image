@@ -75,7 +75,7 @@ void put_chunk(std::vector<uint8_t>& out, const char type[4], const uint8_t* dat
     put_be32(out, (uint32_t)crc);
 }
 
-sk_sp<SkData> encode_png_indexed(const SkPixmap& pixmap) {
+sk_sp<SkData> encode_png_indexed(const SkPixmap& pixmap, int level) {
     const int width = pixmap.width(), height = pixmap.height();
     if (width <= 0 || height <= 0) return nullptr;
     if (pixmap.colorType() != kRGBA_8888_SkColorType && pixmap.colorType() != kBGRA_8888_SkColorType)
@@ -153,7 +153,7 @@ sk_sp<SkData> encode_png_indexed(const SkPixmap& pixmap) {
 
     uLongf bound = compressBound((uLong)raw.size());
     std::vector<uint8_t> idat(bound);
-    if (compress2(idat.data(), &bound, raw.data(), (uLong)raw.size(), 6) != Z_OK) return nullptr;
+    if (compress2(idat.data(), &bound, raw.data(), (uLong)raw.size(), level) != Z_OK) return nullptr;
     put_chunk(png, "IDAT", idat.data(), bound);
     put_chunk(png, "IEND", nullptr, 0);
     return SkData::MakeWithCopy(png.data(), png.size());
@@ -205,7 +205,7 @@ bool pixmap_has_translucent_pixels(const SkPixmap& pm) {
 }
 
 // Returns nullptr when the pixmap is not 8888 (the caller falls back to SkPngEncoder).
-sk_sp<SkData> encode_png_fast(const SkPixmap& pm, bool allow_rgb) {
+sk_sp<SkData> encode_png_fast(const SkPixmap& pm, bool allow_rgb, int level) {
     const int width = pm.width(), height = pm.height();
     if (width <= 0 || height <= 0) return nullptr;
     if (pm.colorType() != kRGBA_8888_SkColorType && pm.colorType() != kBGRA_8888_SkColorType)
@@ -218,7 +218,7 @@ sk_sp<SkData> encode_png_fast(const SkPixmap& pm, bool allow_rgb) {
 
     z_stream zs;
     std::memset(&zs, 0, sizeof(zs));
-    if (deflateInit2(&zs, 6, Z_DEFLATED, 15, 8, rgb ? Z_DEFAULT_STRATEGY : Z_FILTERED) != Z_OK) return nullptr;
+    if (deflateInit2(&zs, level, Z_DEFLATED, 15, 8, rgb ? Z_DEFAULT_STRATEGY : Z_FILTERED) != Z_OK) return nullptr;
     std::vector<uint8_t> idat(deflateBound(&zs, (uLong)((stride + 1) * height)));
     zs.next_out = idat.data();
     zs.avail_out = (uInt)idat.size();
@@ -267,8 +267,8 @@ sk_sp<SkData> encode_png_fast(const SkPixmap& pm, bool allow_rgb) {
 
 }  // namespace
 
-sk_sp<SkData> encode_png_rgba(const SkPixmap& pixmap, bool allow_rgb) {
-    if (sk_sp<SkData> fast = encode_png_fast(pixmap, allow_rgb)) return fast;
+sk_sp<SkData> encode_png_rgba(const SkPixmap& pixmap, bool allow_rgb, int level) {
+    if (sk_sp<SkData> fast = encode_png_fast(pixmap, allow_rgb, level)) return fast;
     SkDynamicMemoryWStream stream;
     SkPngEncoder::Options options;
     // Up filter only: trying all five filters per row (Skia default) cost 20-40%
@@ -279,11 +279,11 @@ sk_sp<SkData> encode_png_rgba(const SkPixmap& pixmap, bool allow_rgb) {
     return stream.detachAsData();
 }
 
-sk_sp<SkData> encode_png(const SkPixmap& pixmap) {
+sk_sp<SkData> encode_png(const SkPixmap& pixmap, int level) {
     // Images of at most 256 colors are stored indexed (about 3x smaller); everything else
     // takes the regular RGBA path.
-    if (sk_sp<SkData> indexed = encode_png_indexed(pixmap)) return indexed;
-    return encode_png_rgba(pixmap, true);
+    if (sk_sp<SkData> indexed = encode_png_indexed(pixmap, level)) return indexed;
+    return encode_png_rgba(pixmap, true, level);
 }
 
 std::string encode_png_data_url(const SkBitmap& bitmap) {
@@ -479,7 +479,7 @@ EncodeResult encode_frames(const EncodeFrameView* frames, size_t count,
         }
         case RenderFormat::PNG: {
             out.format_name = "png";
-            out.data = encode_png(first.pixmap());
+            out.data = encode_png(first.pixmap(), png_zlib_level(options.speed));
             return out;
         }
         case RenderFormat::WebP: {
@@ -528,7 +528,7 @@ EncodeResult encode_frames(const EncodeFrameView* frames, size_t count,
                 return out;
             }
             out.format_name = "png";
-            out.data = encode_png(first.pixmap());
+            out.data = encode_png(first.pixmap(), png_zlib_level(options.speed));
             return out;
         }
         case RenderFormat::GIF: {

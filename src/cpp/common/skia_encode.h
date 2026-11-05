@@ -48,9 +48,11 @@ struct EncodeResult {
 
 // --- 単形式primitive (satoru renderersの使い方と1:1) ---
 
-sk_sp<SkData> encode_png(const SkPixmap& pixmap);
+// `level` is the zlib level (6 = the default). `png_zlib_level(speed)` maps the encode `speed` option to it.
+sk_sp<SkData> encode_png(const SkPixmap& pixmap, int level = 6);
+inline int png_zlib_level(int speed) { return speed >= 11 ? 1 : speed <= 5 ? 7 : 12 - speed; }  // 6 (default) -> 6; above 7 costs 4x the time for ~2% size
 // Always RGBA (no palette): for callers that need a fixed color type, e.g. APNG frames.
-sk_sp<SkData> encode_png_rgba(const SkPixmap& pixmap, bool allow_rgb = false);
+sk_sp<SkData> encode_png_rgba(const SkPixmap& pixmap, bool allow_rgb = false, int level = 6);
 
 // PNG encode + base64 `data:image/png` URL. Shared implementation behind
 // `encode_image_to_svg` and direct `encode_png_data_url` callers (e.g. svg_renderer.cpp).
