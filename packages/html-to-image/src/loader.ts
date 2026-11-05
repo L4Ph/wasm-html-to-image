@@ -100,6 +100,14 @@ export interface HtmlToImageModule {
     mediaType: number,
     includeInline: boolean,
   ): string;
+  /**
+   * Live layout (see `enableLiveLayout`): `satoru_live_open` builds the document the instance holds from marked HTML,
+   * `satoru_live_apply` applies the page's journal of changes to it (`"rebuild"` when it cannot), and `satoru_live_sync`
+   * answers the boxes and used styles by element id (`delta`: only what changed since the last answer).
+   */
+  satoru_live_open?(inst: WasmInstancePtr, html: string, width: number, mediaType: number): void;
+  satoru_live_apply?(inst: WasmInstancePtr, ops: string, width: number): "ok" | "rebuild";
+  satoru_live_sync?(inst: WasmInstancePtr, delta: boolean): string;
   satoru_get_pending_resources?(inst: WasmInstancePtr): unknown;
   satoru_add_resource?(
     inst: WasmInstancePtr,

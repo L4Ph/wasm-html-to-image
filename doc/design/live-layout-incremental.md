@@ -344,3 +344,25 @@ P0 の結果で、全体の見積りが決まる。**P0 を先にやる**。
 | 直後の通常のページ(同じ isolate) | 通常どおり動く |
 
 つまり、上限を指定しなくても、メモリ不足の `RangeError` はページを巻き込まない。上限を指定すれば、失敗する前に約 0.3 秒で止められる。
+
+## 20. 公開 API: `enableLiveLayout`
+
+試作で手動で配線していたもの(`window.__layoutProvider`、`satoru_live_*` の呼び分け)を、`wasm-html-to-image/javascript` の関数にした(`src/live-layout.ts`)。
+
+```ts
+import { createDOM, enableLiveLayout } from "wasm-html-to-image/javascript";
+import { getDefaultModule } from "wasm-html-to-image/workerd"; // Node では loadHtmlToImageModule()
+
+const dom = await createDOM({ url }, { width: 1200 });
+const layout = await enableLiveLayout(dom, await getDefaultModule(), { width: 1200, maxElements: 5000 });
+await dom.eval("document.querySelector('main').getBoundingClientRect().height");
+layout.dispose(); // ページを閉じるとき
+dom.close();
+```
+
+- 最初に 1 回だけ、ページの今の HTML から、スタイルシート・フォント・画像を非同期に解決する(`render` と同じ `fontMap` / `fallbackFonts` / `limits` / `resolveResource` / `css` / `fonts` / `userAgent` が使える)。以後の読み取りは同期で、何も fetch しない。スクリプトがあとから足した外部リソースは取りに行かない。
+- `maxElements`(第 19 節のガード)。Workers では 5,000 を勧める。
+- 既存の `measureLayout`(描画を 1 回走らせてスナップショットを渡す)は変えていない。ライブレイアウトは、ページが変わるたびに読み直す必要がある用途向け。
+- エンジンの wasm に `satoru_live_*` がないと、`enableLiveLayout` は分かるエラーで失敗する。
+
+テスト: `tests/live-layout.test.ts`(4 件)。座標・スタイルの読み取りと追従(属性、テキスト、挿入、削除)、60 ステップの乱数変更で「作り直した文書の結果」と一致、`maxElements`、`dispose()` 後の縮退。html-to-image のテスト全体(210 件)も通る。

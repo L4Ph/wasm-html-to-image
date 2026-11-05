@@ -22,6 +22,8 @@ import { applyScripted } from "./js-apply.js";
 export { createDOM, runPageScriptsQuickJS } from "wasm-quickjs-dom";
 export type { CreateDOMOptions, EdgeJavaScriptEngine, ImageResourceRecord, QuickJSDOM } from "wasm-quickjs-dom";
 export type { JavaScriptOptions, ScriptedPage } from "./js-apply.js";
+export { enableLiveLayout } from "./live-layout.js";
+export type { LiveLayout, LiveLayoutOptions } from "./live-layout.js";
 
 /**
  * Apply the `javascript` option with the QuickJS engine: HTML and URL inputs are replaced by the scripted DOM.
