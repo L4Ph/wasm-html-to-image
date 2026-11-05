@@ -24,6 +24,12 @@
     var E = W.FocusEvent || W.Event;
     return new E(type, { bubbles: bubbles, cancelable: false, composed: true, relatedTarget: related || null });
   };
+  // the elements :focus / :focus-within / :hover / :active / :target are about live in the selector engine (setState); a change
+  // moves __styleEpoch, which the computed-style cache includes in its key
+  var setState = function (kind, el) {
+    D.setState(kind, el || null);
+    globalThis.__styleEpoch = (globalThis.__styleEpoch || 0) + 1;
+  };
   var activeOf = function (doc) { return focused && focused.isConnected && focused.ownerDocument === doc ? focused : doc.body; };
   getter(P.Document, "activeElement", function () { return activeOf(this); });
   var FOCUSED_DOCS = new WeakSet();
@@ -31,6 +37,7 @@
     if (!focusable(this) || focused === this) return;
     var prev = focused && focused.isConnected ? focused : null;
     focused = this;
+    setState(0, this);
     if (this.ownerDocument) FOCUSED_DOCS.add(this.ownerDocument); // a document that has been focused stays focused (jsdom's answer after blur, too)
     if (prev) { prev.dispatchEvent(focusEvent("blur", false, this)); prev.dispatchEvent(focusEvent("focusout", true, this)); }
     this.dispatchEvent(focusEvent("focus", false, prev));
@@ -39,9 +46,32 @@
   def(P.HTMLElement, "blur", function () {
     if (focused !== this) return;
     focused = null;
+    setState(0, null);
     this.dispatchEvent(focusEvent("blur", false, null));
     this.dispatchEvent(focusEvent("focusout", true, null));
   });
+
+  // :hover and :active follow the pointer events the page (or user-event, or dom.click) dispatches; :target follows the hash
+  // (installed by boot.js once the window exists)
+  globalThis.__edgeInstallState = function () {
+    var elOf = function (t) { while (t && t.nodeType !== 1) t = t.parentNode; return t || null; };
+    var onPointer = function (type, fn) { try { globalThis.addEventListener(type, fn, true); } catch (e) { /* no window yet */ } };
+    ["mouseover", "pointerover"].forEach(function (t) { onPointer(t, function (e) { setState(1, elOf(e.target)); }); });
+    ["mouseout", "pointerout"].forEach(function (t) { onPointer(t, function (e) { if (!e.relatedTarget) setState(1, null); }); });
+    ["mousedown", "pointerdown"].forEach(function (t) { onPointer(t, function (e) { setState(2, elOf(e.target)); }); });
+    ["mouseup", "pointerup", "dragend", "pointercancel"].forEach(function (t) { onPointer(t, function () { setState(2, null); }); });
+    var retarget = function () {
+      var doc = globalThis.document, id = "";
+      try { id = decodeURIComponent(String(globalThis.location.hash || "").slice(1)); } catch (e) { id = String(globalThis.location.hash || "").slice(1); }
+      var el = null;
+      if (id && doc) {
+        el = doc.getElementById(id);
+        if (!el) { var named = doc.getElementsByName ? doc.getElementsByName(id) : []; for (var i = 0; i < named.length; i++) if (named[i].localName === "a") { el = named[i]; break; } }
+      }
+      setState(3, el);
+    };
+    try { globalThis.addEventListener("hashchange", retarget); globalThis.addEventListener("popstate", retarget); globalThis.addEventListener("DOMContentLoaded", retarget); globalThis.addEventListener("load", retarget); } catch (e) { /* no window yet */ }
+  };
 
   // labels and the control of a label
   // the labels of a control: those whose for= is its id, and the label it is inside of (in tree order)

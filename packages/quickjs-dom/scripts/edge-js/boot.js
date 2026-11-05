@@ -791,7 +791,7 @@
   // ==========================================
   var done = new WeakSet(), list = [], current = null;
 
-  g.__edgeBoot = function (html, url, width, seed, visual) {
+  g.__edgeBoot = function (html, url, width, seed, visual, height) {
     g.__edgeStart(seed);
     var isVisual = visual !== false;
     if (!isVisual) { delete g.requestAnimationFrame; delete g.cancelAnimationFrame; }
@@ -848,11 +848,37 @@
       Object.defineProperty(g, k, { configurable: true, writable: true, value: g });
     });
 
+    // `Window`: the page's global object cannot take another prototype (the runtime relies on its identity), so the interface is
+    // a constructor that cannot be called and recognises the global (and any window-like object that points back at itself)
+    if (typeof g.Window === "undefined") {
+      var WindowCtor = function Window() { throw new TypeError("Illegal constructor"); };
+      Object.defineProperty(WindowCtor, Symbol.hasInstance, { value: function (v) { return v === g || (v !== null && typeof v === "object" && v.window === v && v.document !== undefined); } });
+      Object.defineProperty(g, "Window", { configurable: true, writable: true, value: WindowCtor });
+    }
     // Location
     var loc = new g.URL(url);
     Object.setPrototypeOf(g.Location.prototype, Object.getPrototypeOf(loc));
     Object.setPrototypeOf(loc, g.Location.prototype);
     loc.assign = loc.replace = loc.reload = function () {};
+    // assigning location.hash changes the hash (and href) without a load and fires hashchange; pushState / replaceState do not
+    var hashMoving = false, hashValue = loc.hash;
+    Object.defineProperty(loc, "hash", {
+      configurable: true, enumerable: true,
+      get: function () { return hashValue; },
+      set: function (v) {
+        var h = String(v);
+        if (h !== "" && h.charAt(0) !== "#") h = "#" + h;
+        if (h === "#") h = "";
+        if (h === hashValue) return;
+        var oldURL = loc.href;
+        hashValue = h;
+        if (hashMoving) return;
+        var cut = oldURL.indexOf("#");
+        loc.href = (cut < 0 ? oldURL : oldURL.slice(0, cut)) + h;
+        var newURL = loc.href;
+        setTimeout(function () { g.dispatchEvent(new g.HashChangeEvent("hashchange", { oldURL: oldURL, newURL: newURL })); }, 0);
+      },
+    });
     g.location = loc;
     g.origin = loc.origin;
 
@@ -877,14 +903,17 @@
     function moveTo(u) {
       if (u == null || u === "") return;
       var n = new g.URL(String(u), loc.href);
+      hashMoving = true;
       ["protocol", "host", "hostname", "port", "pathname", "search", "hash", "origin", "searchParams"].forEach(function (k) { loc[k] = n[k]; });
+      hashMoving = false;
     }
     g.history = Object.create(g.History.prototype);
     Object.assign(g.history, { state: null, length: 1, scrollRestoration: "auto", _moveTo: moveTo });
 
     // Screen
     g.screen = Object.create(g.Screen.prototype);
-    Object.assign(g.screen, { width: width, height: Math.round(width * 0.75) });
+    var viewH = height > 0 ? height : Math.round(width * 0.75);
+    Object.assign(g.screen, { width: width, height: viewH });
 
     // BarProp & External
     ["locationbar", "menubar", "personalbar", "scrollbars", "statusbar", "toolbar"].forEach(function (k) {
@@ -896,7 +925,8 @@
 
     // Dimensions
     g.innerWidth = g.outerWidth = width;
-    g.innerHeight = g.outerHeight = Math.round(width * 0.75);
+    g.innerHeight = g.outerHeight = viewH;
+    if (g.__edgeInstallState) g.__edgeInstallState();
 
     // PostMessage
     g.postMessage = function (message) {
@@ -1175,6 +1205,21 @@
     def("clientHeight", function () { return Math.round(box(this)[3]); });
     def("scrollWidth", function () { return Math.round(box(this)[2]); });
     def("scrollHeight", function () { return Math.round(box(this)[3]); });
+    // hit testing from the boxes: the elements whose box holds the point, the last in document order (a descendant, or a later
+    // sibling painted over an earlier one) first; z-index and clipping are not looked at, visibility:hidden and pointer-events:none are
+    var hits = function (x, y) {
+      var out = [], all = g.document.querySelectorAll("*");
+      for (var i = 0; i < all.length; i++) {
+        var b = box(all[i]);
+        if (!(b[2] > 0 || b[3] > 0) || x < b[0] || y < b[1] || x >= b[0] + b[2] || y >= b[1] + b[3]) continue;
+        var cs = g.getComputedStyle(all[i]);
+        if (cs.visibility === "hidden" || cs.pointerEvents === "none") continue;
+        out.push(all[i]);
+      }
+      return out.reverse();
+    };
+    Object.defineProperty(g.document, "elementFromPoint", { configurable: true, writable: true, value: function (x, y) { var h = hits(+x, +y); return h.length ? h[0] : null; } });
+    Object.defineProperty(g.document, "elementsFromPoint", { configurable: true, writable: true, value: function (x, y) { return hits(+x, +y); } });
   };
   // the renderer's used style of an element ({display, position, color, ...}) from the last live measurement, or null
   g.__edgeLiveStyle = function (el) {

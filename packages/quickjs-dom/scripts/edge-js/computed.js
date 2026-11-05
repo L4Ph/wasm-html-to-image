@@ -422,7 +422,7 @@
   var memo = { v: -1, m: new WeakMap() };
   var computedOf = function (el, depth) {
     // adopted sheet edits (replaceSync and friends) are not DOM mutations, so their revisions are part of the version
-    var version = D.version() + "|" + (el.ownerDocument ? adoptedSignature(el.ownerDocument) : "");
+    var version = D.version() + "|" + (g.__styleEpoch || 0) + "|" + (el.ownerDocument ? adoptedSignature(el.ownerDocument) : "");
     if (memo.v !== version) memo = { v: version, m: new WeakMap() };
     var known = memo.m.get(el);
     if (known) return known;

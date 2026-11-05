@@ -11,7 +11,8 @@
 enum {
     PS_NOT, PS_IS, PS_HAS, PS_FIRST_CHILD, PS_LAST_CHILD, PS_ONLY_CHILD, PS_FIRST_TYPE, PS_LAST_TYPE, PS_ONLY_TYPE,
     PS_NTH_CHILD, PS_NTH_LAST_CHILD, PS_NTH_TYPE, PS_NTH_LAST_TYPE, PS_EMPTY, PS_ROOT, PS_SCOPE, PS_CHECKED,
-    PS_DISABLED, PS_ENABLED, PS_REQUIRED, PS_OPTIONAL, PS_LINK, PS_ALWAYS, PS_NEVER
+    PS_DISABLED, PS_ENABLED, PS_REQUIRED, PS_OPTIONAL, PS_LINK, PS_ALWAYS, PS_NEVER,
+    PS_FOCUS, PS_FOCUS_WITHIN, PS_HOVER, PS_ACTIVE, PS_TARGET
 };
 
 typedef struct SList SList;
@@ -63,6 +64,9 @@ typedef struct {
     int depth;
 } SP;
 
+/* the elements the page's interaction state names: 0 focus, 1 hover, 2 active, 3 target. Set by the page (setState); it holds
+   a reference to each, so they outlive the pointer. */
+static ND *sel_state[4];
 static ND *sel_scope; /* what :scope means for the current match; null: the document element */
 
 static int sel_ident_char(int ch) { return h_alnum(ch) || ch == '-' || ch == '_' || ch >= 0x80; }
@@ -236,8 +240,8 @@ static int sp_pseudo(SP *p, SComp *k) {
             {"first-of-type", PS_FIRST_TYPE}, {"last-of-type", PS_LAST_TYPE}, {"only-of-type", PS_ONLY_TYPE},
             {"empty", PS_EMPTY}, {"root", PS_ROOT}, {"scope", PS_SCOPE}, {"checked", PS_CHECKED}, {"disabled", PS_DISABLED},
             {"enabled", PS_ENABLED}, {"required", PS_REQUIRED}, {"optional", PS_OPTIONAL}, {"link", PS_LINK}, {"any-link", PS_LINK},
-            {"defined", PS_ALWAYS}, {"hover", PS_NEVER}, {"focus", PS_NEVER}, {"active", PS_NEVER}, {"visited", PS_NEVER},
-            {"target", PS_NEVER}, {"focus-within", PS_NEVER}, {"focus-visible", PS_NEVER}, {"before", PS_NEVER}, {"after", PS_NEVER},
+            {"defined", PS_ALWAYS}, {"hover", PS_HOVER}, {"focus", PS_FOCUS}, {"active", PS_ACTIVE}, {"visited", PS_NEVER},
+            {"target", PS_TARGET}, {"focus-within", PS_FOCUS_WITHIN}, {"focus-visible", PS_FOCUS}, {"before", PS_NEVER}, {"after", PS_NEVER},
             {"first-line", PS_NEVER}, {"first-letter", PS_NEVER}, {"placeholder-shown", PS_NEVER}, {"indeterminate", PS_NEVER},
             {"read-only", PS_NEVER}, {"read-write", PS_NEVER}, {"valid", PS_NEVER}, {"invalid", PS_NEVER}, {"out-of-range", PS_NEVER},
             {"in-range", PS_NEVER}, {"fullscreen", PS_NEVER}, {"autofill", PS_NEVER}, {"-webkit-autofill", PS_NEVER}, {"-moz-focusring", PS_NEVER},
@@ -505,6 +509,12 @@ static int sel_has(ND *n, const SList *l) {
     return 0;
 }
 
+static int sel_in_document(ND *n) {
+    for (ND *a = n; a; a = JS_IsNull(a->parent) ? NULL : nd_of(a->parent))
+        if (a->type == 9) return 1;
+    return 0;
+}
+
 static int sel_pseudo(ND *n, const SPseudo *ps) {
     int total;
     switch (ps->kind) {
@@ -536,6 +546,16 @@ static int sel_pseudo(ND *n, const SPseudo *ps) {
     case PS_OPTIONAL: return (sel_is_tag(n, "input") || sel_is_tag(n, "select") || sel_is_tag(n, "textarea")) && !nd_find_attr(n, "required", 8);
     case PS_LINK: return (sel_is_tag(n, "a") || sel_is_tag(n, "area")) && nd_find_attr(n, "href", 4) != NULL;
     case PS_ALWAYS: return 1;
+    case PS_FOCUS: return sel_state[0] == n && sel_in_document(n);
+    case PS_TARGET: return sel_state[3] == n;
+    case PS_FOCUS_WITHIN: case PS_HOVER: case PS_ACTIVE: {
+        /* the element itself or any of its ancestors on the way up from the named one */
+        ND *named = sel_state[ps->kind == PS_FOCUS_WITHIN ? 0 : ps->kind == PS_HOVER ? 1 : 2];
+        if (!named || !sel_in_document(named)) return 0;
+        for (ND *a = named; a; a = JS_IsNull(a->parent) ? NULL : nd_of(a->parent))
+            if (a == n) return 1;
+        return 0;
+    }
     }
     return 0;
 }

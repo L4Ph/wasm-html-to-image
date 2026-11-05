@@ -196,7 +196,7 @@ JS / CSS の既定値の対応:
 | iframe | 資源とともに読む | `enableIframePageLoading` | 中身は読まない |
 | タイマー | ホストのタイマー | 自前の時計 | 実タイマーはホスト経由。fake timers は**移植しない**(known-gaps §1) |
 | viewport 幅 | 1024 | 設定可 | `engine.width`(既定 800)= `window.innerWidth` |
-| viewport 高さ | 768 | 設定可 | オプションなし。`innerHeight = round(width * 0.75)` |
+| viewport 高さ | 768 | 設定可 | `engine.height`(`createDOM` の `height`)。既定は `round(width * 0.75)` |
 
 `register()` / `unregister()` は happy-dom の `GlobalRegistrator` 相当(`src/jsdom.ts`)。
 `dom.goto(url)` は `JSDOM.fromURL`(`file:` は `JSDOM.fromFile`)+ `await dom.ready` の薄いラッパで、

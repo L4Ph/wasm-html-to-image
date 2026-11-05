@@ -128,6 +128,8 @@ export interface CreateDOMOptions extends JavaScriptOptions, EdgeJavaScriptEngin
   onLog?: (entry: PageLogEntry) => void;
   /** `window.innerWidth` of the page (default 800). */
   width?: number;
+  /** `window.innerHeight` of the page (default: three quarters of the width). */
+  height?: number;
   /**
    * The cookie jar the page uses: `document.cookie` reads and writes it (scoped by the page's URL,
    * `HttpOnly` hidden from the page), the page's requests carry its cookies, and the `Set-Cookie`

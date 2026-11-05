@@ -60,6 +60,23 @@ describe("live layout: enableLiveLayout", () => {
     }
   });
 
+  it("hit testing: elementFromPoint / elementsFromPoint from the engine's boxes", async () => {
+    const dom = await createDOM({ html: `<!doctype html><html><head><style>#a{height:50px;padding:10px}#b{height:30px;pointer-events:none}#c{height:30px;visibility:hidden}</style></head><body style="margin:0"><div id="a"><span id="s">hit</span></div><div id="b">b</div><div id="c">c</div><div id="d" style="height:40px">d</div></body></html>` }, { settleMs: 0 });
+    const layout = await enableLiveLayout(dom, module, { width: 400 });
+    try {
+      const at = (x: number, y: number) => dom.eval(`(() => { const e = document.elementFromPoint(${x}, ${y}); return e ? e.id || e.localName : null })()`);
+      expect(await at(5, 5)).toBe("a"); // inside #a's padding, beside the span
+      expect(await at(1000, 5)).toBe(null); // outside the page
+      expect(await at(5, 75)).toBe("body"); // #b is there but lets the pointer through
+      expect(await at(5, 105)).toBe("body"); // #c is hidden
+      expect(await at(5, 135)).toBe("d");
+      expect(await dom.eval(`document.elementsFromPoint(5, 135).map((e) => e.id || e.localName)`)).toEqual(["d", "body", "html"]);
+    } finally {
+      layout.dispose();
+      dom.close();
+    }
+  });
+
   it("keeps the layout for a change of paint only, and lays out again when anything else changes with it", async () => {
     const dom = await createDOM({ html: `<!doctype html><html><head><style>.p{color:#00f;background:#eee}.q{color:#f00;height:80px}#a{height:30px}</style></head><body style="margin:0"><div id="a" class="p">A</div><div id="b">B</div></body></html>` }, { settleMs: 0 });
     const layout = await enableLiveLayout(dom, module, { width: 400 });

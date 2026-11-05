@@ -729,6 +729,13 @@ static JSValue js_dom_set_qid(JSContext *ctx, JSValueConst this_val, int argc, J
     n->qid = v;
     return JS_UNDEFINED;
 }
+/* setState(kind, node|null): the element :focus / :hover / :active / :target mean (0..3); the page keeps the node alive */
+static JSValue js_dom_set_state(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    uint32_t k = 0;
+    if (argc < 2 || JS_ToUint32(ctx, &k, argv[0]) || k > 3) return JS_UNDEFINED;
+    sel_state[k] = JS_IsNull(argv[1]) || JS_IsUndefined(argv[1]) ? NULL : nd_of(argv[1]);
+    return JS_UNDEFINED;
+}
 /* the next node after argv[0] in document order inside root (argv[1]) whose type is in the mask (argv[3]), skipping the
    children of argv[0] when argv[2] is true; null at the end. Traversals (TreeWalker, NodeIterator) step with this. */
 static JSValue js_dom_following(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
@@ -971,6 +978,7 @@ static void nd_register(JSContext *c, JSValueConst native) {
     JS_SetPropertyStr(c, dom, "journalOk", JS_NewCFunction(c, js_dom_journal_ok, "journalOk", 0));
     JS_SetPropertyStr(c, dom, "journalTake", JS_NewCFunction(c, js_dom_journal_take, "journalTake", 0));
     JS_SetPropertyStr(c, dom, "setQid", JS_NewCFunction(c, js_dom_set_qid, "setQid", 2));
+    JS_SetPropertyStr(c, dom, "setState", JS_NewCFunction(c, js_dom_set_state, "setState", 2));
     JS_SetPropertyStr(c, dom, "following", JS_NewCFunction(c, js_dom_following, "following", 4));
     JS_SetPropertyStr(c, dom, "liveNodes", JS_NewCFunction(c, js_dom_live, "liveNodes", 0));
     JS_SetPropertyStr(c, dom, "gc", JS_NewCFunction(c, js_dom_gc, "gc", 0));
