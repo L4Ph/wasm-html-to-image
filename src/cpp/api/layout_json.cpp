@@ -298,11 +298,33 @@ bool is_ancestor_path(const std::string& ancestor, const std::string& path) {
 }
 
 void fix_up_table_boxes(std::vector<box_entry>& entries) {
+    // Everything here goes through indexes by path: a table of a thousand rows must not scan the entries for each row.
+    auto parent_of = [](const std::string& path) {
+        const size_t dot = path.rfind('.');
+        return dot == std::string::npos ? std::string() : path.substr(0, dot);
+    };
+    const bool any_table = std::any_of(entries.begin(), entries.end(), [](const box_entry& e) {
+        return e.display == litehtml::display_table_row || e.display == litehtml::display_table_cell;
+    });
+    if (!any_table) return;
+    std::unordered_map<std::string, std::vector<size_t>> children;  // parent path -> direct children, in order
+    std::unordered_map<std::string, size_t> by_path;
+    children.reserve(entries.size());
+    by_path.reserve(entries.size());
+    for (size_t i = 0; i < entries.size(); i++) {
+        const std::string& p = entries[i].p;
+        const size_t dot = p.rfind('.');
+        if (dot != std::string::npos && dot > 0 && dot + 1 < p.size()) children[p.substr(0, dot)].push_back(i);
+        by_path.emplace(p, i);
+    }
     auto unite_children = [&](box_entry& parent, litehtml::style_display child_display) {
+        auto it = children.find(parent.p);
+        if (it == children.end()) return;
         bool found = false;
         double x0 = 0, y0 = 0, x1 = 0, y1 = 0;
-        for (const auto& e : entries) {
-            if (e.display != child_display || !is_direct_child(parent.p, e.p)) continue;
+        for (size_t idx : it->second) {
+            const auto& e = entries[idx];
+            if (e.display != child_display) continue;
             if (!found) {
                 x0 = e.x; y0 = e.y; x1 = e.x + e.w; y1 = e.y + e.h;
                 found = true;
@@ -317,8 +339,10 @@ void fix_up_table_boxes(std::vector<box_entry>& entries) {
     };
     for (auto& e : entries) {
         if (e.display != litehtml::display_table_row) continue;
-        for (const auto& c : entries) {
-            if (c.display == litehtml::display_table_cell && is_direct_child(e.p, c.p)) {
+        auto it = children.find(e.p);
+        if (it == children.end()) continue;
+        for (size_t idx : it->second) {
+            if (entries[idx].display == litehtml::display_table_cell) {
                 e.has_cells = true;
                 break;
             }
@@ -328,42 +352,37 @@ void fix_up_table_boxes(std::vector<box_entry>& entries) {
         if (e.display == litehtml::display_table_row) unite_children(e, litehtml::display_table_cell);
     }
     // Widen every row to its table's column band: the band is the union of all rows
-    // that share the same nearest table ancestor.
-    for (auto& row : entries) {
-        if (row.display != litehtml::display_table_row) continue;
-        const box_entry* table = nullptr;
-        for (const auto& e : entries) {
-            if ((e.display == litehtml::display_table || e.display == litehtml::display_inline_table) &&
-                is_ancestor_path(e.p, row.p) && (!table || e.p.size() > table->p.size())) {
-                table = &e;
-            }
+    // that share the same nearest table ancestor (a row of a nested table is not one of them).
+    auto is_table = [](const box_entry& e) {
+        return e.display == litehtml::display_table || e.display == litehtml::display_inline_table;
+    };
+    auto nearest_table = [&](const std::string& path) -> long {
+        std::string p = path;
+        for (;;) {
+            const size_t dot = p.rfind('.');
+            if (dot == std::string::npos) return -1;
+            p.resize(dot);
+            auto it = by_path.find(p);
+            if (it != by_path.end() && is_table(entries[it->second])) return (long)it->second;
         }
-        if (!table) continue;
-        bool found = false;
-        double x0 = 0, x1 = 0;
-        for (auto& other : entries) {
-            if (other.display != litehtml::display_table_row || !is_ancestor_path(table->p, other.p)) continue;
-            bool nested = false;
-            for (const auto& e : entries) {
-                if ((e.display == litehtml::display_table || e.display == litehtml::display_inline_table) &&
-                    e.p.size() > table->p.size() && is_ancestor_path(table->p, e.p) &&
-                    is_ancestor_path(e.p, other.p)) {
-                    nested = true;
-                    break;
-                }
-            }
-            if (nested || other.w <= 0) continue;
-            if (!found) {
-                x0 = other.x; x1 = other.x + other.w;
-                found = true;
-            } else {
-                x0 = std::min(x0, other.x); x1 = std::max(x1, other.x + other.w);
-            }
-        }
-        if (found) {
-            row.x = x0;
-            row.w = x1 - x0;
-        }
+    };
+    std::vector<long> table_of(entries.size(), -1);
+    struct band { bool found = false; double x0 = 0, x1 = 0; };
+    std::unordered_map<long, band> bands;
+    for (size_t i = 0; i < entries.size(); i++) {
+        if (entries[i].display != litehtml::display_table_row) continue;
+        table_of[i] = nearest_table(entries[i].p);
+        if (table_of[i] < 0 || entries[i].w <= 0) continue;
+        band& b = bands[table_of[i]];
+        if (!b.found) { b.x0 = entries[i].x; b.x1 = entries[i].x + entries[i].w; b.found = true; }
+        else { b.x0 = std::min(b.x0, entries[i].x); b.x1 = std::max(b.x1, entries[i].x + entries[i].w); }
+    }
+    for (size_t i = 0; i < entries.size(); i++) {
+        if (table_of[i] < 0) continue;
+        auto it = bands.find(table_of[i]);
+        if (it == bands.end() || !it->second.found) continue;
+        entries[i].x = it->second.x0;
+        entries[i].w = it->second.x1 - it->second.x0;
     }
     // A row with no cells at all (an empty <tr>, e.g. a styled spacer row) paints
     // nothing but still occupies its grid slot: the following rows are placed
@@ -372,31 +391,20 @@ void fix_up_table_boxes(std::vector<box_entry>& entries) {
     // empty rows keep the degenerate box (their split of the gap is unknowable
     // from boxes alone), as do empty first/last rows.
     {
-        auto parent_of = [](const std::string& path) {
-            const size_t dot = path.rfind('.');
-            return dot == std::string::npos ? std::string() : path.substr(0, dot);
-        };
-        for (size_t i = 0; i < entries.size(); i++) {
-            box_entry& row = entries[i];
-            if (row.display != litehtml::display_table_row || row.has_cells) continue;
-            const std::string parent = parent_of(row.p);
-            const box_entry* prev = nullptr;
-            const box_entry* next = nullptr;
-            for (size_t j = i; j-- > 0;) {
-                if (entries[j].display == litehtml::display_table_row && parent_of(entries[j].p) == parent) {
-                    prev = &entries[j];
-                    break;
+        std::unordered_map<std::string, std::vector<size_t>> rows_of;  // parent path -> its rows, in order
+        for (size_t i = 0; i < entries.size(); i++)
+            if (entries[i].display == litehtml::display_table_row) rows_of[parent_of(entries[i].p)].push_back(i);
+        for (const auto& kv : rows_of) {
+            const auto& rows = kv.second;
+            for (size_t k = 0; k < rows.size(); k++) {
+                box_entry& row = entries[rows[k]];
+                if (row.has_cells || k == 0 || k + 1 == rows.size()) continue;
+                const box_entry* prev = &entries[rows[k - 1]];
+                const box_entry* next = &entries[rows[k + 1]];
+                if (prev->has_cells && next->has_cells) {
+                    row.y = prev->y + prev->h;
+                    row.h = std::max(0.0, next->y - row.y);
                 }
-            }
-            for (size_t j = i + 1; j < entries.size(); j++) {
-                if (entries[j].display == litehtml::display_table_row && parent_of(entries[j].p) == parent) {
-                    next = &entries[j];
-                    break;
-                }
-            }
-            if (prev && next && prev->has_cells && next->has_cells) {
-                row.y = prev->y + prev->h;
-                row.h = std::max(0.0, next->y - row.y);
             }
         }
     }
