@@ -20,7 +20,7 @@ const time = (f, reps) => {
 const virtualConsole = new VirtualConsole();
 
 // QuickJS's performance.now() has a resolution of 1 ms, so each sample is a batch of K runs
-const native = await createDOM({ html: "<p>" }, { settleMs: 0 });
+const native = await createDOM({ html: "<p>" }, { settleMs: 0, timeout: 0 });
 const inPage = (reps, html) =>
   native.eval(
     `(function () {

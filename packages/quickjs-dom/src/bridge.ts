@@ -173,6 +173,12 @@ export class Bridge {
   private depth = 0;
   private closed = false;
   private readonly classes = new Map<string, any>();
+  /** the interfaces of the schema by name; a class is made when first asked for (a page uses a few dozen of the hundreds) */
+  private schemaByName = new Map<string, InterfaceSchema>();
+  private makeClass: (name: string) => any = () => undefined;
+  private cls(name: string): any {
+    return this.classes.get(name) ?? (this.schemaByName.has(name) ? this.makeClass(name) : undefined);
+  }
   private readonly wrappers = new Map<number, WeakRef<object>>();
   private readonly registry: FinalizationRegistry<Cell>;
   private released: [number, number][] = [];
@@ -607,7 +613,7 @@ export class Bridge {
       case "d":
         return new Date(x.v);
       case "c":
-        return this.classes.get(x.n);
+        return this.cls(x.n);
       case "f":
         return this.fnById.get(x.i);
       case "h":
@@ -630,7 +636,7 @@ export class Bridge {
     }
     const cell: Cell = { id: h.i, count: 1, t: h.t, n: h.n, l: h.l, g: h.g };
     let w: any;
-    const cls = h.c ? this.classes.get(h.c) : undefined;
+    const cls = h.c ? this.cls(h.c) : undefined;
     if (h.c === "Function") w = this.functionWrapper(cell);
     else if (cls) w = this.classWrapper(cell, cls);
     else w = this.dynamicWrapper(cell, h.c === "Window");
@@ -679,7 +685,7 @@ export class Bridge {
           return undefined;
         }
         if (k === "then") return undefined;
-        if (isWindow && typeof k === "string" && this.classes.has(k)) return this.classes.get(k);
+        if (isWindow && typeof k === "string" && this.schemaByName.has(k)) return this.cls(k);
         return this.get(cell, k);
       },
       set: (t, k, v) => {
@@ -702,8 +708,8 @@ export class Bridge {
       getOwnPropertyDescriptor: (t, k) => {
         if (typeof k === "symbol") return undefined;
         if (k in t) return Reflect.getOwnPropertyDescriptor(t, k);
-        if (isWindow && typeof k === "string" && this.classes.has(k)) {
-          return { value: this.classes.get(k), writable: true, enumerable: true, configurable: true };
+        if (isWindow && typeof k === "string" && this.schemaByName.has(k)) {
+          return { value: this.cls(k), writable: true, enumerable: true, configurable: true };
         }
         const exists = cachedKeys ? cachedKeys.has(k as string) : (this.sendJ(["has", cell.id, k]) as boolean);
         if (!exists) return undefined;
@@ -733,7 +739,7 @@ export class Bridge {
       }
       return list;
     };
-    const proto = (this.classes.get(key === "childNodes" ? "NodeList" : "HTMLCollection") ?? Object).prototype;
+    const proto = (this.cls(key === "childNodes" ? "NodeList" : "HTMLCollection") ?? Object).prototype;
     const ARRAY_METHODS = new Set(["forEach", "entries", "keys", "values"]);
     return (cell.cols[key] = new Proxy(Object.create(proto), {
       get: (t, k, r) => {
@@ -756,6 +762,7 @@ export class Bridge {
 
   private buildClasses(schema: InterfaceSchema[]): void {
     const byName = new Map(schema.map((s) => [s.n, s]));
+    this.schemaByName = byName;
     const bridge = this;
     const make = (name: string): any => {
       const done = this.classes.get(name);
@@ -807,7 +814,7 @@ export class Bridge {
       this.classes.set(name, cls);
       return cls;
     };
-    for (const s of schema) make(s.n);
+    this.makeClass = make;
   }
 
   // ---- calls from the guest ----

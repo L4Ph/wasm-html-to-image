@@ -26,7 +26,7 @@ dom.close();
 | :--- | :--- |
 | 🌐 **Runs Everywhere** | Zero-config WebAssembly loading for Cloudflare Workers, Vercel Edge, Node.js, Bun, Deno, and browsers. |
 | 🔒 **Sandboxed Execution** | Scripts run inside a WebAssembly instance with no filesystem or `process` access, bounded memory/stack, and configurable `fetch` limits. |
-| ⚡ **Fast Cold Starts (~3 ms)** | Pre-initialized QuickJS bytecode snapshot + C-based DOM parser and selector engine (~1.3 MB/s HTML parsing). |
+| ⚡ **Fast Cold Starts (~3 ms)** | Pre-initialized QuickJS bytecode snapshot + C-based DOM parser and selector engine (~7 MB/s HTML parsing). |
 | 🧩 **Two API Styles** | Async sandboxed API (`createDOM`) for edge/serverless + synchronous `new JSDOM()` drop-in (`wasm-quickjs-dom/jsdom`) for Node.js & Bun. |
 | 🧪 **Vitest & Jest Environments** | Built-in test environments compatible with `@testing-library/dom`, `@testing-library/react`, `user-event`, and `jest-dom`. |
 | 🎨 **CSS Cascade & SVG Geometry** | `getComputedStyle` cascades `<style>`, inline styles, and `<link rel="stylesheet">` (fetched by default; `stylesheets: false` skips them); computes approximate SVG `getBBox` / `getTotalLength`. |
@@ -53,29 +53,34 @@ dom.close();
 | **Runtime Support** | Node.js only (requires `vm` module and `eval`) | **Anywhere WebAssembly runs** (Node.js, Workers, Edge, Bun, Deno, browsers) |
 | **Script Sandbox** | None (`runScripts: "dangerously"` runs in host process) | **Strict WebAssembly sandbox** (no filesystem, capped memory/stack, fetch limits) |
 | **DOM Implementation** | Pure JavaScript on V8 objects | **High-speed C DOM & selector engine** (`csrc/nativedom*.h`) |
-| **HTML Parser** | `parse5` (JavaScript) | **C port of `htmlparser2`** (~8.6× faster) |
+| **HTML Parser** | `parse5` (JavaScript) | **C port of `htmlparser2`** (~4–13× faster, see below) |
 | **CSS Cascade** | `getComputedStyle` with CSS cascade | `getComputedStyle` with CSS cascade (`<style>`, inline, `@media`, `var()`, `calc()`) |
 | **SVG Geometry** | Minimal | **Approximate SVG geometry** from attributes (`getBBox`, `getTotalLength`, `getPointAtLength`) |
 | **Testing Support** | Jest, Vitest, Testing Library | **Vitest & Jest environments included**, Testing Library compatible |
 
 ### Performance Benchmark (Node.js)
 
-*Measured on Node.js v24 against `jsdom` v30.1.3:*
+*Measured on Node.js v24.22 against `jsdom` v30.1.3 (median of several runs; `scripts/bench-dom.mjs`, `scripts/bench-bridge.mjs`, `scripts/perf-check.mjs`):*
 
 | Scenario | `jsdom` | `wasm-quickjs-dom` | Comparison |
 | :--- | :--- | :--- | :--- |
-| **HTML Parsing** (~100 KB, 1,000 table rows, ~5,000 nodes) | 77.0 ms | **11.0 ms** | **~7.0× faster** ⚡ |
-| **HTML Serialization** (`dom.serialize()`) | 7.1 ms | **1.0 ms** | **~7.1× faster** ⚡ |
-| **Selector Query** (`querySelectorAll("td a")` × 1,000 matches) | 0.83 ms | **< 0.1 ms** | **~8× faster** ⚡ |
-| **Complex Selector Query** (`500 × querySelectorAll("tr.r3 > td a[href]")`) | 471 ms | **102 ms** | **~4.6× faster** ⚡ |
-| **In-Page Script DOM Creation** (2,000 elements created in `<script>`) | 25.6 ms | **2.0 ms** | **~12.8× faster** ⚡ |
-| **Warm Instance Creation** (`new JSDOM()` median over 50 runs) | 4.85 ms | **4.35 ms** | **~1.1× faster** ⚡ |
-| **Testing Library Query Traversal** (`getAllByRole('button')` on 100 cards) | 23.5 ms | **28.7 ms** | **~1.2× jsdom** (cached AST & short-circuit) |
+| **HTML Parsing** (1,000 table rows, ~5,000 elements) | 85.2 ms | **16.2 ms** | **~5.3× faster** ⚡ |
+| **HTML Parsing** (~25,000 elements) | 355 ms | **94.8 ms** | **~3.7× faster** ⚡ |
+| **HTML Serialization** (`outerHTML`, ~5,000 elements) | 5.0 ms | **0.55 ms** | **~9× faster** ⚡ |
+| **Selector Query** (`tr.r3 > td a[href]` + `span.k`, ~5,000 elements) | 2.3 ms | **0.35 ms** | **~6.6× faster** ⚡ |
+| **Complex Selector Query** (500 × `querySelectorAll("tr.r3 > td a[href]")`, page changed between queries) | 1,850 ms | **102 ms** | **~18× faster** ⚡ |
+| **Page script creating 2,000 elements** (`new JSDOM(html, { runScripts: "dangerously" })`) | 34.8 ms | **10.9 ms** | **~3.2× faster** ⚡ |
+| **New page with 1,000 rows** (`createDOM` vs `new JSDOM`) | 76.2 ms | **21.4 ms** | **~3.6× faster** ⚡ |
+| **Warm Instance Creation** (`new JSDOM("<p>")`, median over 50 runs) | 4.1 ms | **2.8 ms** | **~1.5× faster** ⚡ |
+| **Testing Library**, 300 cards / 1,802 elements: `getAllByRole('button')` | 67.0 ms | **57.6 ms** | **~1.2× faster** |
+| **Testing Library**: `getByText` / `getByLabelText` / `getAllByRole('link')` | 25.5 / 23.8 / 41.2 ms | 40.9 / 32.8 / 49.4 ms | ~1.2–1.6× jsdom |
 
 > [!TIP]
-> **When `wasm-quickjs-dom` is faster:** Parsing HTML, serializing, executing CSS selector queries, and running client scripts that generate DOM inside the page (all execute natively in C / WebAssembly without host overhead).
+> **When `wasm-quickjs-dom` is faster:** Parsing HTML, serializing, executing CSS selector queries, and running client scripts that generate DOM inside the page (all execute natively in C / WebAssembly without host overhead). The advantage grows with how much work stays inside the page; on a ~25,000-element page, walking the tree with a `TreeWalker` is ~2.9× faster too.
 >
-> **Host-driven DOM queries & mutations:** Earlier versions were bottlenecked by WASM bridge roundtrips and frequent cache invalidations. With C-level AST caching, host-side tag short-circuit evaluation for `Element.matches()`, static Proxy handler pooling, and $O(1)$ tag prototype lookups, host queries (such as `@testing-library/dom` traversals) operate within **1.1x–1.3x** of V8-native JSDOM.
+> **Host-driven DOM queries & mutations:** Every call from the host crosses the WebAssembly bridge (~0.7 µs per cached property read against ~0.45 µs for V8-native jsdom). Building a 3,000-node tree and reading it back from the host (the render shape) takes **~0.4×** of jsdom's time; broad `@testing-library/dom` queries (`getByText`, `getByLabelText`) are within **~1.2–1.6×** of jsdom, role queries are on par or faster.
+>
+> **Instance start-up:** a warm `new JSDOM()` takes ~3 ms: the wrapper classes of the DOM interfaces are made when a page first uses them, not all at start-up.
 
 ---
 
@@ -545,8 +550,8 @@ npx wasm-quickjs-dom https://example.com/ --protocol https: --block-private --lo
 | :--- | :--- |
 | **First page in process** | ~120 ms (compiles WASM & initializes snapshot) |
 | **Subsequent pages** | **~3 ms** (cloned from pre-initialized snapshot) |
-| **HTML parsing & DOM build** | **~2.5 MB/s** (~11 ms for a 100 KB / 5,000-node HTML document, ~7× faster than JS `parse5`) |
-| **Host ↔ WASM bridge call** | **~0.6 µs** per cached property read, **~3 µs** per cross-boundary call |
+| **HTML parsing & DOM build** | **~7 MB/s** (~16 ms for a 123 KB, 1,000-row / 5,000-element document, ~5× faster than JS `parse5`) |
+| **Host ↔ WASM bridge call** | **~0.7 µs** per cached property read, **~3 µs** per cross-boundary call |
 
 ---
 
