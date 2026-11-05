@@ -5,19 +5,20 @@
 そのうち **wontfix と宣言したもの** だけを集める。判断を変えるときは、ここを更新して
 から実装する(先にコードを変えない)。
 
-## 1. fake timers は残留(wontfix)
+## 1. fake timers(2026-11-05 に再確認: 動く。以前の wontfix は取り下げ)
 
-jest の legacy / modern fake timers はテスト側 realm の `setTimeout` / `setInterval` /
-`requestAnimationFrame` を差し替えるが、ページは QuickJS 側の自前の時計(`host.timer`)で
-動く。`jest.advanceTimersByTime()` はページの時計を進めないため、`waitFor` の
-fake-timer 分岐はページの変化を待てない。これは bridged realm という環境の構造から
-来るもので、DOM の欠落ではない。
+以前は「jest の fake timers はテスト側 realm だけを進め、ページの時計は別」と記録していたが、現在の実装では
+ページのタイマーはホストの `setTimeout` で起こされ、期限はホストの `Date` で測る(`src/jsdom.ts` の `arm()` と
+`src/page.ts` の `timer`)。runner が fake timers でそれらを差し替えると、ページのタイマーもその時計で進む。
 
-- 方針: fake timers を使うテストは jsdom 環境に残す。real-timer のテストだけ移行する。
-- 台帳: `tests/known-gaps.json` の `tlSuite.accepted`(`environment.fake-timers-legacy` /
-  `environment.fake-timers-modern`)。
-- 詳細: `docs/environment-triage.md` section 2 と section 3。
-- 再検討の条件: ページ側の時計をテストから進める API を設計するとき(コード変更を伴う)。
+- 確認した組み合わせ: Vitest の `vi.useFakeTimers()` + `advanceTimersByTimeAsync`(`window.setTimeout`、ページ自身の
+  `setInterval`、`vi.setSystemTime` のあとのページの `Date` と `Date.now()`)、Jest の modern と legacy の fake timers +
+  `@testing-library/dom` の `waitFor`。テストは `tests/env/fake-timers.test.ts` と `tests/jest/fake-timers.jest.cjs`。
+- 同じ制約: Vitest では `waitFor` の fake-timer 分岐が `jest` の有無で決まるため、`vi.useFakeTimers()` 下の `waitFor` は
+  jsdom でも進まない(`advanceTimers` オプションで進める)。環境の差ではない。
+- 未確認: `tl-suite` の `environment.fake-timers-legacy` / `-modern` の2件(台帳 `tlSuite.accepted`)。リポジトリの
+  clone が要るので今回は再実行していない。再実行して通るなら台帳から外す。
+- `requestAnimationFrame` は 16ms のページのタイマーなので、`pretendToBeVisual` のときは同じ時計で進む。
 
 ## 2. XML と adoption agency の残り(wontfix)
 

@@ -269,7 +269,7 @@ A happy-dom configuration can be reused. The four `settings` toggles are accepte
 | `<style>` and `style=""` | cascaded | cascaded | cascaded always (`stylesheets: false` affects only linked files) |
 | Images | fetched by jsdom | fetched | never fetched by the DOM; the renderer owns the request |
 | Iframes | loaded with resources | `enableIframePageLoading` | contents not loaded (`srcdoc` seeds a blank document only) |
-| Timers | host timers | own clock | real timers run through the host; fake timers are **not** ported into the page clock (see [`docs/known-gaps.md`](./docs/known-gaps.md) §1) |
+| Timers | host timers | own clock | the page's timers run on the host's `setTimeout` and read its `Date`, so a test runner's fake timers (Vitest `vi.useFakeTimers()`, Jest modern and legacy) drive them: advancing the fake clock fires the page's timers and moves its `Date.now()` (see [`docs/known-gaps.md`](./docs/known-gaps.md) §1) |
 | Viewport width | 1024 | configurable | `engine.width` (default 800), also `window.innerWidth` |
 | Viewport height | 768 | configurable | `engine.height` (`createDOM` option `height`); default `round(width * 0.75)` |
 

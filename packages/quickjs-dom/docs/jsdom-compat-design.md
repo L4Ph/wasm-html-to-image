@@ -194,7 +194,7 @@ JS / CSS の既定値の対応:
 | `<style>` / `style` 属性 | カスケード | カスケード | 常にカスケード(`stylesheets: false` は外部ファイルだけに効く) |
 | 画像 | jsdom が取得 | 取得 | DOM は取得しない(描画側が所有) |
 | iframe | 資源とともに読む | `enableIframePageLoading` | 中身は読まない |
-| タイマー | ホストのタイマー | 自前の時計 | 実タイマーはホスト経由。fake timers は**移植しない**(known-gaps §1) |
+| タイマー | ホストのタイマー | 自前の時計 | ページのタイマーはホストの `setTimeout` と `Date` を使うので、runner の fake timers(Vitest / Jest)で進む(known-gaps §1) |
 | viewport 幅 | 1024 | 設定可 | `engine.width`(既定 800)= `window.innerWidth` |
 | viewport 高さ | 768 | 設定可 | `engine.height`(`createDOM` の `height`)。既定は `round(width * 0.75)` |
 

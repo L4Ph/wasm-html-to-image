@@ -25,7 +25,9 @@ baseline 657 / ours 654 / total 657(すべて v10.4.2 時点)。
 `<test file> :: <test title>` に対する正規表現である。テスト名や版が変わったら、
 移行ではなく再トリアージとして台帳を更新する。
 
-## 2. 方針1: fake timers — real-timer は移行、fake-timer は残留
+> 2026-11-05 追記: fake timers は、ページのタイマーがホストの `setTimeout` / `Date` を使うため動くことを確認した（`docs/known-gaps.md` §1、`tests/env/fake-timers.test.ts`、`tests/jest/fake-timers.jest.cjs`）。以下の §2 と §3 の fake の行は、この確認の前の記録として残す。
+
+## 2. 方針1: fake timers — real-timer は移行、fake-timer は残留（以前の判断）
 
 - **real-timer は移行する。** `tests/env/testing-library.test.ts:71-95` の
   `waiting` ブロックは real timer だけで書かれている
