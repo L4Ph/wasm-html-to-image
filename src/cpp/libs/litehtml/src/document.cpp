@@ -1789,6 +1789,24 @@ bool document::live_set_attr(const std::shared_ptr<element>& el, const char* nam
 	return true;
 }
 
+bool document::live_replace_children(const std::shared_ptr<element>& parent, const char* html)
+{
+	if (!parent || !html || parent->get_document().get() != this) return false;
+	GumboOptions opts = kGumboDefaultOptions;
+	opts.fragment_context = GUMBO_TAG_BODY;
+	GumboOutput* output = gumbo_parse_with_options(&opts, html, strlen(html));
+	elements_list child_elements;
+	create_node(output->root, child_elements, true, false);
+	gumbo_destroy_output(&kGumboDefaultOptions, output);
+	parent->clearRecursive();
+	for (const auto& child : child_elements)
+	{
+		parent->appendChild(child);
+		m_live_new.push_back(child);
+	}
+	return true;
+}
+
 document::live_timing document::live_relayout(const std::vector<std::shared_ptr<element>>& changed, pixel_t max_width)
 {
 	live_timing t;
@@ -1837,6 +1855,8 @@ document::live_timing document::live_relayout(const std::vector<std::shared_ptr<
 	}
 	auto t2 = now();
 	for (const auto& s : scopes) s->compute_styles();
+	for (const auto& c : m_live_new) c->apply_word_break();
+	m_live_new.clear();
 	auto t3 = now();
 	m_tabular_elements.clear();
 	m_root_render = m_root->create_render_item(nullptr);

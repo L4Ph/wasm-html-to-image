@@ -22,7 +22,7 @@ const make = (inst) => (html, ops) => {
   const t = performance.now();
   if (ops) {
     const r = module.satoru_live_apply(inst, ops, WIDTH);
-    if (r === "rebuild") { stats.rebuild++; return "rebuild"; }
+    if (r === "rebuild") { stats.rebuild++; if (process.env.DEBUG_REBUILD && stats.rebuild <= 8) console.log("rebuild asked for:", JSON.stringify(ops.slice(0, 260))); return "rebuild"; }
     const out = "+" + module.satoru_live_sync(inst, true);
     stats.apply++;
     stats.applyMs += performance.now() - t;
@@ -63,18 +63,26 @@ const same = (A, B) => {
   const { dom, inst } = await open(N);
   const ref = module.satoru_create_instance();
   const mutations = [
-    (i) => `els[${i}].className = "r c${Math.floor(rnd() * 5)}"`,
-    (i) => `els[${i}].classList.toggle("hide")`,
-    (i) => `els[${i}].style.height = "${Math.floor(rnd() * 60)}px"`,
-    (i) => `els[${i}].style.cssText = "float:${pick(["left", "right", "none"])};width:${Math.floor(rnd() * 120)}px;color:#${Math.floor(rnd() * 4095).toString(16).padStart(3, "0")}"`,
-    (i) => `els[${i}].setAttribute("data-x", "${Math.floor(rnd() * 9)}")`,
-    (i) => `els[${i}].removeAttribute("style")`,
-    (i) => `els[${i}].id = ${rnd() < 0.5 ? '"big"' : '""'}`,
-    (i) => `els[${i}].firstElementChild.style.fontSize = "${8 + Math.floor(rnd() * 20)}px"`,
+    (i) => `els[${i} % els.length].className = "r c${Math.floor(rnd() * 5)}"`,
+    (i) => `els[${i} % els.length].classList.toggle("hide")`,
+    (i) => `els[${i} % els.length].style.height = "${Math.floor(rnd() * 60)}px"`,
+    (i) => `els[${i} % els.length].style.cssText = "float:${pick(["left", "right", "none"])};width:${Math.floor(rnd() * 120)}px;color:#${Math.floor(rnd() * 4095).toString(16).padStart(3, "0")}"`,
+    (i) => `els[${i} % els.length].setAttribute("data-x", "${Math.floor(rnd() * 9)}")`,
+    (i) => `els[${i} % els.length].removeAttribute("style")`,
+    (i) => `els[${i} % els.length].id = ${rnd() < 0.5 ? '"big"' : '""'}`,
+    (i) => `{ const c = els[${i} % els.length].firstElementChild; if (c) c.style.fontSize = "${8 + Math.floor(rnd() * 20)}px" }`,
+    // text, insertion, removal, moves (P2 / P3)
+    (i) => `{ const e = els[${i} % els.length]; if (e.firstElementChild && e.firstElementChild.firstChild) e.firstElementChild.firstChild.data = "text ${Math.floor(rnd() * 99)} and some more words" }`,
+    (i) => `{ const e = els[${i} % els.length]; if (e.firstElementChild) e.firstElementChild.textContent = "${pick(["", "a", "one two three", "a much longer line of text that may wrap around the box"])}" }`,
+    (i) => `{ const d = document.createElement("div"); d.className = "r c${Math.floor(rnd() * 5)}"; d.setAttribute("style", "height:${Math.floor(rnd() * 40)}px"); d.appendChild(document.createElement("span")).textContent = "new ${Math.floor(rnd() * 99)}"; els[${i} % els.length].appendChild(d) }`,
+    (i) => `{ const d = document.createElement("div"); d.className = "r"; d.textContent = "inserted"; document.body.insertBefore(d, els[${i} % els.length]) }`,
+    (i) => `{ if (els.length > 20) els[${i} % els.length].remove() }`,
+    (i) => `{ if (els.length > 20) { const e = els[${i} % els.length]; if (e.lastElementChild && !e.lastElementChild.firstElementChild) e.lastElementChild.remove() } }`,
+    (i) => `{ const a = els[${i} % els.length], b = els[(${i} + 7) % els.length]; if (a !== b) document.body.insertBefore(a, b) }`,
   ];
   await dom.eval(`globalThis.els = document.body.children; els[0].getBoundingClientRect()`);
   let bad = 0;
-  const STEPS = 150;
+  const STEPS = 300;
   for (let step = 0; step < STEPS && bad < 5; step++) {
     const burst = 1 + Math.floor(rnd() * 3);
     const code = [];
@@ -101,6 +109,9 @@ for (const n of [1000, 3000]) {
   for (const [label, change] of [
     ["height (moves everything below)", (i) => `els[${i}*7%${n}].style.height=(10+${i})+"px"`],
     ["color (nothing moves)", (i) => `els[${i}*7%${n}].style.color="#"+(100+${i})`],
+    ["text edit in a row", (i) => `els[${i}*7%${n}].firstElementChild.firstChild.data = "edited " + ${i}`],
+    ["append a <b> to a row", (i) => `els[${i}*7%${n}].appendChild(document.createElement("b")).textContent = "x" + ${i}`],
+    ["append a row to <body> (all the page's children are re-parsed)", (i) => `{ const d = document.createElement("div"); d.className = "r"; d.textContent = "new " + ${i}; document.body.appendChild(d) }`],
   ]) {
     stats.apply = 0; stats.applyMs = 0;
     const t = performance.now();

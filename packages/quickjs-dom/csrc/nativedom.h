@@ -142,18 +142,23 @@ static JSValue nd_new(JSContext *c, JSValueConst owner, int type, const char *ta
     return obj;
 }
 
-/* Live-layout journal (doc/design/live-layout-incremental.md): attribute changes of elements that carry a qid, so the
-   renderer can be told what changed instead of reading the whole tree again. nd_jver is the version the journal is complete
-   at: a change it does not hold (a tree edit, a node without a qid, ...) moves nd_version past it, and the reader then
-   rebuilds from the tree. */
-static int nd_jon;
+/* Live-layout journal (doc/design/live-layout-incremental.md): what the page changed in its own document since the renderer
+   last read it, so the renderer can be told instead of reading the whole tree again. An entry is an attribute set / removed on
+   an element that has a qid, or "the children of this element changed" (a node inserted, removed, or a text edited).
+   nd_jver is the version the journal is complete at: a change it does not hold moves nd_version past it, and the reader then
+   rebuilds from the tree. Changes to nodes that are not in the page's document are not the renderer's business. */
+static int nd_jon, nd_jbad;
 static long nd_jver;
+static JSContext *nd_jctx;
+static ND *nd_jdoc;
 typedef struct {
+    int kind; /* 0 attribute set, 1 attribute removed, 2 children changed */
     uint32_t qid;
     char *name;
     int nlen;
-    char *val; /* NULL: the attribute was removed */
+    char *val;
     int vlen;
+    JSValue parent; /* kind 2 */
 } NJ;
 static NJ *nd_j;
 static int nd_jn, nd_jcap;
@@ -162,6 +167,7 @@ static void nd_journal_clear(void) {
     for (int i = 0; i < nd_jn; i++) {
         free(nd_j[i].name);
         free(nd_j[i].val);
+        if (nd_j[i].kind == 2) JS_FreeValue(nd_jctx, nd_j[i].parent);
     }
     nd_jn = 0;
 }
@@ -172,29 +178,64 @@ static int nd_journal_has_sep(const char *s, size_t len) {
     return 0;
 }
 
-/* call before nd_version++ : records the change when the journal is complete, otherwise leaves the gap */
-static int nd_journal_ready(ND *n) { return nd_jon && n->type == 1 && n->qid && nd_jver == nd_version; }
-
-static void nd_journal_add(ND *n, const char *name, size_t nlen, const char *val, size_t vlen) {
-    if (nd_journal_has_sep(name, nlen) || (val && nd_journal_has_sep(val, vlen)) || nd_jn >= 100000) return; /* the gap stays */
+static NJ *nd_journal_slot(void) {
+    if (nd_jn >= 100000) { nd_jbad = 1; return NULL; }
     if (nd_jn == nd_jcap) {
         int cap = nd_jcap ? nd_jcap * 2 : 64;
         NJ *p = realloc(nd_j, sizeof(NJ) * (size_t)cap);
-        if (!p) return;
+        if (!p) { nd_jbad = 1; return NULL; }
         nd_j = p;
         nd_jcap = cap;
     }
     NJ *e = &nd_j[nd_jn++];
+    memset(e, 0, sizeof(*e));
+    e->parent = JS_NULL;
+    return e;
+}
+
+static int nd_visible(ND *n) {
+    while (!JS_IsNull(n->parent)) n = nd_of(n->parent);
+    return nd_jdoc && n == nd_jdoc;
+}
+
+/* a mutation: nd_jbegin() before it, the nd_jattr / nd_jkids calls for what it touches, nd_jend(ok, bumps) with the number of
+   times it bumps nd_version */
+static int nd_jbegin(void) { nd_jbad = 0; return nd_jon && nd_jver == nd_version; }
+static void nd_jend(int ok, int bumps) { if (ok && !nd_jbad) nd_jver += bumps; }
+
+static void nd_jattr(ND *n, const char *name, size_t nlen, const char *val, size_t vlen) {
+    if (!nd_visible(n)) return;
+    if (n->type != 1 || !n->qid) return; /* new since the last read: the children entry of the place it went into carries it */
+    if (nd_journal_has_sep(name, nlen) || (val && nd_journal_has_sep(val, vlen))) { nd_jbad = 1; return; }
+    NJ *e = nd_journal_slot();
+    if (!e) return;
+    e->kind = val ? 0 : 1;
     e->qid = n->qid;
     e->name = nd_dup(name, nlen);
     e->nlen = (int)nlen;
-    e->val = val ? nd_dup(val, vlen) : NULL;
-    e->vlen = val ? (int)vlen : 0;
-    nd_jver = nd_version + 1; /* the caller bumps nd_version right after */
+    if (val) {
+        e->val = nd_dup(val, vlen);
+        e->vlen = (int)vlen;
+    }
+}
+
+static void nd_jkids(JSContext *c, JSValueConst parent) {
+    ND *p = nd_of(parent);
+    if (!p || !nd_visible(p)) return;
+    if (p->type != 1) { nd_jbad = 1; return; } /* the document or a fragment: not something to patch */
+    if (!p->qid) return;
+    if (nd_jn && nd_j[nd_jn - 1].kind == 2 && nd_j[nd_jn - 1].qid == p->qid) return;
+    NJ *e = nd_journal_slot();
+    if (!e) return;
+    e->kind = 2;
+    e->qid = p->qid;
+    e->parent = JS_DupValue(c, parent);
 }
 
 static void nd_set_attr(ND *n, const char *name, size_t nlen, const char *val, size_t vlen) {
-    if (nd_journal_ready(n)) nd_journal_add(n, name, nlen, val, vlen);
+    int jok = nd_jbegin();
+    if (jok) nd_jattr(n, name, nlen, val, vlen);
+    nd_jend(jok, 1);
     nd_version++;
     for (int i = 0; i < n->nattrs; i++) {
         if ((size_t)n->attrs[i].nlen == nlen && memcmp(n->attrs[i].name, name, nlen) == 0) {
@@ -226,7 +267,7 @@ static NAttr *nd_find_attr(ND *n, const char *name, size_t nlen) {
 
 /* ---- tree edits ---- */
 
-static void nd_unlink(JSContext *c, JSValueConst obj) {
+static void nd_unlink_raw(JSContext *c, JSValueConst obj) {
     nd_version++;
     ND *n = nd_of(obj);
     if (JS_IsNull(n->parent)) return;
@@ -253,11 +294,25 @@ static void nd_unlink(JSContext *c, JSValueConst obj) {
     n->parent = n->prev = n->next = JS_NULL;
 }
 
+static void nd_unlink(JSContext *c, JSValueConst obj) {
+    int jok = nd_jbegin();
+    ND *n = nd_of(obj);
+    if (jok && !JS_IsNull(n->parent)) nd_jkids(c, n->parent);
+    nd_jend(jok, 1);
+    nd_unlink_raw(c, obj);
+}
+
 /* insert `child` into `parent` before `ref` (null: at the end) */
 static void nd_insert(JSContext *c, JSValueConst parent, JSValueConst child, JSValueConst ref) {
     ND *p = nd_of(parent), *ch = nd_of(child);
+    int jok = nd_jbegin();
+    if (jok) {
+        nd_jkids(c, parent);
+        if (!JS_IsNull(ch->parent)) nd_jkids(c, ch->parent);
+    }
+    nd_jend(jok, 2);
     nd_version++;
-    nd_unlink(c, child);
+    nd_unlink_raw(c, child);
     ch->parent = JS_DupValue(c, parent);
     if (JS_IsNull(ref) || JS_IsUndefined(ref)) {
         ch->prev = JS_DupValue(c, p->last);

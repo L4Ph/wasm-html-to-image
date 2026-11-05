@@ -158,6 +158,12 @@ namespace litehtml
 		bool							live_set_attr(const std::shared_ptr<element>& el, const char* name, const char* value);
 		// Restyle only what the changed elements can affect, rebuild the render tree and lay out again.
 		live_timing						live_relayout(const std::vector<std::shared_ptr<element>>& changed, pixel_t max_width);
+		// Replace the children of `parent` by the elements `html` parses to (as if parsed in a <body>). The new elements are
+		// styled by the next live_relayout(), which should list `parent` among the changed elements.
+		bool							live_replace_children(const std::shared_ptr<element>& parent, const char* html);
+	private:
+		std::vector<std::shared_ptr<element>> m_live_new;
+	public:
 		void							dump(dumper& cout);
 
 		void							add_custom_property(const custom_property_definition& def) { m_custom_properties[def.name] = def; }

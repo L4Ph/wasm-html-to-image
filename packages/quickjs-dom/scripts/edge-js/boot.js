@@ -1041,6 +1041,38 @@
   // Live layout (prototype): the host registers `window.__layoutProvider(html) -> boxes JSON` (a synchronous call into the
   // renderer). A layout read then re-measures whenever the DOM moved since the last measurement, so the boxes are never stale.
   var liveLayout = false, refreshing = false;
+  // The journal as the host reads it: attribute changes first (the elements they name are still in the host's document), then
+  // the elements whose children changed, each with its children as HTML and every element in it carrying its id as the
+  // first class token. Elements that came after the last mark get ids here.
+  var nextQi = 0;
+  var journalOps = function (entries) {
+    var dom = g.__native.dom, doc = g.document, attrs = [], kids = [], i, j;
+    for (i = 0; i < entries.length; i++) if (typeof entries[i] === "string") attrs.push(entries[i]);
+    for (i = 0; i < entries.length; i++) {
+      var p = entries[i];
+      if (typeof p === "string" || !doc.contains(p)) continue; // gone again: the place it was removed from has its own entry
+      var inner = false;
+      for (j = 0; j < kids.length && !inner; j++) if (kids[j] !== p && kids[j].contains(p)) inner = true;
+      if (inner) continue;
+      for (j = kids.length - 1; j >= 0; j--) if (kids[j] !== p && p.contains(kids[j])) kids.splice(j, 1);
+      if (kids.indexOf(p) < 0) kids.push(p);
+    }
+    var out = attrs.slice();
+    for (i = 0; i < kids.length; i++) {
+      var parent = kids[i], all = parent.querySelectorAll("*");
+      for (j = 0; j < all.length; j++) if (all[j].__qi === undefined) { all[j].__qi = nextQi++; dom.setQid(all[j], all[j].__qi + 1); }
+      var clone = parent.cloneNode(true), copy = clone.querySelectorAll("*");
+      for (j = 0; j < copy.length && j < all.length; j++) {
+        var had = copy[j].getAttribute("class");
+        copy[j].setAttribute("class", "qjsl-" + all[j].__qi + (had ? " " + had : ""));
+      }
+      var html = "";
+      for (var c = clone.firstChild; c; c = c.nextSibling) html += dom.serialize(c);
+      out.push(parent.__qi + "\u0001\u0001" + "2" + "\u0001" + html);
+    }
+    dom.journalSync(); // the clones moved the version
+    return out.join("\u0002");
+  };
   // The host answers `__layoutProvider(html, ops)`: with ops (the journal of attribute changes since the last answer) it
   // updates the document it holds and returns the boxes, or "rebuild" when it cannot; with html it opens the document anew.
   var ensureLive = function () {
@@ -1051,7 +1083,7 @@
     try {
       var json;
       if (boxes !== null && dom.journalOk()) {
-        var ops = dom.journalTake();
+        var ops = journalOps(dom.journalTake());
         if (ops === "") { layoutRevision = v; return; }
         var r = g.__layoutProvider("", ops);
         if (r === "rebuild") { /* fall through to the whole tree */ }
@@ -1092,6 +1124,7 @@
     for (var j = 0; j < n.length; j++) n[j].remove();
     var html = g.__native.dom.serialize(clone);
     markRevision = g.__native.dom.version();
+    nextQi = a.length;
     if (liveLayout) g.__native.dom.journalSync(); // the host reads the whole tree now: the journal starts here
     return /^<!DOCTYPE/i.test(html) ? html.replace(/^<!DOCTYPE\s*(?:html)?\s*>/i, "<!DOCTYPE html>") : "<!DOCTYPE html>" + html;
   };
@@ -1137,7 +1170,7 @@
   };
   g.__edgeEnableLiveLayout = function () {
     liveLayout = true;
-    g.__native.dom.journalOn(true);
+    g.__native.dom.journalOn(true, g.document);
     g.__edgeSetLayout("{}"); // installs the layout accessors
     layoutRevision = -1; // nothing measured yet: the first read measures
     boxes = null;

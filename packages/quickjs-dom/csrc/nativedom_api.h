@@ -279,6 +279,10 @@ static JSValue js_nd_set_text(JSContext *ctx, JSValueConst this_val, JSValueCons
     if (!s) return JS_EXCEPTION;
     if (JS_IsNull(val)) len = 0;
     if (n->type == 3 || n->type == 8 || n->type == 10) {
+        int jok = nd_jbegin();
+        if (jok && !JS_IsNull(n->parent)) nd_jkids(ctx, n->parent);
+        nd_jend(jok, 1);
+        nd_version++; /* a text edit moves the version too: live collections and the renderer's boxes follow it */
         free(n->tag);
         n->tag = nd_dup(s, len);
         n->taglen = (int)len;
@@ -455,7 +459,9 @@ static JSValue js_nd_remove_attribute(JSContext *ctx, JSValueConst this_val, int
     if (!name) return JS_EXCEPTION;
     NAttr *a = nd_find_attr(n, name, len);
     if (a) {
-        if (nd_journal_ready(n)) nd_journal_add(n, name, len, NULL, 0);
+        int jok = nd_jbegin();
+        if (jok) nd_jattr(n, name, len, NULL, 0);
+        nd_jend(jok, 1);
         nd_version++;
         free(a->name);
         free(a->val);
@@ -668,11 +674,14 @@ static JSValue js_dom_serialize(JSContext *ctx, JSValueConst this_val, int argc,
 
 /* for tests: how many nodes are alive, and a garbage collection to free the unreachable ones */
 static JSValue js_dom_version(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { return JS_NewInt64(ctx, nd_version); }
-/* live-layout journal: on/off (argv[0]), sync (everything so far is known to the reader), ok (nothing but journalled attribute
-   changes since the last sync), take (the changes as text: `qid \1 name \1 0|1 \1 value`, entries joined by \2) */
+/* live-layout journal: on/off (argv[0], the page's document argv[1]), sync (everything so far is known to the reader), ok (nothing
+   but journalled changes since the last sync), take (an array: an attribute change as text `qid \1 name \1 0|1 \1 value`, or
+   the element whose children changed; the journal is emptied) */
 static JSValue js_dom_journal_on(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    nd_jon = argc > 0 && JS_ToBool(ctx, argv[0]) > 0;
+    nd_jctx = ctx;
     nd_journal_clear();
+    nd_jon = argc > 0 && JS_ToBool(ctx, argv[0]) > 0;
+    nd_jdoc = argc > 1 ? nd_of(argv[1]) : NULL;
     nd_jver = nd_version;
     return JS_UNDEFINED;
 }
@@ -685,14 +694,17 @@ static JSValue js_dom_journal_ok(JSContext *ctx, JSValueConst this_val, int argc
     return JS_NewBool(ctx, nd_jon && nd_jver == nd_version);
 }
 static JSValue js_dom_journal_take(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
-    size_t cap = 256, len = 0;
-    for (int i = 0; i < nd_jn; i++) cap += 40 + (size_t)nd_j[i].nlen + (size_t)nd_j[i].vlen;
-    char *buf = malloc(cap);
-    if (!buf) return JS_ThrowOutOfMemory(ctx);
+    JSValue arr = JS_NewArray(ctx);
     for (int i = 0; i < nd_jn; i++) {
         NJ *e = &nd_j[i];
-        if (i) buf[len++] = '\2';
-        len += (size_t)snprintf(buf + len, 24, "%u", (unsigned)(e->qid - 1));
+        if (e->kind == 2) {
+            JS_SetPropertyUint32(ctx, arr, (uint32_t)i, JS_DupValue(ctx, e->parent));
+            continue;
+        }
+        size_t cap = 64 + (size_t)e->nlen + (size_t)e->vlen, len = 0;
+        char *buf = malloc(cap);
+        if (!buf) { JS_FreeValue(ctx, arr); return JS_ThrowOutOfMemory(ctx); }
+        len += (size_t)snprintf(buf, 24, "%u", (unsigned)(e->qid - 1));
         buf[len++] = '\1';
         memcpy(buf + len, e->name, (size_t)e->nlen);
         len += (size_t)e->nlen;
@@ -703,11 +715,11 @@ static JSValue js_dom_journal_take(JSContext *ctx, JSValueConst this_val, int ar
             memcpy(buf + len, e->val, (size_t)e->vlen);
             len += (size_t)e->vlen;
         }
+        JS_SetPropertyUint32(ctx, arr, (uint32_t)i, JS_NewStringLen(ctx, buf, len));
+        free(buf);
     }
-    JSValue out = JS_NewStringLen(ctx, buf, len);
-    free(buf);
     nd_journal_clear(); /* nd_jver stays: what was taken is now the reader's */
-    return out;
+    return arr;
 }
 /* the id the renderer knows an element by; the page numbers its elements from 0, qid is that number + 1 (0 is "none") */
 static JSValue js_dom_set_qid(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {

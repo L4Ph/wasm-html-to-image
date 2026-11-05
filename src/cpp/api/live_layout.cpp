@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <initializer_list>
 #include <string>
 #include <vector>
 
@@ -14,6 +15,39 @@
 #include "satoru_api.h"
 
 namespace {
+
+bool tag_is_one_of(const char* tag, std::initializer_list<const char*> names) {
+    for (const char* n : names)
+        if (tag && strcmp(tag, n) == 0) return true;
+    return false;
+}
+
+// Can the children of this element be replaced from HTML parsed as if in a <body>? Not inside what the parser treats on its
+// own (tables, forms' selects, raw text, templates, foreign content) or where a document-wide thing hangs (style).
+bool can_replace_children(const std::shared_ptr<litehtml::element>& el) {
+    for (auto a = el; a; a = a->parent()) {
+        const char* tag = a->get_tagName();
+        if (a != el && tag_is_one_of(tag, {"html"})) continue; // every body element has the html element above it
+        if (tag_is_one_of(tag, {"html", "head", "table", "thead", "tbody", "tfoot", "tr", "td", "th", "colgroup", "col", "caption",
+                                "select", "optgroup", "option", "textarea", "style", "script", "title", "template", "noscript",
+                                "iframe", "object", "svg", "math", "frameset", "datalist"}))
+            return false;
+    }
+    return true;
+}
+
+// New content that needs more than a layout: style sheets, resources to fetch, tables, forms the parser reshapes.
+bool content_needs_rebuild(const std::string& html) {
+    std::string lower = html;
+    for (auto& ch : lower) ch = (char)tolower((unsigned char)ch);
+    static const char* const bad[] = {"<style", "<link", "<script", "<base", "<template", "<table", "<tr", "<td", "<th",
+                                     "<tbody", "<thead", "<tfoot", "<caption", "<colgroup", "<col", "<img", "<picture",
+                                     "<video", "<audio", "<source", "<iframe", "<object", "<embed", "<meta", "<title",
+                                     "<image", "<input", "<select", "<textarea", "<svg", "<math", "<noscript", "<frame"};
+    for (const char* b : bad)
+        if (lower.find(b) != std::string::npos) return true;
+    return false;
+}
 
 void collect_ids(const std::shared_ptr<litehtml::element>& el,
                  std::unordered_map<uint32_t, std::weak_ptr<litehtml::element>>& ids) {
@@ -56,6 +90,7 @@ bool satoru_api_live_apply(SatoruInstance* inst, const std::string& ops, int wid
         uint32_t id;
         std::string name, value;
         bool remove;
+        bool kids;
     };
     std::vector<op> list;
     size_t pos = 0;
@@ -71,7 +106,9 @@ bool satoru_api_live_apply(SatoruInstance* inst, const std::string& ops, int wid
         op o;
         o.id = (uint32_t)strtoul(entry.substr(0, a).c_str(), nullptr, 10);
         o.name = entry.substr(a + 1, b - a - 1);
-        o.remove = entry.substr(b + 1, c - b - 1) == "1";
+        const std::string kind = entry.substr(b + 1, c - b - 1);
+        o.remove = kind == "1";
+        o.kids = kind == "2";
         o.value = entry.substr(c + 1);
         list.push_back(std::move(o));
     }
@@ -80,6 +117,13 @@ bool satoru_api_live_apply(SatoruInstance* inst, const std::string& ops, int wid
         auto it = inst->live_ids.find(o.id);
         auto el = it == inst->live_ids.end() ? nullptr : it->second.lock();
         if (!el) return false;
+        if (o.kids) {
+            if (!can_replace_children(el) || content_needs_rebuild(o.value)) return false;
+            if (!inst->doc->live_replace_children(el, o.value.c_str())) return false;
+            collect_ids(el, inst->live_ids);
+            changed.push_back(el);
+            continue;
+        }
         std::string lname = o.name;
         for (auto& ch : lname) ch = (char)tolower((unsigned char)ch);
         if (lname == "class") {
