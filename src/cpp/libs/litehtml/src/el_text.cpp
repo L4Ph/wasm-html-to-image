@@ -3,7 +3,51 @@
 #include "render_item.h"
 #include "document_container.h"
 
-litehtml::el_text::el_text(const char* text, const document::ptr& doc) : element(doc)
+namespace litehtml
+{
+	// What a text node looks like before it has a parent to take its style from.
+	static css_properties* default_text_css()
+	{
+		static css_properties* d = []() { auto* c = new css_properties(); c->set_display(display_inline_text); return c; }();
+		return d;
+	}
+
+	// The style of the text inside `parent`: the font and the rest are the parent's, the box is an inline run. It is the same for
+	// every text node of that parent, so they share one (a style is about 2.3 KB, and a page has about as many text nodes as elements).
+	void build_text_css(css_properties& out, const element::ptr& parent)
+	{
+		if (parent)
+		{
+			out.line_height_w() = parent->css().line_height();
+			out.set_font(parent->css().get_font());
+			out.set_font_metrics(parent->css().get_font_metrics());
+			out.set_white_space(parent->css().get_white_space());
+			out.set_unicode_bidi(parent->css().get_unicode_bidi());
+			out.set_direction(parent->css().get_direction());
+			out.set_text_transform(parent->css().get_text_transform());
+		}
+		out.set_display(display_inline_text);
+		out.set_float(float_none);
+
+		element::ptr p = parent;
+		while (p && p->css().get_display() == display_inline)
+		{
+			if (p->css().get_position() == element_position_relative)
+			{
+				out.set_offsets(p->css().get_offsets());
+				out.set_position(element_position_relative);
+				break;
+			}
+			p = p->parent();
+		}
+		if (p)
+		{
+			out.set_position(element_position_static);
+		}
+	}
+}
+
+litehtml::el_text::el_text(const char* text, const document::ptr& doc) : element(doc, default_text_css())
 {
 	if(text)
 	{
@@ -11,7 +55,6 @@ litehtml::el_text::el_text(const char* text, const document::ptr& doc) : element
 	}
 	m_use_transformed	= false;
 	m_draw_spaces		= true;
-	css_w().set_display(display_inline_text);
 }
 
 void litehtml::el_text::get_content_size( size& sz, pixel_t /*max_width*/ )
@@ -39,43 +82,23 @@ void litehtml::el_text::set_text( const char* text )
 void litehtml::el_text::compute_styles(bool /*recursive*/)
 {
 	element::ptr el_parent = parent();
-	if (el_parent)
+	std::shared_ptr<css_properties> shared = el_parent ? el_parent->text_css() : nullptr;
+	if (!shared)
 	{
-		css_w().line_height_w() = el_parent->css().line_height();
-		css_w().set_font(el_parent->css().get_font());
-		css_w().set_font_metrics(el_parent->css().get_font_metrics());
-		css_w().set_white_space(el_parent->css().get_white_space());
-		css_w().set_unicode_bidi(el_parent->css().get_unicode_bidi());
-		css_w().set_direction(el_parent->css().get_direction());
-		css_w().set_text_transform(el_parent->css().get_text_transform());
+		shared = std::make_shared<css_properties>();
+		build_text_css(*shared, el_parent);
 	}
-	css_w().set_display(display_inline_text);
-	css_w().set_float(float_none);
+	m_text_css = shared;
+	m_cssp = shared.get();
 
-	if(m_css.get_text_transform() != text_transform_none)
+	if(m_cssp->get_text_transform() != text_transform_none)
 	{
 		m_transformed_text	= m_text;
 		m_use_transformed = true;
-		get_document()->container()->transform_text(m_transformed_text, m_css.get_text_transform());
+		get_document()->container()->transform_text(m_transformed_text, m_cssp->get_text_transform());
 	} else
 	{
 		m_use_transformed = false;
-	}
-
-	element::ptr p = parent();
-	while(p && p->css().get_display() == display_inline)
-	{
-		if(p->css().get_position() == element_position_relative)
-		{
-			css_w().set_offsets(p->css().get_offsets());
-			css_w().set_position(element_position_relative);
-			break;
-		}
-		p = p->parent();
-	}
-	if(p)
-	{
-		css_w().set_position(element_position_static);
 	}
 
 	if(is_white_space())

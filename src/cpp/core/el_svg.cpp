@@ -203,7 +203,7 @@ class SatoruResourceProvider : public skresources::ResourceProvider {
 }  // namespace
 
 el_svg::el_svg(const std::shared_ptr<document>& doc) : html_tag(doc) {
-    m_css.set_display(display_inline_block);
+    (*m_cssp).set_display(display_inline_block);
 }
 el_svg::~el_svg() {}
 

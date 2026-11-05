@@ -29,7 +29,8 @@ namespace litehtml
 		std::weak_ptr<element>					m_parent;
 		std::weak_ptr<document>					m_doc;
 		elements_list							m_children;
-		css_properties							m_css;
+		std::unique_ptr<css_properties>			m_css_own;  // elements have their own style; text nodes share one made by their parent (see html_tag::text_css)
+		css_properties*							m_cssp = nullptr;
 		std::list<std::weak_ptr<render_item>>	m_renders;
 		used_selector::vector					m_used_styles;
 
@@ -41,6 +42,10 @@ namespace litehtml
 
 	public:
 		explicit element(const std::shared_ptr<document>& doc);
+		// A node that has no style of its own (text, comment): it reads `shared`, a style it does not own.
+		element(const std::shared_ptr<document>& doc, css_properties* shared);
+		// The style that all the text children of this element share (nullptr: the element does not make one).
+		virtual std::shared_ptr<css_properties> text_css() { return nullptr; }
 		virtual ~element() = default;
 
 		const css_properties&		css() const;
@@ -311,17 +316,17 @@ namespace litehtml
 
 	inline const css_properties& element::css() const
 	{
-		return m_css;
+		return *m_cssp;
 	}
 
 	inline css_properties& element::css_w()
 	{
-		return m_css;
+		return *m_cssp;
 	}
 
 	inline direction element::get_direction() const
 	{
-		return m_css.get_direction();
+		return m_cssp->get_direction();
 	}
 
 	inline bool element::is_block_box() const

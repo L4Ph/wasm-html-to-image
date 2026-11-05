@@ -6,10 +6,14 @@
 
 namespace litehtml
 {
+	// Fills the style of the text inside `parent` (see el_text.cpp).
+	void build_text_css(css_properties& out, const element::ptr& parent);
+
 	class el_text : public element
 	{
 	protected:
 		string			m_text;
+		std::shared_ptr<css_properties> m_text_css; // the style shared with the other text of the parent
 		string			m_transformed_text;
 		size			m_size;
 		bool			m_use_transformed;

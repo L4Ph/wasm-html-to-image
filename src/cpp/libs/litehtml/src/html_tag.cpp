@@ -514,7 +514,7 @@ void litehtml::html_tag::apply_stylesheet( const litehtml::css& stylesheet )
 void litehtml::html_tag::get_content_size( size& sz, pixel_t max_width )
 {
         sz.height       = 0;
-        if(m_css.get_display() == display_block)
+        if((*m_cssp).get_display() == display_block)
         {
                 sz.width        = max_width;
         } else
@@ -534,16 +534,16 @@ void litehtml::html_tag::draw(uint_ptr hdc, pixel_t x, pixel_t y, const position
         draw_background(hdc, x, y, clip, ri);
         draw_borders(hdc, x, y, clip, ri);
 
-        if(m_css.get_display() == display_list_item &&
-                (m_css.get_list_style_type() != list_style_type_none || m_css.get_list_style_image() != ""))
+        if((*m_cssp).get_display() == display_list_item &&
+                ((*m_cssp).get_list_style_type() != list_style_type_none || (*m_cssp).get_list_style_image() != ""))
         {
-                if(m_css.get_overflow() > overflow_visible)
+                if((*m_cssp).get_overflow() > overflow_visible)
                 {
                         position border_box = pos;
                         border_box += ri->get_paddings();
                         border_box += ri->get_borders();
 
-                        border_radiuses bdr_radius = m_css.get_borders().radius.calc_percents(border_box.width, border_box.height);
+                        border_radiuses bdr_radius = (*m_cssp).get_borders().radius.calc_percents(border_box.width, border_box.height);
 
                         bdr_radius -= ri->get_borders();
                         bdr_radius -= ri->get_paddings();
@@ -553,7 +553,7 @@ void litehtml::html_tag::draw(uint_ptr hdc, pixel_t x, pixel_t y, const position
 
                 draw_list_marker(hdc, pos, ri);
 
-                if(m_css.get_overflow() > overflow_visible)
+                if((*m_cssp).get_overflow() > overflow_visible)
                 {
                         get_document()->container()->del_clip();
                 }
@@ -631,9 +631,20 @@ bool html_tag::get_custom_property(string_id name, css_token_vector& result) con
 }
 
 int g_cs_depth = 0;
+std::shared_ptr<litehtml::css_properties> litehtml::html_tag::text_css()
+{
+    if (!m_text_css)
+    {
+        m_text_css = std::make_shared<css_properties>();
+        build_text_css(*m_text_css, shared_from_this());
+    }
+    return m_text_css;
+}
+
 void litehtml::html_tag::compute_styles(bool recursive)
 {
     g_cs_depth++;
+    m_text_css.reset();
       fflush(stdout);
 
     const char* style = get_attr("style");
@@ -649,7 +660,7 @@ void litehtml::html_tag::compute_styles(bool recursive)
     m_style.subst_vars(this);
 
       fflush(stdout);
-    m_css.compute(this, doc);
+    (*m_cssp).compute(this, doc);
 
     if (recursive)
     {
@@ -726,8 +737,8 @@ void litehtml::html_tag::apply_word_break()
 {
 	// line-break (CJK strictness) and hyphens: auto rewrite the word tokens of this element.
 	{
-		const line_break lb = m_css.get_line_break();
-		const bool auto_hyphens = m_css.get_hyphens() == hyphens_auto;
+		const line_break lb = (*m_cssp).get_line_break();
+		const bool auto_hyphens = (*m_cssp).get_hyphens() == hyphens_auto;
 		bool english = false;
 		if (auto_hyphens)
 		{
@@ -814,18 +825,18 @@ void litehtml::html_tag::apply_word_break()
 		}
 	}
 
-	word_break wb = m_css.get_word_break();
-	overflow_wrap ow = m_css.get_overflow_wrap();
+	word_break wb = (*m_cssp).get_word_break();
+	overflow_wrap ow = (*m_cssp).get_overflow_wrap();
 	// `overflow-wrap: anywhere` and `word-break: break-all` (and line-break: anywhere)
 	// allow a break between any two characters. `break-word` only does so when a word
 	// does not fit a line by itself, so those runs keep their word grouping and the
 	// line box moves the whole word to the next line while it still fits one.
 	const bool break_anywhere = wb == word_break_break_all || ow == overflow_wrap_anywhere ||
-	                            m_css.get_line_break() == line_break_anywhere;
+	                            (*m_cssp).get_line_break() == line_break_anywhere;
 	const bool keep_whole_word = !break_anywhere &&
 	                             (wb == word_break_break_word || ow == overflow_wrap_break_word);
 	if(wb == word_break_break_all || wb == word_break_break_word || ow == overflow_wrap_break_word || ow == overflow_wrap_anywhere ||
-	   m_css.get_line_break() == line_break_anywhere)
+	   (*m_cssp).get_line_break() == line_break_anywhere)
 	{
 		for (auto it = m_children.begin(); it != m_children.end(); )
 		{
@@ -1635,7 +1646,7 @@ static void apply_fragment_band(const litehtml::document::fragment_band* band, l
 void litehtml::html_tag::draw_background(uint_ptr hdc, pixel_t x, pixel_t y, const position *clip,   
                                                                                  const std::shared_ptr<render_item> &ri)
 {
-        if(m_css.get_display() != display_inline && m_css.get_display() != display_table_row)        
+        if((*m_cssp).get_display() != display_inline && (*m_cssp).get_display() != display_table_row)        
         {
                 position pos = ri->pos();
                 pos.x   += x;
@@ -1653,11 +1664,11 @@ void litehtml::html_tag::draw_background(uint_ptr hdc, pixel_t x, pixel_t y, con
                         pos.height -= v_offset;
 
                         border_box.round();
-                        border_radiuses radius = m_css.get_borders().radius.calc_percents(border_box.width, border_box.height);
+                        border_radiuses radius = (*m_cssp).get_borders().radius.calc_percents(border_box.width, border_box.height);
 
-                        if(!m_css.get_box_shadow().empty())
+                        if(!(*m_cssp).get_box_shadow().empty())
                         {
-                                get_document()->container()->draw_box_shadow(hdc, m_css.get_box_shadow(), border_box, radius, false);
+                                get_document()->container()->draw_box_shadow(hdc, (*m_cssp).get_box_shadow(), border_box, radius, false);
                         }
 
                         const background* bg = get_background();
@@ -1680,13 +1691,13 @@ void litehtml::html_tag::draw_background(uint_ptr hdc, pixel_t x, pixel_t y, con
                                         layer.clip_box.round();
                                         layer.origin_box.round();
 
-                                        bg->draw_layer(hdc, i, layer, get_document()->container(), m_css.get_image_rendering());  
+                                        bg->draw_layer(hdc, i, layer, get_document()->container(), (*m_cssp).get_image_rendering());  
                                 }
                         }
 
-                                                if(!m_css.get_box_shadow().empty())
+                                                if(!(*m_cssp).get_box_shadow().empty())
                         {
-                                get_document()->container()->draw_box_shadow(hdc, m_css.get_box_shadow(), border_box, radius, true);
+                                get_document()->container()->draw_box_shadow(hdc, (*m_cssp).get_box_shadow(), border_box, radius, true);
                         }
                 }
         } else
@@ -1709,7 +1720,7 @@ void litehtml::html_tag::draw_background(uint_ptr hdc, pixel_t x, pixel_t y, con
                                 content_box -= ri->get_borders();
                                 content_box -= ri->get_paddings();
 
-                                css_borders bdr = inline_fragment_borders(m_css.get_borders(), m_css.get_writing_mode() != writing_mode_horizontal_tb,
+                                css_borders bdr = inline_fragment_borders((*m_cssp).get_borders(), (*m_cssp).get_writing_mode() != writing_mode_horizontal_tb,
                                         box == boxes.begin(), box == boxes.end() - 1);
 
                                 if(bg)
@@ -1727,12 +1738,12 @@ void litehtml::html_tag::draw_background(uint_ptr hdc, pixel_t x, pixel_t y, con
                                                 layer.clip_box.round();
                                                 layer.origin_box.round();
 
-                                                bg->draw_layer(hdc, i, layer, get_document()->container(), m_css.get_image_rendering());  
+                                                bg->draw_layer(hdc, i, layer, get_document()->container(), (*m_cssp).get_image_rendering());  
                                         }
                                 }
-                                if(!m_css.get_box_shadow().empty())
+                                if(!(*m_cssp).get_box_shadow().empty())
                                 {
-                                        get_document()->container()->draw_box_shadow(hdc, m_css.get_box_shadow(), *box, bdr.radius.calc_percents(box->width, box->height), true);
+                                        get_document()->container()->draw_box_shadow(hdc, (*m_cssp).get_box_shadow(), *box, bdr.radius.calc_percents(box->width, box->height), true);
                                 }
                         }
                 }
@@ -1741,7 +1752,7 @@ void litehtml::html_tag::draw_background(uint_ptr hdc, pixel_t x, pixel_t y, con
 
 void litehtml::html_tag::draw_borders(uint_ptr hdc, pixel_t x, pixel_t y, const position *clip, const std::shared_ptr<render_item> &ri)
 {
-        if(m_css.get_display() != display_inline && m_css.get_display() != display_table_row)        
+        if((*m_cssp).get_display() != display_inline && (*m_cssp).get_display() != display_table_row)        
         {
                 position pos = ri->pos();
                 pos.x   += x;
@@ -1759,13 +1770,13 @@ void litehtml::html_tag::draw_borders(uint_ptr hdc, pixel_t x, pixel_t y, const 
                         pos.height -= v_offset;
 
                         border_box.round();
-                        border_radiuses radius = m_css.get_borders().radius.calc_percents(border_box.width, border_box.height);
+                        border_radiuses radius = (*m_cssp).get_borders().radius.calc_percents(border_box.width, border_box.height);
 
-                        borders bdr = m_css.get_borders();
-                        if(m_css.get_border_image().is_valid())
+                        borders bdr = (*m_cssp).get_borders();
+                        if((*m_cssp).get_border_image().is_valid())
                         {
                             bdr.radius = radius;
-                            get_document()->container()->draw_border_image(hdc, m_css.get_border_image(), bdr, border_box, is_root());
+                            get_document()->container()->draw_border_image(hdc, (*m_cssp).get_border_image(), bdr, border_box, is_root());
                         }
                         else if(bdr.is_visible())
                         {
@@ -1785,15 +1796,15 @@ void litehtml::html_tag::draw_borders(uint_ptr hdc, pixel_t x, pixel_t y, const 
 
                         if(box->does_intersect(clip))
                         {
-                                css_borders bdr = inline_fragment_borders(m_css.get_borders(), m_css.get_writing_mode() != writing_mode_horizontal_tb,
+                                css_borders bdr = inline_fragment_borders((*m_cssp).get_borders(), (*m_cssp).get_writing_mode() != writing_mode_horizontal_tb,
                                         box == boxes.begin(), box == boxes.end() - 1);
 
-                                if(m_css.get_border_image().is_valid())
+                                if((*m_cssp).get_border_image().is_valid())
                                 {
                                     borders b = bdr;
                                     b.radius = bdr.radius.calc_percents(box->width, box->height);
                                     box->round();
-                                    get_document()->container()->draw_border_image(hdc, m_css.get_border_image(), b, *box, false);
+                                    get_document()->container()->draw_border_image(hdc, (*m_cssp).get_border_image(), b, *box, false);
                                 }
                                 else if(bdr.is_visible())
                                 {
@@ -1996,9 +2007,9 @@ void litehtml::html_tag::draw_list_marker( uint_ptr hdc, const position& pos, co
                 lm.pos.height   = img_size.height;
         }
 
-        if (m_css.get_list_style_position() == list_style_position_outside)
+        if ((*m_cssp).get_list_style_position() == list_style_position_outside)
         {
-                if (m_css.get_list_style_type() >= list_style_type_armenian)
+                if ((*m_cssp).get_list_style_type() >= list_style_type_armenian)
                 {
                         if(lm.font)
                         {
@@ -2020,7 +2031,7 @@ void litehtml::html_tag::draw_list_marker( uint_ptr hdc, const position& pos, co
                 }
         }
 
-        if (m_css.get_list_style_type() >= list_style_type_armenian)
+        if ((*m_cssp).get_list_style_type() >= list_style_type_armenian)
         {
                 auto marker_text = get_list_marker_text(lm.index);
                 if (marker_text.empty())
@@ -2031,19 +2042,19 @@ void litehtml::html_tag::draw_list_marker( uint_ptr hdc, const position& pos, co
                 {
                         if(lm.font && vertical)
                         {
-                                marker_text += list_marker_suffix(m_css.get_list_style_type());
+                                marker_text += list_marker_suffix((*m_cssp).get_list_style_type());
                                 auto tw = get_document()->container()->text_width(marker_text.c_str(), lm.font, get_direction(), wmode);
                                 auto tw_space = get_document()->container()->text_width(" ", lm.font, get_direction(), wmode);
                                 position text_pos;
                                 text_pos.x = column_edge_x;
                                 text_pos.width = ln_height;
                                 text_pos.height = tw;
-                                text_pos.y = m_css.get_list_style_position() == list_style_position_outside ? pos.y - tw - tw_space : pos.y;
+                                text_pos.y = (*m_cssp).get_list_style_position() == list_style_position_outside ? pos.y - tw - tw_space : pos.y;
                                 get_document()->container()->draw_text(hdc, marker_text.c_str(), lm.font, lm.color, text_pos, litehtml::text_overflow_clip, get_direction(), wmode);
                         }
                         else if(lm.font)
                         {
-                                marker_text += list_marker_suffix(m_css.get_list_style_type());
+                                marker_text += list_marker_suffix((*m_cssp).get_list_style_type());
                                 auto tw = get_document()->container()->text_width(marker_text.c_str(), lm.font, get_direction());
                                 auto text_pos = lm.pos;
                                 text_pos.move_to(text_pos.right() - tw, text_pos.y);
@@ -2061,7 +2072,7 @@ void litehtml::html_tag::draw_list_marker( uint_ptr hdc, const position& pos, co
 
 void litehtml::html_tag::measure_list_marker(int index)
 {
-        if (m_css.get_list_style_type() < list_style_type_armenian || !m_css.get_font())
+        if ((*m_cssp).get_list_style_type() < list_style_type_armenian || !(*m_cssp).get_font())
         {
                 return;
         }
@@ -2070,13 +2081,13 @@ void litehtml::html_tag::measure_list_marker(int index)
         {
                 return;
         }
-        marker_text += list_marker_suffix(m_css.get_list_style_type());
-        get_document()->container()->text_width(marker_text.c_str(), m_css.get_font(), get_direction(), m_css.get_writing_mode());
+        marker_text += list_marker_suffix((*m_cssp).get_list_style_type());
+        get_document()->container()->text_width(marker_text.c_str(), (*m_cssp).get_font(), get_direction(), (*m_cssp).get_writing_mode());
 }
 
 litehtml::string litehtml::html_tag::get_list_marker_text(int index)
 {
-        switch (m_css.get_list_style_type())
+        switch ((*m_cssp).get_list_style_type())
         {
         case litehtml::list_style_type_decimal:
                 return std::to_string(index);
@@ -2714,14 +2725,14 @@ const litehtml::background* litehtml::html_tag::get_background(bool own_only)
         if(own_only)
         {
                 // return own background with check for empty one
-                if(m_css.get_bg().is_empty())
+                if((*m_cssp).get_bg().is_empty())
                 {
                         return nullptr;
                 }
-                return &m_css.get_bg();
+                return &(*m_cssp).get_bg();
         }
 
-        if(m_css.get_bg().is_empty())
+        if((*m_cssp).get_bg().is_empty())
         {
                 // if this is root element (<html>) try to get background from body
                 if (is_root())
@@ -2751,7 +2762,7 @@ const litehtml::background* litehtml::html_tag::get_background(bool own_only)
                 }
         }
 
-        return &m_css.get_bg();
+        return &(*m_cssp).get_bg();
 }
 
 string html_tag::dump_get_name()

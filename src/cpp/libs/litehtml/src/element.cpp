@@ -15,7 +15,11 @@ namespace litehtml
 #define LITEHTML_EMPTY_FUNC			{}
 #define LITEHTML_RETURN_FUNC(ret)	{return ret;}
 
-element::element(const document::ptr& doc) : m_doc(doc)
+element::element(const document::ptr& doc) : m_doc(doc), m_css_own(new css_properties()), m_cssp(m_css_own.get())
+{
+}
+
+element::element(const document::ptr& doc, css_properties* shared) : m_doc(doc), m_cssp(shared)
 {
 }
 
@@ -115,7 +119,7 @@ string element::dump_get_name()
 
 std::vector<std::tuple<string, string>> element::dump_get_attrs()
 {
-	return m_css.dump_get_attrs();
+	return (*m_cssp).dump_get_attrs();
 }
 
 void element::dump(dumper& cout)
@@ -313,7 +317,7 @@ element::ptr element::_add_before_after(int type, const style& /*style*/)
 
 bool element::is_block_formatting_context() const
 {
-	if(m_css.get_display() == display_block)
+	if((*m_cssp).get_display() == display_block)
 	{
 		auto par = parent();
 		if(par && (par->css().get_display() == display_inline_flex || par->css().get_display() == display_flex ||
@@ -323,25 +327,25 @@ bool element::is_block_formatting_context() const
 		}
 		// A block whose writing mode differs from its parent's is an orthogonal flow root and
 		// establishes its own formatting context, so its floats do not leak into the parent.
-		if(par && par->css().get_writing_mode() != m_css.get_writing_mode())
+		if(par && par->css().get_writing_mode() != (*m_cssp).get_writing_mode())
 		{
 			return true;
 		}
 	}
-	if(	m_css.get_display() == display_inline_block ||
-		   m_css.get_display() == display_table_cell ||
-		   m_css.get_display() == display_inline_flex ||
-		   m_css.get_display() == display_flex ||
-		   m_css.get_display() == display_inline_grid ||
-		   m_css.get_display() == display_grid ||
-		   m_css.get_display() == display_table_caption ||
-		   m_css.is_flow_root() ||
+	if(	(*m_cssp).get_display() == display_inline_block ||
+		   (*m_cssp).get_display() == display_table_cell ||
+		   (*m_cssp).get_display() == display_inline_flex ||
+		   (*m_cssp).get_display() == display_flex ||
+		   (*m_cssp).get_display() == display_inline_grid ||
+		   (*m_cssp).get_display() == display_grid ||
+		   (*m_cssp).get_display() == display_table_caption ||
+		   (*m_cssp).is_flow_root() ||
 		   is_root() ||
-		   m_css.get_float() != float_none ||
-		   m_css.get_position() == element_position_absolute ||
-		   m_css.get_position() == element_position_fixed ||
-		   m_css.get_overflow() > overflow_visible ||
-		   m_css.get_opacity() < 1.0f)
+		   (*m_cssp).get_float() != float_none ||
+		   (*m_cssp).get_position() == element_position_absolute ||
+		   (*m_cssp).get_position() == element_position_fixed ||
+		   (*m_cssp).get_overflow() > overflow_visible ||
+		   (*m_cssp).get_opacity() < 1.0f)
 	{
 		return true;
 	}
@@ -539,7 +543,7 @@ void element::compute_styles( bool /*recursive*/ )                              
 
 void litehtml::el_anonymous::compute_styles(bool recursive)
 {
-	m_css.compute(this, get_document());
+	(*m_cssp).compute(this, get_document());
 	if (recursive)
 	{
 		for (auto& el : m_children)

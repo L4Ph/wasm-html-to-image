@@ -1,6 +1,7 @@
 #include "el_comment.h"
 
-litehtml::el_comment::el_comment(const std::shared_ptr<document>& doc) : element(doc)
+static litehtml::css_properties* comment_css() { static litehtml::css_properties* c = new litehtml::css_properties(); return c; }
+litehtml::el_comment::el_comment(const std::shared_ptr<document>& doc) : element(doc, comment_css())
 {
 	//m_skip = true;
 }
