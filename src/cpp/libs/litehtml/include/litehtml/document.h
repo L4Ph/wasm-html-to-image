@@ -157,10 +157,15 @@ namespace litehtml
 		// (value == nullptr removes it). The styles are not recomputed until live_relayout().
 		bool							live_set_attr(const std::shared_ptr<element>& el, const char* name, const char* value);
 		// Restyle only what the changed elements can affect, rebuild the render tree and lay out again.
-		live_timing						live_relayout(const std::vector<std::shared_ptr<element>>& changed, pixel_t max_width);
+		// `changed`: elements whose attributes changed; `scopes`: subtrees to restyle as they are (see live_set_children).
+		live_timing						live_relayout(const std::vector<std::shared_ptr<element>>& changed, const std::vector<std::shared_ptr<element>>& scopes, pixel_t max_width);
 		// Replace the children of `parent` by the elements `html` parses to (as if parsed in a <body>). The new elements are
 		// styled by the next live_relayout(), which should list `parent` among the changed elements.
-		bool							live_replace_children(const std::shared_ptr<element>& parent, const char* html);
+		bool							live_parse_fragment(const char* html, std::vector<std::shared_ptr<element>>& out);
+		// Make `list` the children of `parent`: an element of the list that was somewhere else is taken from there, one that is
+		// not in the list any more is let go. `fresh` are the elements just parsed. Returns the subtrees whose styles may change.
+		std::vector<std::shared_ptr<element>> live_set_children(const std::shared_ptr<element>& parent,
+			const std::vector<std::shared_ptr<element>>& list, const std::vector<std::shared_ptr<element>>& fresh);
 	private:
 		std::vector<std::shared_ptr<element>> m_live_new;
 	public:

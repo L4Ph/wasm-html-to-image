@@ -1051,24 +1051,31 @@
     for (i = 0; i < entries.length; i++) {
       var p = entries[i];
       if (typeof p === "string" || !doc.contains(p)) continue; // gone again: the place it was removed from has its own entry
-      var inner = false;
-      for (j = 0; j < kids.length && !inner; j++) if (kids[j] !== p && kids[j].contains(p)) inner = true;
-      if (inner) continue;
-      for (j = kids.length - 1; j >= 0; j--) if (kids[j] !== p && p.contains(kids[j])) kids.splice(j, 1);
       if (kids.indexOf(p) < 0) kids.push(p);
     }
-    var out = attrs.slice();
+    var out = attrs.slice(), bad = /[\u0001-\u0003]/;
     for (i = 0; i < kids.length; i++) {
-      var parent = kids[i], all = parent.querySelectorAll("*");
-      for (j = 0; j < all.length; j++) if (all[j].__qi === undefined) { all[j].__qi = nextQi++; dom.setQid(all[j], all[j].__qi + 1); }
-      var clone = parent.cloneNode(true), copy = clone.querySelectorAll("*");
-      for (j = 0; j < copy.length && j < all.length; j++) {
-        var had = copy[j].getAttribute("class");
-        copy[j].setAttribute("class", "qjsl-" + all[j].__qi + (had ? " " + had : ""));
+      var parent = kids[i], segs = [], html = "", c;
+      // the children as the host will have them: the ones it knows (they had an id before this) by id, the rest as HTML
+      for (c = parent.firstChild; c; c = c.nextSibling) {
+        if (c.nodeType === 1 && c.__qi !== undefined) {
+          if (html) { segs.push("H" + html); html = ""; }
+          segs.push("E" + c.__qi);
+          continue;
+        }
+        var all = c.nodeType === 1 ? [c].concat(Array.prototype.slice.call(c.querySelectorAll("*"))) : [];
+        for (j = 0; j < all.length; j++) if (all[j].__qi === undefined) { all[j].__qi = nextQi++; dom.setQid(all[j], all[j].__qi + 1); }
+        var copy = c.cloneNode(true), cc = c.nodeType === 1 ? [copy].concat(Array.prototype.slice.call(copy.querySelectorAll("*"))) : [];
+        for (j = 0; j < cc.length && j < all.length; j++) {
+          var had = cc[j].getAttribute("class");
+          cc[j].setAttribute("class", "qjsl-" + all[j].__qi + (had ? " " + had : ""));
+        }
+        html += dom.serialize(copy);
       }
-      var html = "";
-      for (var c = clone.firstChild; c; c = c.nextSibling) html += dom.serialize(c);
-      out.push(parent.__qi + "\u0001\u0001" + "2" + "\u0001" + html);
+      if (html) segs.push("H" + html);
+      var value = segs.join("\u0003");
+      if (value.split("").length !== Math.max(segs.length, 1) || /[]/.test(value)) { dom.journalSync(); return null; } // cannot be told apart: the host reads the tree
+      out.push(parent.__qi + "\u0001\u0001" + "2" + "\u0001" + value);
     }
     dom.journalSync(); // the clones moved the version
     return out.join("\u0002");
@@ -1085,7 +1092,7 @@
       if (boxes !== null && dom.journalOk()) {
         var ops = journalOps(dom.journalTake());
         if (ops === "") { layoutRevision = v; return; }
-        var r = g.__layoutProvider("", ops);
+        var r = ops === null ? "rebuild" : g.__layoutProvider("", ops);
         if (r === "rebuild") { /* fall through to the whole tree */ }
         else if (r.charAt(0) === "+") { g.__edgeMergeLayout(r.slice(1)); return; }
         else json = r.slice(1);

@@ -9,11 +9,12 @@ const module = await loadHtmlToImageModule();
 const WIDTH = 600;
 
 const sheet = `.r{margin:1px}.c1{color:#036;padding:3px}.c2 span{font-weight:bold;font-size:20px}.c3{float:left;width:50px}
-.c4>span{display:inline-block;width:80px}.r:nth-child(odd){background:#eee}#big{height:90px}.hide{display:none}`;
-const page = (n) => {
+.c4>span{display:inline-block;width:80px}#big{height:90px}.hide{display:none}`;
+const structuralRule = ".r:nth-child(odd){background:#eee}";
+const page = (n, structural = true) => {
   let b = "";
   for (let i = 0; i < n; i++) b += `<div class="r c${i % 5}" style="height:${10 + (i % 7)}px;padding:2px"><span>row ${i}</span></div>`;
-  return `<!doctype html><html><head><style>${sheet}</style></head><body style="margin:0">${b}</body></html>`;
+  return `<!doctype html><html><head><style>${sheet}${structural ? structuralRule : ""}</style></head><body style="margin:0">${b}</body></html>`;
 };
 
 // the contract of the guest: __layoutProvider(html, ops) -> "=" + all boxes | "+" + the boxes that changed | "rebuild"
@@ -34,8 +35,8 @@ const make = (inst) => (html, ops) => {
   return "=" + module.satoru_live_sync(inst, false);
 };
 
-const open = async (n) => {
-  const dom = await createDOM({ html: page(n) }, { settleMs: 0 });
+const open = async (n, structural = true) => {
+  const dom = await createDOM({ html: page(n, structural) }, { settleMs: 0 });
   const inst = module.satoru_create_instance();
   dom.bridge().window.__layoutProvider = make(inst);
   await dom.eval("__edgeEnableLiveLayout()");
@@ -102,8 +103,8 @@ const same = (A, B) => {
 }
 
 // ---- 2. timing
-for (const n of [1000, 3000]) {
-  const { dom, inst } = await open(n);
+for (const [n, structural] of [[1000, true], [1000, false], [3000, false]]) {
+  const { dom, inst } = await open(n, structural);
   await dom.eval(`globalThis.els = document.body.children; els[0].getBoundingClientRect()`); // the first read opens the document
   const R = 20;
   for (const [label, change] of [
@@ -111,13 +112,13 @@ for (const n of [1000, 3000]) {
     ["color (nothing moves)", (i) => `els[${i}*7%${n}].style.color="#"+(100+${i})`],
     ["text edit in a row", (i) => `els[${i}*7%${n}].firstElementChild.firstChild.data = "edited " + ${i}`],
     ["append a <b> to a row", (i) => `els[${i}*7%${n}].appendChild(document.createElement("b")).textContent = "x" + ${i}`],
-    ["append a row to <body> (all the page's children are re-parsed)", (i) => `{ const d = document.createElement("div"); d.className = "r"; d.textContent = "new " + ${i}; document.body.appendChild(d) }`],
+    ["append a row to <body>", (i) => `{ const d = document.createElement("div"); d.className = "r"; d.textContent = "new " + ${i}; document.body.appendChild(d) }`],
   ]) {
     stats.apply = 0; stats.applyMs = 0;
     const t = performance.now();
     await dom.eval(`for (let i=0;i<${R};i++){${change("i")}; els[${n}-1].getBoundingClientRect().y}`);
     const total = (performance.now() - t) / R;
-    console.log(`n=${n} groups (${2 * n} elements) ${label}: one change + read ${total.toFixed(1)}ms | renderer ${(stats.applyMs / R).toFixed(1)}ms | applies ${stats.apply}`);
+    console.log(`n=${n} groups (${2 * n} elements${structural ? ", :nth-child in the sheet" : ""}) ${label}: one change + read ${total.toFixed(1)}ms | renderer ${(stats.applyMs / R).toFixed(1)}ms | applies ${stats.apply}`);
   }
   dom.close();
   module.satoru_destroy_instance(inst);

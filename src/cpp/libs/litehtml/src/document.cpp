@@ -1,3 +1,4 @@
+#include <unordered_set>
 #include <algorithm>
 #include <chrono>
 #include "html.h"
@@ -1789,25 +1790,61 @@ bool document::live_set_attr(const std::shared_ptr<element>& el, const char* nam
 	return true;
 }
 
-bool document::live_replace_children(const std::shared_ptr<element>& parent, const char* html)
+bool document::live_parse_fragment(const char* html, std::vector<std::shared_ptr<element>>& out)
 {
-	if (!parent || !html || parent->get_document().get() != this) return false;
+	if (!html) return false;
 	GumboOptions opts = kGumboDefaultOptions;
 	opts.fragment_context = GUMBO_TAG_BODY;
 	GumboOutput* output = gumbo_parse_with_options(&opts, html, strlen(html));
-	elements_list child_elements;
-	create_node(output->root, child_elements, true, false);
+	elements_list parsed;
+	create_node(output->root, parsed, true, false);
 	gumbo_destroy_output(&kGumboDefaultOptions, output);
-	parent->clearRecursive();
-	for (const auto& child : child_elements)
-	{
-		parent->appendChild(child);
-		m_live_new.push_back(child);
-	}
+	for (const auto& e : parsed) out.push_back(e);
 	return true;
 }
 
-document::live_timing document::live_relayout(const std::vector<std::shared_ptr<element>>& changed, pixel_t max_width)
+std::vector<std::shared_ptr<element>> document::live_set_children(const std::shared_ptr<element>& parent,
+	const std::vector<std::shared_ptr<element>>& list, const std::vector<std::shared_ptr<element>>& fresh)
+{
+	std::vector<element::ptr> restyle;
+	if (!parent) return restyle;
+	std::unordered_set<const element*> keep;
+	for (const auto& e : list) keep.insert(e.get());
+	std::unordered_set<const element*> fresh_set;
+	for (const auto& e : fresh) fresh_set.insert(e.get());
+	// the ones that stay in place: only a position-dependent selector can restyle them
+	std::vector<element::ptr> stay;
+	for (const auto& e : list)
+		if (e->parent() == parent && !fresh_set.count(e.get())) stay.push_back(e);
+	std::vector<element::ptr> old(parent->m_children.begin(), parent->m_children.end());
+	for (const auto& e : old)
+		if (!keep.count(e.get())) e->parent(nullptr);
+	parent->m_children.clear();
+	for (const auto& e : list)
+	{
+		element::ptr from = e->parent();
+		if (from && from != parent) from->removeChild(e);
+		e->parent(nullptr);
+		parent->appendChild(e);
+		if (fresh_set.count(e.get()) || !(from == parent)) restyle.push_back(e); // new, or moved in from elsewhere
+	}
+	for (const auto& e : fresh) m_live_new.push_back(e);
+	const bool siblings = m_master_css.sibling_sensitive() || m_styles.sibling_sensitive() || m_user_css.sibling_sensitive();
+	const bool structural = m_master_css.structural_sensitive() || m_styles.structural_sensitive() || m_user_css.structural_sensitive();
+	if (siblings)
+	{
+		restyle.clear();
+		restyle.push_back(parent->parent() ? parent->parent() : parent);
+	}
+	else if (structural)
+	{
+		restyle.clear();
+		restyle.push_back(parent);
+	}
+	return restyle;
+}
+
+document::live_timing document::live_relayout(const std::vector<std::shared_ptr<element>>& changed, const std::vector<std::shared_ptr<element>>& extra, pixel_t max_width)
 {
 	live_timing t;
 	if (!m_root) return t;
@@ -1821,10 +1858,11 @@ document::live_timing document::live_relayout(const std::vector<std::shared_ptr<
 	// that looks at siblings or descendants (+ ~ :has) the whole parent, since a sibling or an ancestor may change too.
 	const bool wide = m_master_css.sibling_sensitive() || m_styles.sibling_sensitive() || m_user_css.sibling_sensitive();
 	std::vector<element::ptr> scopes;
-	for (const auto& el : changed)
+	std::vector<element::ptr> wanted;
+	for (const auto& el : changed) wanted.push_back(wide && el->parent() ? el->parent() : el);
+	for (const auto& el : extra) wanted.push_back(el);
+	for (const auto& s : wanted)
 	{
-		element::ptr s = el;
-		if (wide && el->parent()) s = el->parent();
 		bool covered = false;
 		for (const auto& other : scopes)
 			for (element::ptr a = s; a; a = a->parent())
