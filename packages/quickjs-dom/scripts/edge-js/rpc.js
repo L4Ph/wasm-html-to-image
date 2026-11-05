@@ -309,6 +309,7 @@
   var ops = {
     root: function () { return g; },
     schema: function () { return json(schema()); },
+    ce: function () { return !!g.__ceOn; },
     has: function (r) { return r[2] in Object(target(r[1])); },
     del: function (r) { return delete target(r[1])[r[2]]; },
     // Object.keys for the host's Object.keys trap (ownKeys over a dynamic wrapper): enumerable members only.
@@ -429,7 +430,7 @@
           parsedArgs = [];
         } else if (a.charCodeAt(0) === 3) { // \u0003: strings separated by \u0002
           parsedArgs = a.slice(1).split("\u0002");
-        } else if (a.charCodeAt(0) === 4) { // \u0004: simple typed tokens separated by \u0002
+        } else if (a.charCodeAt(0) === 4 || a.charCodeAt(0) === 6) { // \u0004: simple typed tokens separated by \u0002
           parsedArgs = a.slice(1).split("\u0002").map(function (tok) {
             var tc = tok.charCodeAt(0);
             if (tc === 78) return null; // N
@@ -438,6 +439,7 @@
             if (tc === 110) return +tok.slice(1); // n
             if (tc === 115) return tok.slice(1); // s
             if (tc === 104) return target(+tok.slice(1)); // h
+            if (tc === 102) return hostFunction(+tok.slice(1)); // f
             return undefined;
           });
         } else {
@@ -452,7 +454,7 @@
         var vc = valStr.charCodeAt(0);
         if (vc === 3) {
           val = valStr.slice(1);
-        } else if (vc === 4) {
+        } else if (vc === 4 || vc === 6) {
           var tok = valStr.slice(1), tc = tok.charCodeAt(0);
           if (tc === 78) val = null;
           else if (tc === 84) val = true;
@@ -460,6 +462,7 @@
           else if (tc === 110) val = +tok.slice(1);
           else if (tc === 115) val = tok.slice(1);
           else if (tc === 104) val = target(+tok.slice(1));
+          else if (tc === 102) val = hostFunction(+tok.slice(1));
           else val = undefined;
         } else {
           val = dec(JSON.parse(valStr));

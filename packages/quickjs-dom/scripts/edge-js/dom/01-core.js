@@ -691,6 +691,7 @@
   var ceInstall = function () {
     if (ceOn) return;
     ceOn = true;
+    Object.defineProperty(globalThis, "__ceOn", { value: true, configurable: true });
     var live = function (parent) { return parent.isConnected; };
     wrap(P.Node, "appendChild", function (orig) {
       return function (node) {

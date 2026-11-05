@@ -64,6 +64,30 @@ const PURE_CALLS = new Set([
   "getComputedStyle", "getPropertyValue", "getPropertyPriority",
 ]);
 
+/** Reads that only the shape of the tree changes (and the document a node belongs to, which a move between trees changes). */
+const STRUCT_KEYS = new Set([
+  "firstChild", "lastChild", "nextSibling", "previousSibling", "parentNode", "parentElement", "ownerDocument",
+  "firstElementChild", "lastElementChild", "nextElementSibling", "previousElementSibling", "childElementCount", "isConnected",
+]);
+/** Calls that make a new node (a custom element's constructor could run page code: `fineOk` rules that out). */
+const CREATE_CALLS = new Set(["createElement", "createElementNS", "createTextNode", "createComment", "createDocumentFragment"]);
+/** Calls that change the tree and run page code only through a custom element's callbacks. */
+const TREE_CALLS = new Set([
+  "appendChild", "insertBefore", "removeChild", "replaceChild", "append", "prepend", "remove", "before", "after", "replaceWith", "replaceChildren",
+]);
+/** Calls that change an element's attributes and nothing else. */
+const ATTR_CALLS = new Set(["setAttribute", "setAttributeNS", "removeAttribute", "removeAttributeNS", "toggleAttribute"]);
+/** Calls that register or drop a listener: nothing the host has read changes. */
+const LISTENER_CALLS = new Set(["addEventListener", "removeEventListener"]);
+/** Properties of an element whose assignment changes an attribute or a value, runs no code and moves no node. */
+const FINE_SET_KEYS = new Set([
+  "className", "id", "title", "lang", "dir", "hidden", "disabled", "checked", "value", "href", "src", "type", "name", "placeholder",
+  "htmlFor", "tabIndex", "draggable", "spellcheck", "readOnly", "required", "selected", "multiple", "rel", "target", "alt", "width", "height",
+]);
+/** The same for a text or comment node. */
+const TEXT_SET_KEYS = new Set(["nodeValue", "data", "textContent"]);
+const ON_HANDLER = /^on[a-z]+$/;
+
 interface SelectorCheck {
   tagRequired?: Set<string>;
   alwaysTrue?: boolean;
@@ -188,6 +212,10 @@ export class Bridge {
   // gives the same answer until the page changes (a write, any other call, a job or timer, a listener of the host's
   // that ran): the cache is dropped then.
   private readonly reads = new Map<string, unknown>();
+  /** The reads that depend on the shape of the tree only (see STRUCT_KEYS): a change of attributes leaves them be. */
+  private readonly sreads = new Map<string, unknown>();
+  /** Whether the page has custom elements (their callbacks run page code on an attribute change): 0 = ask, 1 = none, 2 = yes (final). */
+  private ce = 0;
   // functions of the host that the page holds: id <-> function
   private readonly fnIds = new Map<Function, number>();
   private readonly fnById = new Map<number, Function>();
@@ -291,8 +319,21 @@ export class Bridge {
   }
 
   /** The page may have changed: forget what was read. (Called by whoever ran code in the page.) */
-  invalidate(): void {
+  invalidate(keepCe = false): void {
     if (this.reads.size) this.reads.clear();
+    if (this.sreads.size) this.sreads.clear();
+    if (!keepCe && this.ce === 1) this.ce = 0;
+  }
+
+  /** A change of attributes only: no page code runs (`fineOk` has checked), so what depends on the tree's shape holds. */
+  private invalidateAttrs(): void {
+    if (this.reads.size) this.reads.clear();
+  }
+
+  /** True when a change that is not a change of the tree may drop only part of what was read. */
+  private fineOk(): boolean {
+    if (this.ce === 0) this.ce = this.sendJ(["ce"]) ? 2 : 1;
+    return this.ce === 1;
   }
 
   /** Collect the handles of wrappers that were garbage collected (they are sent with the next call anyway). */
@@ -481,10 +522,11 @@ export class Bridge {
     // else the property does not exist. Answering it here is the same answer the page would give, without a call.
     if (key === "correspondingUseElement" && cell.t === 1 && cell.l !== "use") return undefined;
     const k = cell.id + "\u0001" + key;
-    if (this.reads.has(k)) return this.reads.get(k);
+    const store = STRUCT_KEYS.has(key) ? this.sreads : this.reads;
+    if (store.has(k)) return store.get(k);
     const value = this.send("g" + cell.id + "\u0001" + key);
-    if (this.reads.size > 100000) this.reads.clear();
-    this.reads.set(k, value);
+    if (store.size > 100000) store.clear();
+    store.set(k, value);
     return value;
   }
 
@@ -493,8 +535,11 @@ export class Bridge {
     if (typeof a === "boolean") return a ? "T" : "F";
     if (typeof a === "number" && Number.isFinite(a) && !Object.is(a, -0)) return "n" + a;
     if (typeof a === "string" && !a.includes("\u0002") && !a.includes("\u0001")) return "s" + a;
-    const cell = a && typeof a === "object" ? ((a as any)[HANDLE] as Cell | undefined) : undefined;
+    const cell = a && (typeof a === "object" || typeof a === "function") ? ((a as any)[HANDLE] as Cell | undefined) : undefined;
     if (cell) return "h" + cell.id;
+    // a function of the host's (an event handler): the id the page knows it by, as `encode` numbers it. A class of the
+    // page's own interfaces travels as its name, so it takes the JSON form.
+    if (typeof a === "function" && !Object.prototype.hasOwnProperty.call(a, CLASS_NAME)) return "f" + this.functionId(a as Function);
     return null;
   }
 
@@ -511,16 +556,34 @@ export class Bridge {
   }
 
   private set(cell: Cell, key: string, value: unknown): void {
-    this.invalidate();
+    // The same handler set again (React sets `onclick = noop` on every update): the page already has it. What the host
+    // knows of the page is dropped whenever page code might have run, and setAttribute("on...") drops it for its key.
+    if (cell.t === 1 && ON_HANDLER.test(key)) {
+      const memo = cell.id + "\u0001set:" + key;
+      if (typeof value === "function") {
+        if (this.sreads.get(memo) === value) return;
+      } else {
+        this.sreads.delete(memo);
+      }
+    }
+    if (
+      (cell.t === 1 ? (FINE_SET_KEYS.has(key) || ON_HANDLER.test(key)) && cell.l !== "select" : (cell.t === 3 || cell.t === 8) && TEXT_SET_KEYS.has(key)) &&
+      this.fineOk()
+    ) this.invalidateAttrs();
+    else this.invalidate(true); // an assignment runs page code only through a custom element, and `ce` says there is none
     if (typeof value === "string" && !value.includes("\u0001") && !value.includes("\u0002")) {
       this.send("s" + cell.id + "\u0001" + key + "\u0001\u0003" + value);
     } else {
       const tok = this.encodeToken(value);
       if (tok !== null) {
-        this.send("s" + cell.id + "\u0001" + key + "\u0001\u0004" + tok);
+        this.send("s" + cell.id + "\u0001" + key + "\u0001" + (tok.charCodeAt(0) === 102 ? "\u0006" : "\u0004") + tok);
       } else {
         this.send("s" + cell.id + "\u0001" + key + "\u0001" + JSON.stringify(this.encode(value)));
       }
+    }
+    if (cell.t === 1 && typeof value === "function" && ON_HANDLER.test(key)) {
+      if (this.sreads.size > 100000) this.sreads.clear();
+      this.sreads.set(cell.id + "\u0001set:" + key, value);
     }
   }
 
@@ -536,12 +599,15 @@ export class Bridge {
     }
     if (strings) return "\u0003" + args.join("\u0002");
     const parts: string[] = [];
+    let fn = false;
     for (const a of args) {
       const tok = this.encodeToken(a);
       if (tok === null) return JSON.stringify(args.map((x) => this.encode(x)));
+      if (tok.charCodeAt(0) === 102) fn = true;
       parts.push(tok);
     }
-    return "\u0004" + parts.join("\u0002");
+    // \u0006: the same tokens with a function among them, which the fast path in C does not read (the guest does)
+    return (fn ? "\u0006" : "\u0004") + parts.join("\u0002");
   }
 
   private call(cell: Cell, key: string, args: unknown[]): unknown {
@@ -551,11 +617,24 @@ export class Bridge {
       if (check.tagRequired && !check.tagRequired.has(cell.l.toLowerCase())) return false;
     }
     const encoded = this.encodeArgs(args);
+    if (cell.t === 9 ? CREATE_CALLS.has(key) : cell.t === 1 ? ATTR_CALLS.has(key) || LISTENER_CALLS.has(key) : false) {
+      // nothing that was read can have changed (a new node is in no tree, a listener is not read), or only an attribute did
+      if (this.fineOk()) {
+        const value = this.send("c" + cell.id + "\u0001" + key + "\u0001" + encoded);
+        if (cell.t === 1 && !LISTENER_CALLS.has(key)) {
+          this.invalidateAttrs();
+          // setAttribute("onclick", "...") replaces the handler the host set
+          const attr = typeof args[0] === "string" ? args[0].toLowerCase() : "";
+          if (attr.startsWith("on")) this.sreads.delete(cell.id + "\u0001set:" + attr);
+        }
+        return value;
+      }
+    }
     if (!PURE_CALLS.has(key)) {
       // the drop after is what makes the calls that follow see the page's new state; dropping before as well
       // only threw away reads that were still good, so it is not done
       const value = this.send("c" + cell.id + "\u0001" + key + "\u0001" + encoded);
-      this.invalidate();
+      this.invalidate(TREE_CALLS.has(key)); // these run page code only through a custom element, and `ce` says there is none
       return value;
     }
     const k = cell.id + "\u0001" + key + "\u0001" + encoded;
