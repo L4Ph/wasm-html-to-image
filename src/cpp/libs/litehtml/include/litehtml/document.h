@@ -150,7 +150,7 @@ namespace litehtml
 		// of createFromString on the tree that already exists and report the time of each phase in ms.
 		// mode 0: reapply every stylesheet (what a class / id / attribute change needs)
 		// mode 1: refresh_styles only (re-evaluates the selectors the element already holds)
-		struct live_timing { double clear = 0, apply = 0, compute = 0, tree = 0, layout = 0; };
+		struct live_timing { double clear = 0, apply = 0, compute = 0, tree = 0, layout = 0; bool paint_only = false; };
 		live_timing live_probe(pixel_t max_width, int mode);
 
 		// Live layout (doc/design/live-layout-incremental.md, P1): change one attribute of an element of this document
@@ -158,7 +158,7 @@ namespace litehtml
 		bool							live_set_attr(const std::shared_ptr<element>& el, const char* name, const char* value);
 		// Restyle only what the changed elements can affect, rebuild the render tree and lay out again.
 		// `changed`: elements whose attributes changed; `scopes`: subtrees to restyle as they are (see live_set_children).
-		live_timing						live_relayout(const std::vector<std::shared_ptr<element>>& changed, const std::vector<std::shared_ptr<element>>& scopes, pixel_t max_width);
+		live_timing						live_relayout(const std::vector<std::shared_ptr<element>>& changed, const std::vector<std::shared_ptr<element>>& scopes, pixel_t max_width, bool attrs_only = false);
 		// Replace the children of `parent` by the elements `html` parses to (as if parsed in a <body>). The new elements are
 		// styled by the next live_relayout(), which should list `parent` among the changed elements.
 		bool							live_parse_fragment(const char* html, std::vector<std::shared_ptr<element>>& out);

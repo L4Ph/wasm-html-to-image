@@ -131,11 +131,13 @@ bool satoru_api_live_apply(SatoruInstance* inst, const std::string& ops, int wid
         }
     }
     std::vector<std::shared_ptr<litehtml::element>> changed, scopes;
+    bool attrs_only = true; // every op sets an attribute that styles and nothing else reads
     for (const auto& o : list) {
         auto it = inst->live_ids.find(o.id);
         auto el = it == inst->live_ids.end() ? nullptr : it->second.lock();
         if (!el) return false;
         if (o.kids) {
+            attrs_only = false;
             if (!can_replace_children(el)) return false;
             // value: segments joined by \x03, `E<id>` an element the host already has, `H<html>` new content
             std::vector<std::shared_ptr<litehtml::element>> items, fresh;
@@ -166,6 +168,9 @@ bool satoru_api_live_apply(SatoruInstance* inst, const std::string& ops, int wid
         }
         std::string lname = o.name;
         for (auto& ch : lname) ch = (char)tolower((unsigned char)ch);
+        if (!(lname == "class" || lname == "style" || lname == "id" || lname == "title" || lname == "role" ||
+              lname == "tabindex" || lname.rfind("data-", 0) == 0 || lname.rfind("aria-", 0) == 0))
+            attrs_only = false;
         if (lname == "class") {
             // keep the page's marker: it is how the boxes are matched to elements
             std::string cls = "qjsl-" + std::to_string(o.id);
@@ -176,7 +181,7 @@ bool satoru_api_live_apply(SatoruInstance* inst, const std::string& ops, int wid
         }
         changed.push_back(el);
     }
-    inst->doc->live_relayout(changed, scopes, (litehtml::pixel_t)width);
+    inst->doc->live_relayout(changed, scopes, (litehtml::pixel_t)width, attrs_only);
     // the document no longer matches the HTML it was built from: a plain layout call must not reuse it
     inst->last_parsed_html = "\x01live";
     return true;

@@ -1860,7 +1860,90 @@ std::vector<std::shared_ptr<element>> document::live_set_children(const std::sha
 	return restyle;
 }
 
-document::live_timing document::live_relayout(const std::vector<std::shared_ptr<element>>& changed, const std::vector<std::shared_ptr<element>>& extra, pixel_t max_width)
+namespace
+{
+	// Properties whose value never moves a box: a change to only these needs no new layout.
+	bool paint_only_property(string_id name)
+	{
+		switch (name)
+		{
+		case _color_: case _background_color_: case _opacity_: case _cursor_:
+		case _border_color_: case _border_top_color_: case _border_right_color_: case _border_bottom_color_: case _border_left_color_:
+		case _outline_color_: case _text_decoration_color_: case _text_emphasis_color_: case _column_rule_color_:
+		case __webkit_text_fill_color_: case __webkit_text_stroke_color_:
+			return true;
+		default:
+			return false;
+		}
+	}
+
+	// Are two cascaded values the same? Only the kinds that are cheap to compare exactly say yes; the rest say no (-> layout).
+	bool same_value(const property_value& a, const property_value& b)
+	{
+		if (a.index() != b.index() || a.m_has_var || b.m_has_var) return false;
+		if (a.is<invalid>() || a.is<inherit>() || a.is<initial>() || a.is<unset>()) return true;
+		if (a.is<int>()) return a.get<int>() == b.get<int>();
+		if (a.is<float>()) return a.get<float>() == b.get<float>();
+		if (a.is<web_color>()) return a.get<web_color>() == b.get<web_color>();
+		if (a.is<string>()) return a.get<string>() == b.get<string>();
+		if (a.is<css_length>()) return a.get<css_length>().to_string() == b.get<css_length>().to_string();
+		return false;
+	}
+
+	struct style_snapshot
+	{
+		std::shared_ptr<element> el;
+		props_map props;
+	};
+
+	// The cascaded styles of a subtree, if it is small enough to be worth comparing.
+	bool snapshot_subtree(const std::shared_ptr<element>& el, std::vector<style_snapshot>& out, size_t limit)
+	{
+		auto tag = std::dynamic_pointer_cast<html_tag>(el);
+		if (tag)
+		{
+			if (out.size() >= limit) return false;
+			out.push_back({el, tag->cascaded_style().properties()});
+		}
+		for (const auto& c : el->children())
+			if (!snapshot_subtree(c, out, limit)) return false;
+		return true;
+	}
+
+	// Did the restyle change nothing but paint-only properties?
+	bool only_paint_changed(const std::vector<style_snapshot>& before, const std::vector<std::shared_ptr<element>>& scopes)
+	{
+		std::vector<style_snapshot> after;
+		for (const auto& s : scopes)
+			if (!snapshot_subtree(s, after, before.size())) return false;
+		if (after.size() != before.size()) return false;
+		for (size_t i = 0; i < before.size(); i++)
+		{
+			if (before[i].el != after[i].el) return false;
+			const props_map& x = before[i].props;
+			const props_map& y = after[i].props;
+			std::vector<bool> matched(y.size(), false);
+			for (const auto& px : x)
+			{
+				bool found = false;
+				for (size_t k = 0; k < y.size(); k++)
+				{
+					if (matched[k] || y[k].first != px.first) continue;
+					matched[k] = true;
+					found = true;
+					if (!same_value(px.second, y[k].second) && !paint_only_property(px.first)) return false;
+					break;
+				}
+				if (!found && !paint_only_property(px.first)) return false;
+			}
+			for (size_t k = 0; k < y.size(); k++)
+				if (!matched[k] && !paint_only_property(y[k].first)) return false;
+		}
+		return true;
+	}
+}
+
+document::live_timing document::live_relayout(const std::vector<std::shared_ptr<element>>& changed, const std::vector<std::shared_ptr<element>>& extra, pixel_t max_width, bool attrs_only)
 {
 	live_timing t;
 	if (!m_root) return t;
@@ -1898,6 +1981,12 @@ document::live_timing document::live_relayout(const std::vector<std::shared_ptr<
 		el->reset_style();
 		for (const auto& c : el->m_children) clear(c);
 	};
+	// An attribute change that only touches a small subtree may move nothing: keep the cascade of it to compare.
+	std::vector<style_snapshot> before;
+	bool compare = attrs_only && extra.empty() && !scopes.empty() && m_root_render;
+	if (compare)
+		for (const auto& s : scopes)
+			if (!snapshot_subtree(s, before, 400)) { compare = false; break; }
 	for (const auto& s : scopes) clear(s);
 	auto t1 = now();
 	for (const auto& s : scopes)
@@ -1912,6 +2001,13 @@ document::live_timing document::live_relayout(const std::vector<std::shared_ptr<
 	for (const auto& c : m_live_new) c->apply_word_break();
 	m_live_new.clear();
 	auto t3 = now();
+	if (compare && only_paint_changed(before, scopes))
+	{
+		// the boxes are where they were: the render tree and the layout stay as they are
+		t.clear = ms(t0, t1); t.apply = ms(t1, t2); t.compute = ms(t2, t3);
+		t.paint_only = true;
+		return t;
+	}
 	m_tabular_elements.clear();
 	drop_render_links();
 	m_root_render = m_root->create_render_item(nullptr);

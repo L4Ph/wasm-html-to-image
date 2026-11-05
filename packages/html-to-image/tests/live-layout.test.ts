@@ -45,6 +45,24 @@ describe("live layout: enableLiveLayout", () => {
     }
   });
 
+  it("keeps the layout for a change of paint only, and lays out again when anything else changes with it", async () => {
+    const dom = await createDOM({ html: `<!doctype html><html><head><style>.p{color:#00f;background:#eee}.q{color:#f00;height:80px}#a{height:30px}</style></head><body style="margin:0"><div id="a" class="p">A</div><div id="b">B</div></body></html>` }, { settleMs: 0 });
+    const layout = await enableLiveLayout(dom, module, { width: 400 });
+    try {
+      const read = () => dom.eval(`(() => { const a = document.getElementById("a"); return [getComputedStyle(a).color, a.getBoundingClientRect().height, document.getElementById("b").getBoundingClientRect().y] })()`);
+      expect(await read()).toEqual(["rgb(0, 0, 255)", 30, 30]);
+      await dom.eval(`document.getElementById("a").style.color = "#0f0"; document.getElementById("a").setAttribute("data-x", "1")`);
+      expect(await read()).toEqual(["rgb(0, 255, 0)", 30, 30]);
+      await dom.eval(`document.getElementById("a").className = "q"`); // colour and a height in one change
+      expect((await read() as unknown[])[1]).toBe(30); // #a wins over .q on height
+      await dom.eval(`document.getElementById("a").style.height = "55px"`);
+      expect(await read()).toEqual(["rgb(0, 255, 0)", 55, 55]);
+    } finally {
+      layout.dispose();
+      dom.close();
+    }
+  });
+
   it("matches a layout built from scratch after random changes of attributes, text and the tree", async () => {
     const N = 30;
     const dom = await createDOM({ html: rows(N) }, { settleMs: 0 });

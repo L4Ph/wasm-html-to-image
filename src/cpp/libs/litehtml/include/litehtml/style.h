@@ -113,6 +113,7 @@ namespace litehtml
                 void add_property(string_id name, const string& val,              const string& baseurl = "", bool important = false, document_container* container = nullptr, int layer = 0, selector_specificity specificity = selector_specificity());
 
                 const property_value& get_property(string_id name) const;
+                const props_map& properties() const { return m_properties; }
 
                 void combine(const style& src, selector_specificity specificity = selector_specificity());
                 void clear()
