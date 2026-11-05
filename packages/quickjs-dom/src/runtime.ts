@@ -178,7 +178,32 @@ export class QuickJSInstance {
     const type = RESULT_TYPES[this.x.qd_result_type()] ?? "undefined";
     if (type === "undefined") return { type };
     const ptr = this.x.qd_result_ptr();
-    return { type, value: decoder.decode(new Uint8Array(this.x.memory.buffer, ptr, this.x.qd_result_len())) };
+    const len = this.x.qd_result_len();
+    const mem = this.bytes();
+    if (len <= 64) {
+      // a short ASCII answer ("N", a handle, a small number) is read by hand; anything else goes through the decoder
+      let out = "";
+      let i = 0;
+      for (; i < len; i++) {
+        const c = mem[ptr + i];
+        if (c > 127) break;
+        out += String.fromCharCode(c);
+      }
+      if (i === len) return { type, value: out };
+    }
+    return { type, value: decoder.decode(mem.subarray(ptr, ptr + len)) };
+  }
+
+  private memBuf: ArrayBufferLike | undefined;
+  private mem: Uint8Array = new Uint8Array(0);
+  /** The whole of wasm memory as bytes (a new view when the memory has grown). */
+  private bytes(): Uint8Array {
+    const buf = this.x.memory.buffer;
+    if (buf !== this.memBuf) {
+      this.memBuf = buf;
+      this.mem = new Uint8Array(buf);
+    }
+    return this.mem;
   }
 
   /** Script running past this wall-clock time (ms since the epoch) is interrupted; 0 = no limit. */
@@ -204,8 +229,23 @@ export class QuickJSInstance {
       this.reqCap = Math.max(4096, need * 2);
       this.reqPtr = this.x.qd_alloc(this.reqCap);
     }
-    const { written } = encoder.encodeInto(request, new Uint8Array(this.x.memory.buffer, this.reqPtr, this.reqCap));
-    const rc = this.x.qd_rpc(this.reqPtr, written);
+    const mem = this.bytes();
+    const base = this.reqPtr;
+    let written = request.length;
+    // most requests are short and ASCII: copying them by hand is cheaper than TextEncoder's call
+    let ascii = written <= 256;
+    if (ascii) {
+      for (let i = 0; i < written; i++) {
+        const c = request.charCodeAt(i);
+        if (c > 127) {
+          ascii = false;
+          break;
+        }
+        mem[base + i] = c;
+      }
+    }
+    if (!ascii) written = encoder.encodeInto(request, mem.subarray(base, base + this.reqCap)).written;
+    const rc = this.x.qd_rpc(base, written);
     const res = this.result() as EvalResult & { jobs?: boolean };
     if (rc & 2) res.jobs = true;
     return res;
