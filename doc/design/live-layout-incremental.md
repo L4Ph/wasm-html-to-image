@@ -531,3 +531,9 @@ CPU 時間(`wrangler tail` の `cpuTime`): 最初のリクエスト(isolate の�
 | `append` 1 回 | **約 113 ms**(ローカルの Node は 84〜100 ms) |
 
 第 18 節で気になっていた「本番の `append` がローカルの約 3 倍」は、再現しなかった(約 1.2 倍)。当時は `css_length` の縮小とテキストのスタイル共有の前で、メモリの多さがそのまま時間にも響いていたと考えられる。調べる必要はなくなった。測定用の Worker は削除済み(404)。
+
+## 31. 公開に向けて
+
+- README(JavaScript の節)と `llms.txt` に `enableLiveLayout` / `refreshResources()` の使い方、Workers の注意(`enable_weak_ref`、`maxElements` は 10,000 以下、有料プラン)、効かない場面を書いた。
+- 再現できる計測として `packages/html-to-image/scripts/bench-live-layout.mjs`(`--quick` `--json`)を足した。`div > span` の行と表の行で、`color` / `height` / `append` / `text` を 1 回ずつ変えて読む時間の中央値を出す。基準(Node、2,000 / 6,000 要素): `color` 5 / 14 ms、`height` 57 / 191 ms、`append` 21 / 90 ms、`text` 18 / 90 ms。表(900 / 3,000 要素)は `color` 3 / 16 ms、`text` 106 / 426 ms、`append` 111 / 423 ms。
+- README の例そのもの(`getDefaultModule()` + `createDOM` + `enableLiveLayout` + `refreshResources`)を、一時 Worker で本番にデプロイして通した: 高さ 70 → 100px に変えたあと `footer` の `y` が 120、`getComputedStyle().color` が `rgb(0, 255, 0)`、`refreshResources()` のあとも 120。測定用 Worker は削除済み(404)。

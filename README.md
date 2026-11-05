@@ -409,8 +409,9 @@ const { data } = await render({
 - It waits for `load`, then `settleMs` (default 1000 ms) or until `waitFor` matches, at most `timeout` (default 10 s).
 - Only scripts and stylesheets are fetched for the page (stylesheets so that `getComputedStyle` sees the cascade);
   images and fonts stay with the renderer. `<noscript>` content is dropped.
-- QuickJS has no layout of its own (`getBoundingClientRect` returns zeros until `measureLayout()` supplies boxes;
-  `ResizeObserver` / `IntersectionObserver` notify once) and `canvas` is unavailable. `type="module"` scripts run.
+- QuickJS has no layout of its own (`getBoundingClientRect` returns zeros until `measureLayout()` or `enableLiveLayout()`
+  supplies boxes; see *Live layout* below; `ResizeObserver` / `IntersectionObserver` notify once) and `canvas` is
+  unavailable. `type="module"` scripts run.
   Failing scripts are ignored.
 - It is not a security sandbox: use it only with pages you trust, or pass `javascript: { limits, skip }` to bound what
   the page may fetch.
@@ -418,6 +419,39 @@ const { data } = await render({
   `applyJavaScript(options)` from `wasm-html-to-image/javascript` before `render()`.
 - `engine: "quickjs"` is still accepted for one release; `engine: "jsdom"` now throws, because QuickJS is the only
   engine. See the *render()* page of the documentation.
+- **Live layout (`enableLiveLayout`).** A page that reads `getBoundingClientRect()`, `offsetWidth`, `getComputedStyle()`
+  and the like gets answers from the image engine's own layout (litehtml), synchronously, at the moment of the read, and
+  the engine follows what the page changes (attributes, `style`, text, inserted / removed / moved nodes) instead of
+  laying everything out again:
+
+  ```ts
+  import { createDOM, enableLiveLayout } from "wasm-html-to-image/javascript";
+  import { getDefaultModule } from "wasm-html-to-image/workerd"; // Node: loadHtmlToImageModule() from "wasm-html-to-image"
+
+  const dom = await createDOM({ url }, { width: 1200 });
+  const layout = await enableLiveLayout(dom, await getDefaultModule(), { width: 1200, maxElements: 10000 });
+  await dom.eval("document.querySelector('main').getBoundingClientRect().height");
+  await dom.eval("document.querySelector('main').style.height = '400px'");
+  await dom.eval("document.querySelector('footer').getBoundingClientRect().y"); // already moved
+  // a script added an image / stylesheet / font: fetch it, then read
+  await layout.refreshResources();
+  layout.dispose();
+  dom.close();
+  ```
+
+  - Reads are synchronous and cannot fetch, so the page's stylesheets, fonts and images are resolved once when you call
+    `enableLiveLayout`; call `await layout.refreshResources()` after a script has added more (until then the new images
+    lay out as if empty). Options: `width`, `height`, `baseUrl`, `mediaType`, `css`, `fonts`, `fontMap`,
+    `fallbackFonts`, `limits`, `resolveResource`, `userAgent`, `maxElements`.
+  - Cost per change (Node, 6,000 elements): a paint-only change (`color`, `background-color`, `opacity`, ...) 13 ms;
+    a change that moves boxes about 170 ms; an append about 90 ms. It grows with the number of elements.
+  - On Cloudflare Workers (128 MB for both wasm modules) about 13,000 elements fit; keep `maxElements` at **10,000 or
+    less**. A page over `maxElements`, or an engine failure, turns layout off for that page (boxes read 0, one
+    `console.warn`) and the page keeps running. The Worker needs the compatibility flag `enable_weak_ref`, and the
+    gzipped upload (about 5.5 MB) needs a paid plan.
+  - Not covered: tables with thousands of rows are slow (about 0.6 s per change at 1,500 rows); `<table>`/`<select>`/
+    `<style>`/`<img>` inserted by a script are laid out from scratch. Design and measurements:
+    `doc/design/live-layout-incremental.md`.
 - **Moving from the old jsdom engine:** the DOM lives in QuickJS, so a live `window` is gone. Values cross the boundary
   as JSON, so `dom.eval(fn, ...args)` returns plain data (no nodes, no closures — the function is sent as source, so it
   cannot capture outer variables). Host functions reach the page through `dom.expose(name, fn)` and are awaited as
