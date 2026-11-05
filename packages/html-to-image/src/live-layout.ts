@@ -38,8 +38,8 @@ export interface LiveLayoutOptions {
   userAgent?: string;
   /**
    * A page with more elements than this is not laid out (boxes stay 0, `getComputedStyle` is the cascade's alone), with one
-   * `console.warn`. The engine's document costs about 7 to 9 KB per element: on Cloudflare Workers (128 MB for both wasm modules)
-   * about 6000 elements fit, so keep this at 5000 there. Default: no limit.
+   * `console.warn`. The engine's document costs about 3 to 6 KB per element: on Cloudflare Workers (128 MB for both wasm modules)
+   * about 11000 elements fit (measured on a plain page), so keep this at 9000 or less there. Default: no limit.
    */
   maxElements?: number;
 }
