@@ -399,6 +399,7 @@ Creates a new isolated QuickJS + C DOM instance, loads the HTML, executes script
 | `settleMs` | `number` | `1000` | Maximum time in ms after `load` to let pending timers and network requests finish. Returns early as soon as the queue is idle. |
 | `waitFor` | `string` | — | CSS selector to wait for after `load` instead of `settleMs`. |
 | `width` | `number` | `800` | Viewport width (`window.innerWidth` and `@media` / `matchMedia` width queries). |
+| `height` | `number` | `round(width * 0.75)` | Viewport height (`window.innerHeight`, `screen.height`, `vh` units). |
 | `stylesheets` | `boolean` | `true` | Fetches external `<link rel="stylesheet">` files so `getComputedStyle()` includes their rules. Set `false` to skip those requests; `<style>` elements and inline styles are cascaded either way. |
 | `beforeScripts` | `string \| string[]` | — | Classic script(s) to execute after HTML parsing but before any page `<script>` runs (useful for polyfills, globals, or probes). |
 | `limits` | `FetchLimits` | — | Network and resource restrictions (see [Security](#security-handling-untrusted-pages)). |
@@ -451,7 +452,7 @@ If a page's scripts depend on real layout measurements:
 2. Measure element bounding boxes in a layout engine.
 3. Pass the results to `dom.setLayout({ [elementId]: [x, y, width, height] })`.
 
-When paired with [`wasm-html-to-image`](https://www.npmjs.com/package/wasm-html-to-image), `measureLayout(dom, render)` performs all three steps in a single call.
+When paired with [`wasm-html-to-image`](https://www.npmjs.com/package/wasm-html-to-image), `measureLayout(dom, render)` performs all three steps in a single call, and `enableLiveLayout(dom, module)` keeps the boxes (and `getComputedStyle`) current as the page changes, with no calls from you. The boxes also feed `document.elementFromPoint()` / `elementsFromPoint()`.
 
 ---
 
@@ -522,7 +523,7 @@ npx wasm-quickjs-dom https://example.com/ --protocol https: --block-private --lo
 
 ### What Does Not Work
 
-- **Visual Layout:** `getBoundingClientRect()` and `offsetWidth` return `0` unless bounding boxes are provided via [`setLayout`](#layout-integration).
+- **Visual Layout:** `getBoundingClientRect()` and `offsetWidth` return `0` unless bounding boxes are provided via [`setLayout`](#layout-integration) (or kept current by `enableLiveLayout()` of `wasm-html-to-image`).
 - **Canvas & Media:** `<canvas>` has no backing store: `getContext()` returns `null` and `toDataURL()` returns `"data:,"` (each logs a one-time warning), so calling a method on the returned context throws a `TypeError`; `<audio>` / `<video>` have no media decoders (`play()` rejects just like an unsupported media source in a browser).
 - **Live Persistent Connections & Threads:** `WebSocket`, `EventSource`, and `Worker` exist as classes that emit an `error` event and close (logging a warning to `dom.logs`), allowing pages with fallback logic to continue gracefully.
 - **Iframe Documents:** nested browsing contexts are not loaded (no scripts or resources inside a frame run), but each `<iframe>` owns a separate blank HTML document: `contentDocument` is that document (`srcdoc` seeds it), `contentWindow` is a small window-like object carrying it, and `document.open()/write()/close()` work for pages that render through an iframe (such as modern-screenshot).

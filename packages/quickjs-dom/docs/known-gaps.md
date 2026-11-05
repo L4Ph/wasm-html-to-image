@@ -40,14 +40,14 @@ HTML 文書としての DOM 契約には影響しない範囲であり、必要�
 
 `Window` はページの global object そのもののインターフェースで、その prototype を差し替えると
 ランタイムと bridge の前提(global の同一性、プロパティの解決)が壊れる。このため
-`Window` は window の global 名として公開しない。`env-diff` の許容欠落にも
-`Window` として記録済み。
+global の prototype は `Window.prototype` に差し替えない。
 
 - 更新(2026-11-05): `Window` は呼べないコンストラクタとして公開し、`Symbol.hasInstance` で page の global を認識する。`window instanceof Window` と `typeof Window` は通る。global の prototype は差し替えない(下の理由は変わらない)。
 - 以前の帰結: `window instanceof Window` / `typeof Window` は使えない。`window` のメンバー
   (`document`、`location`、イベント、`getComputedStyle` など)はすべて動く。
-- 台帳: `tests/known-gaps.json` の `surface.missing-features`(`Window` が唯一の残件)、
-  `scripts/env-diff.mjs` の `ALLOWED_MISSING`。
+- 台帳: `tests/known-gaps.json` の `surface.missing-features`(2026-11-05 に空になった)。
+  `scripts/env-diff.mjs` の `ALLOWED_MISSING` に `Window` が残るのは、env の `installWindow` が `Window` を
+  持ち込まないためで、ページ側の状況とは別。
 - 再検討の条件: global object の prototype を安全に差し替えられるランタイム表現を
   設計するとき。それまでは wontfix。
 

@@ -12,8 +12,8 @@
 
 | # | 失敗(observation) | 発生源 | 分類 | 扱い |
 |---|---|---|---|---|
-| 1 | legacy fake timers 下の `waitFor` が完了しない | jest の fake timers がテスト側の realm だけを進める。ページは自前の時計を持つ | 環境要因(bridged realm) | 残留。jsdom で実行する |
-| 2 | modern fake timers 下の `waitFor` が完了しない | 同上 | 環境要因(bridged realm) | 残留。jsdom で実行する |
+| 1 | legacy fake timers 下の `waitFor` が完了しない | jest の fake timers がテスト側の realm だけを進める。ページは自前の時計を持つ | 環境要因(bridged realm) | 残留(2026-11-05: 動くと確認、下の追記)。jsdom で実行する |
+| 2 | modern fake timers 下の `waitFor` が完了しない | 同上 | 環境要因(bridged realm) | 残留(2026-11-05: 動くと確認、下の追記)。jsdom で実行する |
 | 3 | `::before` / `::after` の accessible name で jsdom 自身の console error を検査する | jsdom の computed style と console 出力の挙動 | jsdom 固有(仕様の DOM 契約ではない) | 残留。jsdom で実行する |
 
 これらは DOM の欠落ではない。台帳では `tests/known-gaps.json` の

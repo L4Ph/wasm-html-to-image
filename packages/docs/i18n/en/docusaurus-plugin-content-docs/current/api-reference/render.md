@@ -88,7 +88,7 @@ const { data } = await render(options);
 - The package picks the QuickJS wasm for the runtime (`#quickjs-wasm` in the `imports` of `package.json`): a pre-compiled module on Workers and on Vercel / Next.js Edge, read from disk on Node.js and Bun, fetched on Deno and in browsers. To use a module of your own, pass it as `applyJavaScript(options, { quickjsWasm })`. The Node.js `single` entry and the CLI's `--js` run the same phase for you.
 - The engine itself is the separate package [`wasm-quickjs-dom`](https://www.npmjs.com/package/wasm-quickjs-dom) (a small DOM implementation that knows nothing about images), installed as a dependency of `wasm-html-to-image`. `createDOM` can also be used straight from `wasm-quickjs-dom`.
 - The Node.js `single` entry's `runPageScripts` is now an alias of `wasm-quickjs-dom`'s `runPageScriptsQuickJS`. Its third argument `viewportWidth` defaults to `undefined` (the options' `width` is used, then 800) instead of 800, so `matchMedia` can answer differently than before.
-- Limits: no layout of its own (`getBoundingClientRect` returns 0 until `measureLayout()` supplies boxes; see below), no `canvas`, `type="module"` scripts run, but only `import`s with literal specifiers (fetched up front) resolve. The DOM is a small one written in C, and QuickJS is an interpreter, so heavy pages are slower.
+- Limits: no layout of its own (`getBoundingClientRect` returns 0 until `measureLayout()` or `enableLiveLayout()` supplies boxes; see below), no `canvas`, `type="module"` scripts run, but only `import`s with literal specifiers (fetched up front) resolve. The DOM is a small one written in C, and QuickJS is an interpreter, so heavy pages are slower.
 - More limits: `attachShadow()` works, but `serialize()` and the rendered HTML leave shadow trees out (a warning is logged when a root is attached). `document.fonts` is a stub (`ready` resolves at once, `check()` is always `true`, `load()` resolves to an empty array) and `FontFace` does not exist. Interaction pseudo-classes (`:hover`, `:focus`, `:active`, `:visited`, `:target`, `:focus-within`, `:focus-visible`) and pseudo-elements never match, in selectors or in `getComputedStyle()` (`matchMedia("(hover: hover)")` still reports `true`). `document.elementFromPoint()` returns `null` and `elementsFromPoint()` returns `[]`; `scroll()`, `scrollTo()`, `scrollBy()`, and `scrollIntoView()` do nothing (`scrollTop` / `scrollLeft` read `0`). An `<iframe>`'s `contentWindow` / `contentDocument` are `null`, and `srcdoc` is kept as an attribute only, never loaded. XPath cannot resolve namespace prefixes (`namespace-uri()` is `""`, `createNSResolver()` returns `null`). `crypto.getRandomValues()` / `crypto.randomUUID()` are built on `Math.random`, so they are not cryptographically secure. Canvas `getContext()` returns `null` (and `toDataURL()` `"data:,"`), so calling a method on the context throws a `TypeError`. SVG `getBBox()` / `getTotalLength()` / `getPointAtLength()` are approximate: a path's `A` command is its chord, `transform`s are ignored, and `<text>` is `0 × 0`.
 - Use it with trusted pages only (the scripts can `fetch`). For pages you do not control, always add the fetch limits below, or `javascript: { limits, skip }`.
 - `IntersectionObserver` and `ResizeObserver` report once when you `observe()` (the page is meant to be seen whole, without scrolling, so everything counts as intersecting and lazy content gets to load). `matchMedia` answers for the viewport `width` (`min-width` / `max-width` / `orientation` ..., with a light-mode, no-motion user). `getComputedStyle` computes the cascade of `<style>` and the element's own `style`, inheritance and initial values, but does not lay out: a `width` / `height` of `auto` or `%` comes back as written (`auto`, `50%`, ...), so take real sizes from the boxes `measureLayout()` returns.
@@ -166,6 +166,26 @@ const h = await dom.eval("document.querySelector('main').getBoundingClientRect()
 - The values are a snapshot: call `measureLayout()` again after the page changed.
 - An inline element in a line of text (`<span>`, `<a>`, ...) gets the one box that encloses all the line fragments it is broken into. The offsets are measured from the top left of the page, not from an `offsetParent`.
 - The page itself is not touched: the marks for the layout are only on a copy.
+
+**Following the page's changes (`enableLiveLayout`)**: when the page's scripts change the DOM and read `getBoundingClientRect()` or `getComputedStyle()` as they go, use `enableLiveLayout()` instead of the `measureLayout()` snapshot: every read is answered from the image engine's layout of the page as it is at that moment. The engine keeps the laid-out document and applies only what the page changed (attributes, `style`, text, inserted / removed / moved nodes).
+
+```ts
+import { createDOM, enableLiveLayout } from "wasm-html-to-image/javascript";
+import { getDefaultModule } from "wasm-html-to-image/workerd"; // Node.js: loadHtmlToImageModule()
+
+const dom = await createDOM({ url: "https://example.com/" }, { width: 1200 });
+const layout = await enableLiveLayout(dom, await getDefaultModule(), { width: 1200, maxElements: 10000 });
+await dom.eval("document.querySelector('main').style.height = '400px'");
+await dom.eval("document.querySelector('footer').getBoundingClientRect().y"); // already moved
+await layout.refreshResources(); // fetch the images, style sheets and fonts a script added
+layout.dispose();
+dom.close();
+```
+
+- Reads are synchronous and cannot fetch. Style sheets, fonts and images are fetched once, from the page as it is when you call `enableLiveLayout()`; what a script adds later is fetched by `await layout.refreshResources()` (until then an added image lays out as empty).
+- Cost of one change plus one read (Node.js, 6,000 elements): a paint-only change (`color`, ...) about 13 ms, `append` about 90 ms, a change that moves boxes (`height`) about 170 ms; it grows with the number of elements. Tables are slower: about 0.6 s per change at 1,500 rows.
+- On Cloudflare Workers (128 MB for both wasm modules) about 13,000 elements fit; keep `maxElements` at **10,000 or less**. A page over it, or an engine failure, leaves the boxes at 0 with one warning and the page keeps running. It needs the compatibility flag `enable_weak_ref`, and the gzipped upload (about 5.5 MB) needs a paid plan.
+- Design and measurements: `doc/design/live-layout-incremental.md`; benchmark: `packages/html-to-image/scripts/bench-live-layout.mjs`.
 
 ### Rendering untrusted HTML (`limits`)
 

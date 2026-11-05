@@ -118,7 +118,7 @@ const { data } = await render(options);
 - QuickJS の wasm は、実行環境に合わせてパッケージが選びます（`package.json` の `imports` の `#quickjs-wasm`）。Workers と Vercel / Next.js の Edge ではコンパイル済みのモジュールを取り込み、Node.js と Bun ではファイルを読み、Deno とブラウザでは `fetch` します。自前のモジュールを使うなら `applyJavaScript(options, { quickjsWasm })` で渡せます。Node.js の `single` 入口と CLI の `--js` は、同じ実行を自動で行います。
 - エンジン本体は別パッケージの [`wasm-quickjs-dom`](https://www.npmjs.com/package/wasm-quickjs-dom)（画像とは無関係の小さな DOM 実装）で、`wasm-html-to-image` の依存として入ります。`createDOM` はそのまま `wasm-quickjs-dom` からも使えます。
 - Node.js の `single` 入口が公開する `runPageScripts` は `wasm-quickjs-dom` の `runPageScriptsQuickJS` の別名です。第 3 引数 `viewportWidth` の既定は 800 から `undefined`（未指定ならオプションの `width`、どちらもなければ 800）に変わったため、`matchMedia` の答えが以前と異なる場合があります。
-- 制限: 自前のレイアウトはなく（`getBoundingClientRect` は 0。`measureLayout()` でボックスを渡すと実測値になります）、`canvas` は使えません。`type="module"` のスクリプトは実行しますが、`import` は先に取得できる（リテラルの指定子の）ものだけです。DOM は C 実装で小さく、QuickJS はインタプリタなので、重いページは遅くなります。
+- 制限: 自前のレイアウトはなく（`getBoundingClientRect` は 0。`measureLayout()` でボックスを渡すか、`enableLiveLayout()` で常に追従させると実測値になります）、`canvas` は使えません。`type="module"` のスクリプトは実行しますが、`import` は先に取得できる（リテラルの指定子の）ものだけです。DOM は C 実装で小さく、QuickJS はインタプリタなので、重いページは遅くなります。
 - そのほかの制限: `attachShadow()` で shadow root は作れますが、`serialize()` とレンダリングされる HTML に shadow tree は入りません（作ったときに警告をログへ出します）。`document.fonts` はスタブ（`ready` はすぐ解決、`check()` は常に `true`、`load()` は空配列）で、`FontFace` はありません。`:hover` / `:focus` / `:active` / `:visited` / `:target` / `:focus-within` / `:focus-visible` と擬似要素は、セレクタでも `getComputedStyle()` でも一致しません（`matchMedia("(hover: hover)")` は `true` を返します）。`elementFromPoint()` は `null`、`elementsFromPoint()` は `[]` を返し、`scroll()` / `scrollTo()` / `scrollBy()` / `scrollIntoView()` は何もしません（`scrollTop` / `scrollLeft` は `0`）。`<iframe>` の `contentWindow` / `contentDocument` は `null` で、`srcdoc` は属性として持つだけで読み込みません。XPath は名前空間接頭辞を解決できません（`namespace-uri()` は `""`、`createNSResolver()` は `null`）。`crypto.getRandomValues()` / `crypto.randomUUID()` は `Math.random` を使うため暗号学的に安全ではありません。`canvas` の `getContext()` は `null`（`toDataURL()` は `"data:,"`）を返すので、コンテキストのメソッドを呼ぶと `TypeError` になります。SVG の `getBBox()` / `getTotalLength()` / `getPointAtLength()` は近似で、パスの `A` は弦、`transform` は無視、`<text>` のボックスは `0 × 0` です。
 - 信頼できるページだけに使ってください（スクリプトは `fetch` できます）。信頼できないページには、下の「取得の制限」か `javascript: { limits, skip }` を必ず付けてください。
 - `IntersectionObserver` と `ResizeObserver` は、`observe()` したときに 1 回だけ通知します（スクロールのないページ全体を見る前提なので、すべて「交差している」扱いです。遅延読み込みの中身が出てきます）。`matchMedia` は表示幅（`width`）で答えます（`min-width` / `max-width` / `orientation` など、ライトモードで動きを減らさない設定のユーザーとして答えます）。`getComputedStyle` は `<style>` と要素自身の `style` のカスケード、継承、初期値を計算しますが、レイアウトはしません。`width` / `height` が `auto` や `%` ならそのまま（`auto`、`50%` などで）返るので、実寸は `measureLayout()` が返すボックスの値を使ってください。
@@ -196,6 +196,26 @@ const h = await dom.eval("document.querySelector('main').getBoundingClientRect()
 - 値はその時点のスナップショットです。ページを変えたら、もう一度 `measureLayout()` を呼んでください。
 - 行の中の `<span>` や `<a>` などのインライン要素は、折り返された行ごとの断片をすべて囲む 1 つのボックスを返します。オフセット系は `offsetParent` ではなくページの左上からの位置です。
 - ページには手を加えません。レイアウト用の目印は複製にだけ付きます。
+
+**ページの変更に追従させる（`enableLiveLayout`）**: ページのスクリプトが DOM を変えながら `getBoundingClientRect()` や `getComputedStyle()` を読む場合は、`measureLayout()` のスナップショットではなく、読むたびに画像エンジンの今のレイアウトで答える `enableLiveLayout()` を使います。エンジンはレイアウト済みの文書を持ち続け、ページの変更（属性・`style`・テキスト・挿入・削除・移動）だけを反映します。
+
+```ts
+import { createDOM, enableLiveLayout } from "wasm-html-to-image/javascript";
+import { getDefaultModule } from "wasm-html-to-image/workerd"; // Node.js では loadHtmlToImageModule()
+
+const dom = await createDOM({ url: "https://example.com/" }, { width: 1200 });
+const layout = await enableLiveLayout(dom, await getDefaultModule(), { width: 1200, maxElements: 10000 });
+await dom.eval("document.querySelector('main').style.height = '400px'");
+await dom.eval("document.querySelector('footer').getBoundingClientRect().y"); // もう動いている
+await layout.refreshResources(); // スクリプトが足した画像・スタイルシート・フォントを取り込む
+layout.dispose();
+dom.close();
+```
+
+- 読み取りは同期で、取得はできません。スタイルシート・フォント・画像は `enableLiveLayout()` を呼んだ時点のページから 1 回だけ取得します。あとからスクリプトが足したものは `await layout.refreshResources()` で取り込みます（それまで、足された画像は空として配置されます）。
+- 1 回の変更 + 読み取りの時間（Node.js、6,000 要素）: 見た目だけの変更（`color` など）約 13 ms、`append` 約 90 ms、箱が動く変更（`height`）約 170 ms。要素数にほぼ比例します。表は遅く、1,500 行で約 0.6 秒です。
+- Cloudflare Workers（2 つの wasm で 128 MB）では約 13,000 要素まで入ります。`maxElements` は **10,000 以下**にしてください。超えたページとエンジンの失敗では、箱は 0 のまま警告を 1 回出してページは動き続けます。互換性フラグ `enable_weak_ref` が要り、gzip 後のアップロード（約 5.5 MB）には有料プランが必要です。
+- 設計と計測: `doc/design/live-layout-incremental.md`。計測スクリプト: `packages/html-to-image/scripts/bench-live-layout.mjs`。
 
 ### 高度な制御 & 診断
 
