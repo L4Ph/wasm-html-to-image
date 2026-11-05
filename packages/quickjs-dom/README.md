@@ -299,14 +299,19 @@ Compatible with:
 
 ### Vitest Configuration
 
+Install the environment under the name Vitest looks for, `vitest-environment-wasm-quickjs-dom` (it has the same version as this package and re-exports `wasm-quickjs-dom/vitest`):
+
+```sh
+pnpm add -D vitest vitest-environment-wasm-quickjs-dom
+```
+
 ```ts
 // vitest.config.ts
 import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
-    // Recommended: resolve the environment through the package's subpath export.
-    environment: "wasm-quickjs-dom/vitest",
+    environment: "wasm-quickjs-dom",
     environmentOptions: {
       wasmQuickjsDom: {
         url: "http://localhost:3000",
@@ -321,9 +326,9 @@ export default defineConfig({
 ```
 
 > [!IMPORTANT]
-> Use `environment: "wasm-quickjs-dom/vitest"`. It goes through the package's `./vitest` subpath export, so Vitest resolves the copy that is actually installed — including pnpm's non-hoisted `node_modules/.pnpm` layout, where a hard-coded `./node_modules/wasm-quickjs-dom/dist/vitest.js` may not exist or may point at a different copy.
+> Vitest turns `environment: "<name>"` into the package `vitest-environment-<name>` and resolves it from the **project's root**. A package that is not a dependency of that root cannot be found by name, and pnpm does not hoist: in a monorepo whose root config lists the projects of the packages (`projects: [...]`), give each project its own `root` (the package that has `vitest-environment-wasm-quickjs-dom` in its dependencies). (Passing the absolute path of `wasm-quickjs-dom/vitest`, resolved by your own config, also works, which is what this package saves you.)
 >
-> Pointing `environment` at the file directly (for example `"./node_modules/wasm-quickjs-dom/dist/vitest.js"`) still works but is **deprecated**; prefer the subpath form in new configurations.
+> `environment: "wasm-quickjs-dom/vitest"` is found as well, once `vitest-environment-wasm-quickjs-dom` is installed. Without that package, current Vitest (5.x) fails with `Cannot find dependency 'vitest-environment-wasm-quickjs-dom/vitest'`. Pointing `environment` at the file directly (for example `"./node_modules/wasm-quickjs-dom/dist/vitest.js"`) still works but is **deprecated**.
 
 > [!NOTE]
 > Options are resolved in this order: `environmentOptions.wasmQuickjsDom`, then `environmentOptions.jsdom` (the options of Vitest's `jsdom` environment), then the top-level `environmentOptions.url`; the first value present wins. `html` likewise falls back to `jsdom.html`, so a config written for `jsdom` does not need to move either option.

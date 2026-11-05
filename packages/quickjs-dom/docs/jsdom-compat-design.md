@@ -101,7 +101,7 @@ const dom2 = await JSDOM.fromURL(url, options);
 
 ## 8. テスト環境のアダプター
 
-- `wasm-quickjs-dom/vitest`: vitest の `environment`(`setup()` で `JSDOM` を作り、`window` のプロパティを `global` に写し、`teardown()` で閉じる)。
+- `wasm-quickjs-dom/vitest`(名前で指定するなら別パッケージ `vitest-environment-wasm-quickjs-dom`、`environment: "wasm-quickjs-dom"`): vitest の `environment`(`setup()` で `JSDOM` を作り、`window` のプロパティを `global` に写し、`teardown()` で閉じる)。
 - `wasm-quickjs-dom/jest`: `jest-environment-*` 形式。
 - グローバルに写すのは、jsdom 環境と同じ一覧(`document`、`window`、`HTMLElement`、`Event` 系、`MutationObserver`、`getComputedStyle`、`requestAnimationFrame` など)。Node 側に既にあるもの(`fetch`、`URL`、`TextEncoder`)は上書きしない。
 - 型は `lib.dom.d.ts` をそのまま使えるようにし、独自の型は作らない(クラスの名前と形が同じため)。

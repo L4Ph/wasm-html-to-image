@@ -1,0 +1,61 @@
+{
+  "name": "vitest-environment-wasm-quickjs-dom",
+  "version": "1.0.5",
+  "description": "The wasm-quickjs-dom environment for Vitest, under the name Vitest looks for: environment: \"wasm-quickjs-dom\"",
+  "type": "module",
+  "main": "./index.js",
+  "types": "./index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./index.d.ts",
+      "import": "./index.js",
+      "default": "./index.js"
+    },
+    "./vitest": {
+      "types": "./index.d.ts",
+      "import": "./index.js",
+      "default": "./index.js"
+    }
+  },
+  "files": [
+    "index.js",
+    "index.d.ts",
+    "README.md",
+    "LICENSE"
+  ],
+  "author": "SoraKumo <info@croud.jp>",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/SoraKumo001/wasm-html-to-image.git",
+    "directory": "packages/vitest-environment-wasm-quickjs-dom"
+  },
+  "homepage": "https://sorakumo001.github.io/wasm-html-to-image/master/docs/",
+  "bugs": {
+    "url": "https://github.com/SoraKumo001/wasm-html-to-image/issues"
+  },
+  "keywords": [
+    "vitest",
+    "vitest-environment",
+    "jsdom",
+    "dom",
+    "quickjs",
+    "wasm"
+  ],
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "license": "MIT",
+  "dependencies": {
+    "wasm-quickjs-dom": "workspace:*"
+  },
+  "peerDependencies": {
+    "vitest": ">=2.0.0"
+  },
+  "scripts": {
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "vitest": "^5.1.0",
+    "@types/node": "26.6.6"
+  }
+}

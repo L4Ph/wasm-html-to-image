@@ -237,6 +237,8 @@ jobs:
           # wasm-html-to-image depends on wasm-quickjs-dom, so that one goes first (only when its version is new)
           if [ "${{ needs.check-version.outputs.publish_qjs }}" = "true" ]; then
             publish_pkg wasm-quickjs-dom
+            # same version as wasm-quickjs-dom (a test checks it) and a name Vitest looks for; it has no build, so nothing to put in place
+            publish_pkg vitest-environment-wasm-quickjs-dom
           fi
           if [ "${{ needs.check-version.outputs.should_release }}" = "true" ]; then
             publish_pkg wasm-html-to-image
