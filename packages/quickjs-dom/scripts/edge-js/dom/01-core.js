@@ -160,7 +160,35 @@
     if (/[ \t\n\f\r]/.test(t)) { var e2 = new Error("The token provided ('" + t + "') contains HTML space characters, which are not valid in tokens."); e2.name = "InvalidCharacterError"; throw e2; }
     return t;
   };
-  var TokenList = function (el) { Object.defineProperty(this, "_el", { value: el }); };
+  var INDEX_KEY = /^(?:0|[1-9][0-9]*)$/;
+  var TokenList = function (el) {
+    Object.defineProperty(this, "_el", { value: el });
+    // the tokens are indexed properties of the list (jsdom answers classList[0]); they are read from the
+    // attribute every time, so the list is live even when the attribute changes outside the TokenList
+    return new Proxy(this, {
+      get: function (t, k, r) {
+        if (typeof k === "string" && INDEX_KEY.test(k)) return tokens(t._el)[Number(k)];
+        return Reflect.get(t, k, r);
+      },
+      has: function (t, k) {
+        return typeof k === "string" && INDEX_KEY.test(k) ? Number(k) < tokens(t._el).length : Reflect.has(t, k);
+      },
+      ownKeys: function (t) {
+        var out = [], ts = tokens(t._el);
+        for (var i = 0; i < ts.length; i++) out.push(String(i));
+        Reflect.ownKeys(t).forEach(function (k) { if (typeof k !== "string" || !INDEX_KEY.test(k)) out.push(k); });
+        return out;
+      },
+      getOwnPropertyDescriptor: function (t, k) {
+        if (typeof k === "string" && INDEX_KEY.test(k)) {
+          var ts = tokens(t._el);
+          if (Number(k) < ts.length) return { value: ts[Number(k)], enumerable: true, configurable: true, writable: false };
+          return undefined;
+        }
+        return Reflect.getOwnPropertyDescriptor(t, k);
+      },
+    });
+  };
   var write = function (list, arr) {
     var seen = [];
     arr.forEach(function (t) { if (seen.indexOf(t) < 0) seen.push(t); });
@@ -1092,10 +1120,12 @@
       has: function (_, k) { return k in arr(); },
       ownKeys: function () { return Reflect.ownKeys(arr()).filter(function (k) { return k !== "length"; }); },
       getOwnPropertyDescriptor: function (_, k) {
+        // length is a named property, not an own one (jsdom answers undefined for its descriptor)
         if (k === "length") return undefined;
         var d = Object.getOwnPropertyDescriptor(arr(), k);
-        if (d) d.configurable = true;
-        return d;
+        if (!d) return undefined;
+        // an index of a collection is read-only: enumerable and configurable, but not writable
+        return { value: d.value, enumerable: d.enumerable, configurable: true, writable: false };
       },
     });
   };
@@ -1262,12 +1292,21 @@
   var CONTROLS = "input, select, textarea, button, fieldset, object, output";
   // a name shared by several radio buttons answers a RadioNodeList, not the first of them
   var RadioNodeList = function RadioNodeList() { illegal(); };
+  var RADIO_NODES = Symbol("radioNodes");
   var makeRadioNodeList = function (nodes) {
     var list = Object.create(RadioNodeList.prototype);
-    nodes.forEach(function (n, i) { list[i] = n; });
-    list.length = nodes.length;
+    Object.defineProperty(list, RADIO_NODES, { value: nodes });
+    // indexed properties are read-only in a NodeList (jsdom: writable false, enumerable true, configurable true)
+    nodes.forEach(function (n, i) {
+      Object.defineProperty(list, i, { value: n, enumerable: true, configurable: true, writable: false });
+    });
     return list;
   };
+  // length is a named property of the interface, not an own property of the list (as in jsdom)
+  Object.defineProperty(RadioNodeList.prototype, "length", {
+    configurable: true,
+    get: function () { return this[RADIO_NODES] ? this[RADIO_NODES].length : 0; },
+  });
   Object.defineProperty(RadioNodeList.prototype, "value", {
     configurable: true,
     get: function () { for (var i = 0; i < this.length; i++) if (this[i].checked) return this[i].value; return ""; },

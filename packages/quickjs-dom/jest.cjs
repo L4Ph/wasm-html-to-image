@@ -28,6 +28,7 @@ class WasmQuickJSDomEnvironment extends TestEnvironment {
     await super.setup();
     const { JSDOM } = await import(built("jsdom.js"));
     const { installWindow } = await import(built("globals.js"));
+    const { normalizeTimeout } = await import(built("timeout.js"));
     const o = this.options || {};
     // Options are resolved in three layers, as in the Vitest environment: wasmQuickjsDom, then jsdom (the options of
     // jest-environment-jsdom), then this environment's own top level.
@@ -54,14 +55,20 @@ class WasmQuickJSDomEnvironment extends TestEnvironment {
     });
     this.uninstall = installWindow(this.global, this.dom.window);
     if (awaitReady) {
-      const timeout = (givenRest.engine && givenRest.engine.timeout) ?? (jsdomRest.engine && jsdomRest.engine.timeout) ?? (topRest.engine && topRest.engine.timeout) ?? 10000;
-      await Promise.race([
-        this.dom.ready.catch(() => {}),
-        new Promise((resolve) => {
-          const timer = setTimeout(resolve, timeout);
-          if (timer.unref) timer.unref();
-        }),
-      ]);
+      // priority: wasmQuickjsDom.engine.timeout, then jsdom.engine.timeout, then the top level; the helper supplies
+      // the default 10000 (and maps 0 / Infinity to "no limit")
+      const timeout = normalizeTimeout(
+        (givenRest.engine && givenRest.engine.timeout) ?? (jsdomRest.engine && jsdomRest.engine.timeout) ?? (topRest.engine && topRest.engine.timeout),
+      );
+      if (timeout === Infinity) await this.dom.ready.catch(() => {});
+      else
+        await Promise.race([
+          this.dom.ready.catch(() => {}),
+          new Promise((resolve) => {
+            const timer = setTimeout(resolve, timeout);
+            if (timer.unref) timer.unref();
+          }),
+        ]);
     }
   }
 

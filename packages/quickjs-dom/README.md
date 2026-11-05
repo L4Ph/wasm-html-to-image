@@ -376,7 +376,7 @@ const dom = await createDOM(
 - **Every request is checked:** `limits` apply to the initial `source.url`, `fetch`, `XMLHttpRequest`, `<script src>`, `<link rel="stylesheet">`, and ES module imports.
 - **Redirect validation:** When host or protocol limits are active, every HTTP redirect hop is inspected manually before following (up to 10 hops).
 - **DNS rebinding note:** `blockPrivateHosts` inspects hostnames and IP literals before calling `fetch`. Because standard `fetch` resolves DNS internally, pair `blockPrivateHosts: true` with `allowedHosts` when full SSRF protection against custom domains is required.
-- **WebAssembly isolation:** Page scripts run inside a dedicated WASM sandbox with no access to the filesystem, environment variables, or `process`. Memory is capped at 256 MB, stack at 192 KB, and execution time per call is bounded by `timeout`.
+- **WebAssembly isolation:** Page scripts run inside a dedicated WASM sandbox with no access to the filesystem, environment variables, or `process`. Memory is capped at 256 MB, stack at 192 KB, and execution time per call is bounded by `timeout` (unless you explicitly pass `0` / `Infinity`).
 
 ---
 
@@ -395,7 +395,7 @@ Creates a new isolated QuickJS + C DOM instance, loads the HTML, executes script
 
 | Option | Type | Default | Description |
 | :--- | :--- | :--- | :--- |
-| `timeout` | `number` | `10000` | Maximum time in ms allowed for **each call** into the page (initial load, `eval`, `settle`, etc.). |
+| `timeout` | `number` | `10000` | Maximum time in ms allowed for **each call** into the page (initial load, `eval`, `settle`, etc.). `0` or `Infinity` disables the limit; a negative or `NaN` value throws. |
 | `settleMs` | `number` | `1000` | Maximum time in ms after `load` to let pending timers and network requests finish. Returns early as soon as the queue is idle. |
 | `waitFor` | `string` | — | CSS selector to wait for after `load` instead of `settleMs`. |
 | `width` | `number` | `800` | Viewport width (`window.innerWidth` and `@media` / `matchMedia` width queries). |

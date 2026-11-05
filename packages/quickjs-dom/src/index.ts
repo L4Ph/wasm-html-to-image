@@ -22,7 +22,8 @@
 import defaultQuickJSWasm from "#quickjs-wasm";
 import { createGuard } from "./limits.js";
 import { decodeHtml } from "./decode.js";
-import { openPage, DEFAULT_TIMEOUT, sleep } from "./page.js";
+import { openPage, sleep } from "./page.js";
+import { normalizeTimeout } from "./timeout.js";
 import type {
   CreateDOMOptions,
   EdgeJavaScriptEngine,
@@ -73,7 +74,7 @@ export async function createDOM(
   source: { url?: string; html?: string; baseUrl?: string },
   options: CreateDOMOptions = {},
 ): Promise<QuickJSDOM> {
-  const timeout = options.timeout ?? DEFAULT_TIMEOUT;
+  const timeout = normalizeTimeout(options.timeout);
   const guard = createGuard(options.limits);
   let html = source.html ?? "";
   let baseUrl = source.baseUrl || "about:blank";
@@ -81,12 +82,16 @@ export async function createDOM(
   if (source.url) {
     const entry = { type: "request" as const, method: "GET", url: source.url };
     try {
-      const res = await Promise.race([
-        guard.fetch(source.url, {}),
-        sleep(timeout).then(() => {
-          throw new Error(`Timed out loading ${source.url} for the \`javascript\` option (${timeout} ms).`);
-        }),
-      ]);
+      const loading = guard.fetch(source.url, {});
+      const res =
+        timeout === Infinity
+          ? await loading
+          : await Promise.race([
+              loading,
+              sleep(timeout).then(() => {
+                throw new Error(`Timed out loading ${source.url} for the \`javascript\` option (${timeout} ms).`);
+              }),
+            ]);
       first.push({ ...entry, status: res.status });
       html = decodeHtml(await guard.bytes(res), res.headers?.get?.("content-type") ?? undefined);
       baseUrl = res.url || source.url;

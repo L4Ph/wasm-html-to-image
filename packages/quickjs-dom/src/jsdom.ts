@@ -18,6 +18,7 @@ import { createGuard } from "./limits.js";
 import { CookieJar, type CookieJarLike } from "./cookies.js";
 import { registerGlobals } from "./globals.js";
 import type { DOMWindow } from "./bridge.js";
+import { normalizeTimeout } from "./timeout.js";
 import type { HappyDOMSettings } from "./types.js";
 
 export type { DOMWindow };
@@ -137,6 +138,8 @@ export class JSDOM {
       );
     }
     const engine = options.engine ?? {};
+    // the one place this facade settles the timeout: 0 / Infinity mean no limit, and a bad value fails here
+    const timeout = normalizeTimeout(engine.timeout);
     const report = (entry: PageLogEntry) => {
       try {
         engine.onLog?.(entry);
@@ -163,6 +166,7 @@ export class JSDOM {
     this.cookieJar = options.cookieJar ?? engine.cookieJar ?? new CookieJar();
     this.page = openPage(decodeHtml(html, options.contentType), url, engine.quickjsWasm ?? defaultWasm(), {
       ...engine,
+      timeout,
       beforeScripts,
       cookieJar: this.cookieJar,
       onLog: report,
@@ -170,7 +174,7 @@ export class JSDOM {
       stylesheets: options.resources === "usable" && cssFileLoading,
       visual: options.pretendToBeVisual ?? false,
     });
-    const bridge = this.page.dom.bridge({ timeout: engine.timeout });
+    const bridge = this.page.dom.bridge({ timeout });
     this.bridgeWindow = bridge.window;
     // the page's `window.close()` ends the page
     this.bridgeWindow.close = () => this.close();
@@ -290,12 +294,16 @@ export class JSDOM {
     const cookies = jar.getCookieStringSync(url);
     if (cookies && !headers.has("cookie")) headers.set("cookie", cookies);
     const guard = createGuard(options.engine?.limits);
-    const timeout = options.engine?.timeout ?? 10000;
+    const timeout = normalizeTimeout(options.engine?.timeout);
     const fetchPromise = guard.fetch(url, { headers });
-    const res = await Promise.race([
-      fetchPromise,
-      new Promise<Response>((_, reject) => setTimeout(() => reject(new Error(`Timed out loading ${url} (${timeout} ms).`)), timeout)),
-    ]);
+    // no race at all when unlimited: a 10 s timer would end a page meant to wait forever
+    const res =
+      timeout === Infinity
+        ? await fetchPromise
+        : await Promise.race([
+            fetchPromise,
+            new Promise<Response>((_, reject) => setTimeout(() => reject(new Error(`Timed out loading ${url} (${timeout} ms).`)), timeout)),
+          ]);
     for (const sc of res.headers?.getSetCookie?.() ?? []) jar.setCookieSync(sc, res.url || url);
     const body = await guard.bytes(res);
     return new JSDOM(body, { ...options, cookieJar: jar, url: res.url || url, contentType: options.contentType ?? res.headers?.get?.("content-type") ?? undefined });

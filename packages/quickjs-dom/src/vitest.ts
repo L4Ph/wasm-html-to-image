@@ -15,6 +15,7 @@
  */
 import { installWindow } from "./globals.js";
 import { JSDOM, type JSDOMOptions } from "./jsdom.js";
+import { normalizeTimeout } from "./timeout.js";
 
 /** Options this environment adds to {@link JSDOMOptions}. */
 interface EnvironmentOptions extends JSDOMOptions {
@@ -72,15 +73,20 @@ export default {
       await new Promise<void>((resolve) => setTimeout(resolve, 0));
     };
     if (!awaitReady) return { teardown };
-    const timeout = (givenRest as JSDOMOptions).engine?.timeout ?? (jsdomRest as JSDOMOptions).engine?.timeout ?? 10000;
+    // priority: wasmQuickjsDom.engine.timeout, then jsdom.engine.timeout; the helper supplies the default 10000
+    // (and maps 0 / Infinity to "no limit")
+    const timeout = normalizeTimeout((givenRest as JSDOMOptions).engine?.timeout ?? (jsdomRest as JSDOMOptions).engine?.timeout);
+    const ready = dom.ready.catch(() => {});
     return (async () => {
-      await Promise.race([
-        dom.ready.catch(() => {}),
-        new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, timeout);
-          timer.unref?.();
-        }),
-      ]);
+      if (timeout === Infinity) await ready;
+      else
+        await Promise.race([
+          ready,
+          new Promise<void>((resolve) => {
+            const timer = setTimeout(resolve, timeout);
+            timer.unref?.();
+          }),
+        ]);
       return { teardown };
     })();
   },

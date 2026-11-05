@@ -4,6 +4,7 @@ import { createGuard } from "./limits.js";
 import { Bridge, type BridgeOptions } from "./bridge.js";
 import { QuickJSInstance } from "./runtime.js";
 import { ModuleLoader } from "./module-loader.js";
+import { normalizeTimeout } from "./timeout.js";
 import type {
   CreateDOMOptions,
   OpenedPage,
@@ -12,7 +13,7 @@ import type {
   PageInput,
 } from "./types.js";
 
-export const DEFAULT_TIMEOUT = 10000;
+export { DEFAULT_TIMEOUT } from "./timeout.js";
 export const DEFAULT_SETTLE_MS = 1000;
 export const MEMORY_LIMIT = 256 * 1024 * 1024;
 export const MAX_MODULES = 1000;
@@ -80,15 +81,16 @@ export function openPage(
 ): OpenedPage {
   const options = opts;
   const viewportWidth = options.width ?? 800;
-  const timeout = opts.timeout ?? DEFAULT_TIMEOUT;
+  // 0 and Infinity both mean "no limit" (Infinity here); the default 10 s is kept when none is given
+  const timeout = normalizeTimeout(opts.timeout);
   let started = Date.now();
-  let deadline = started + timeout;
+  // QuickJS reads a deadline of 0 as "no limit", which is how it must hear "Infinity"
+  const deadlineOf = () => (timeout === Infinity ? 0 : started + timeout);
   let vmDeadline: ((ms: number) => void) | undefined;
   // every call into the page gets a fresh `timeout`
   const begin = () => {
     started = Date.now();
-    deadline = started + timeout;
-    vmDeadline?.(deadline);
+    vmDeadline?.(deadlineOf());
   };
   const guard = sharedGuard ?? createGuard(opts.limits);
   const logs: PageLogEntry[] = [];
@@ -137,7 +139,15 @@ export function openPage(
     }
   };
   const text = async (res: Response) => new TextDecoder().decode(await bodyBytes(res));
-  const remaining = () => Math.max(0, timeout - (Date.now() - started));
+  const remaining = () => (timeout === Infinity ? Infinity : Math.max(0, timeout - (Date.now() - started)));
+  // AbortSignal.timeout refuses Infinity (and the largest finite values) with a RangeError: an unlimited call has no
+  // abort signal at all, and one bounded beyond what a signal can take keeps its deadline in QuickJS.
+  const ABORT_MAX = 2 ** 31 - 1;
+  const abortSignal = (): AbortSignal | undefined => {
+    if (timeout === Infinity) return undefined;
+    const ms = remaining();
+    return ms > ABORT_MAX ? undefined : AbortSignal.timeout(Math.max(1, ms));
+  };
 
   let closed = false;
   const timers: { id: number; at: number }[] = [];
@@ -229,7 +239,7 @@ export function openPage(
       if (loaded.type === "error") throw new Error(`The QuickJS engine could not load its guest program: ${loaded.value}`);
     },
   );
-  vm.setDeadline(deadline);
+  vm.setDeadline(deadlineOf());
   vmDeadline = (ms) => vm.setDeadline(ms);
   pump = () => {
     if (!closed) vm.jobs();
@@ -286,7 +296,7 @@ export function openPage(
       await Promise.all(
         pending.map(async (target) => {
           try {
-            const res = await loggedFetch(target, { signal: AbortSignal.timeout(Math.max(1, remaining())) });
+            const res = await loggedFetch(target, { signal: abortSignal() });
             if (!res.ok) return;
             await prefetchModules(await text(res), target);
           } catch {
@@ -327,7 +337,7 @@ export function openPage(
         const sources = list.map((s) => {
           if (!s.src || !mode.external) return undefined;
           const name = new URL(s.src, baseUrl).href;
-          return loggedFetch(name, { signal: AbortSignal.timeout(Math.max(1, remaining())) })
+          return loggedFetch(name, { signal: abortSignal() })
             .then(text)
             .then(
               (code) => ({ name, code }),
@@ -369,7 +379,7 @@ export function openPage(
       await Promise.all(
         wanted.map(async (target) => {
           try {
-            const res = await loggedFetch(target, { signal: AbortSignal.timeout(Math.max(1, remaining())) });
+            const res = await loggedFetch(target, { signal: abortSignal() });
             if (res.ok) await prefetchModules(await text(res), target);
           } catch {
             // the page's retry fails the same way
@@ -448,7 +458,7 @@ export function openPage(
       const list: { i: number; href: string }[] = typeof raw === "string" ? JSON.parse(raw) : [];
       const sheets = await Promise.all(
         list.map((l) =>
-          loggedFetch(new URL(l.href, baseUrl).href, { signal: AbortSignal.timeout(Math.max(1, remaining())) })
+          loggedFetch(new URL(l.href, baseUrl).href, { signal: abortSignal() })
             .then(text)
             .then(
               (css) => ({ i: l.i, css }),

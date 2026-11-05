@@ -52,7 +52,7 @@
       add(k, g[k]);
     });
   };
-  var INDEXED = ["NodeList", "HTMLCollection", "NamedNodeMap", "DOMTokenList", "HTMLOptionsCollection", "HTMLFormControlsCollection"];
+  var INDEXED = ["NodeList", "HTMLCollection", "NamedNodeMap", "DOMTokenList", "HTMLOptionsCollection", "HTMLFormControlsCollection", "RadioNodeList"];
 
   // what the host builds its classes from: per interface the parent, how each member behaves (0 value, 1 read-only
   // accessor, 2 accessor, 3 method), the constants, and whether it iterates or is indexed

@@ -46,7 +46,10 @@ export interface HappyDOMSettings {
 
 /** Options of the script phase. */
 export interface JavaScriptOptions {
-  /** Upper bound for the script phase in ms (default 10000). */
+  /**
+   * Upper bound for the script phase in ms (default 10000). `0` and `Infinity` disable the limit (a page may then run
+   * until it finishes, so only use that for pages you trust); a negative or `NaN` value is refused.
+   */
   timeout?: number;
   /** Extra time after the `load` event for timers and fetches to finish, in ms (default 1000). */
   settleMs?: number;
@@ -146,7 +149,8 @@ export interface CreateDOMOptions extends JavaScriptOptions, EdgeJavaScriptEngin
  *
  * The DOM is inside the QuickJS sandbox, so it is reached with {@link QuickJSDOM.eval} and JSON values rather than
  * through live objects. The page's clock runs only while one of these methods is waiting: timers and fetches of the
- * page progress during `eval()` and `settle()`, not in between. Each call may take up to `timeout` ms.
+ * page progress during `eval()` and `settle()`, not in between. Each call may take up to `timeout` ms (or unbounded
+ * with `timeout: 0` / `Infinity`).
  */
 export interface QuickJSDOM {
   /** The document's URL (after redirects when it was fetched). */

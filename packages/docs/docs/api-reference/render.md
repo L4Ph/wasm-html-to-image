@@ -100,7 +100,7 @@ export interface RenderResult<T = Uint8Array | string> {
 
 | オプション   | 型                                                       | 説明 |
 | ------------ | -------------------------------------------------------- | ---- |
-| `javascript` | `boolean \| { timeout?: number, settleMs?: number, waitFor?: string, engine?: "quickjs", limits?, skip? }` | ページの `<script>` を QuickJS（WebAssembly）と C 実装の DOM で実行してから描画する（Node.js の `single` 入口と CLI の `--js` は自動で行い、Edge の入口では `applyJavaScript()` を先に通す）。`true` は `load` の後 1 秒待つ。`timeout` は全体の上限（既定 10000 ms）、`settleMs` は `load` の後の待ち時間（既定 1000 ms）、`waitFor` は待つ CSS セレクタ（指定すると `settleMs` の代わりになる）。`engine` は `"quickjs"` だけを受け付け（1 リリースの移行用。`"jsdom"` は実行時にエラー）、エンジンはほかに選べない。`limits` / `skip` はページが取得できる先を絞る。レイアウトも安全な隔離もないので、信頼できるページだけに使う |
+| `javascript` | `boolean \| { timeout?: number, settleMs?: number, waitFor?: string, engine?: "quickjs", limits?, skip? }` | ページの `<script>` を QuickJS（WebAssembly）と C 実装の DOM で実行してから描画する（Node.js の `single` 入口と CLI の `--js` は自動で行い、Edge の入口では `applyJavaScript()` を先に通す）。`true` は `load` の後 1 秒待つ。`timeout` は全体の上限（既定 10000 ms、`0` / `Infinity` で無制限）、`settleMs` は `load` の後の待ち時間（既定 1000 ms）、`waitFor` は待つ CSS セレクタ（指定すると `settleMs` の代わりになる）。`engine` は `"quickjs"` だけを受け付け（1 リリースの移行用。`"jsdom"` は実行時にエラー）、エンジンはほかに選べない。`limits` / `skip` はページが取得できる先を絞る。レイアウトも安全な隔離もないので、信頼できるページだけに使う |
 | `mermaid`    | `{ source, theme?, padding?, background?, accent?, mode?, directives?, onWarning?, maxLines?, maxSourceBytes? }` | Mermaid の図を描く（`value` の代わり）。図の大きさに合わせた画像になる。詳しくは [Mermaid 変換](./mermaid.md) |
 
 #### Edge（Cloudflare Workers など）でスクリプトを実行する

@@ -7,6 +7,7 @@
  * let go of its node. A function given to the page (an event listener) is called back from the guest, at once.
  */
 import type { EvalResult } from "./runtime.js";
+import { normalizeTimeout } from "./timeout.js";
 
 /** What the bridge needs of a QuickJS instance. */
 export interface BridgeVM {
@@ -113,7 +114,7 @@ const INDEX = /^(?:0|[1-9][0-9]*)$/;
 let cachedSchema: InterfaceSchema[] | undefined;
 
 export interface BridgeOptions {
-  /** How long one call from the host may keep the guest busy (ms, default 10000); 0 for no limit. */
+  /** How long one call from the host may keep the guest busy (ms, default 10000); 0 or Infinity for no limit. */
   timeout?: number;
   /** Called when a call of the host has returned from the page (the page may have set a timer or started a request). */
   onCall?: () => void;
@@ -195,9 +196,9 @@ export class Bridge {
 
   constructor(vm: BridgeVM, options: BridgeOptions = {}) {
     this.vm = vm;
-    this.timeout = options.timeout ?? 10000;
+    this.timeout = normalizeTimeout(options.timeout);
     this.onCall = options.onCall;
-    if (this.timeout > 0) this.vm.setDeadline(Date.now() + this.timeout);
+    this.armDeadline();
     this.registry = new FinalizationRegistry<Cell>((cell) => {
       this.released.push([cell.id, cell.count]);
       const ref = this.wrappers.get(cell.id);
@@ -235,8 +236,33 @@ export class Bridge {
       },
       has(t, k) {
         const cell = (t as any)[HANDLE] as Cell;
+        // every indexed interface has a length; it is a named property, not an own one (as in jsdom)
+        if (k === "length") return true;
         if (typeof k === "string" && INDEX.test(k)) return Number(k) < (bridge.get(cell, "length") as number);
         return Reflect.has(t, k);
+      },
+      ownKeys(t) {
+        const cell = (t as any)[HANDLE] as Cell;
+        const keys: (string | symbol)[] = [];
+        const seen = new Set<string | symbol>();
+        // what the page reports as enumerable own names (the indices of a collection, a NamedNodeMap's names): the
+        // target is extensible, so these may answer although they are not own properties of it; the wrapper's own
+        // keys (HANDLE, and anything the host set on it) stay, so the proxy invariants hold
+        for (const key of bridge.sendJ(["keys", cell.id]) as string[]) {
+          keys.push(key);
+          seen.add(key);
+        }
+        for (const key of Reflect.ownKeys(t)) if (!seen.has(key)) keys.push(key);
+        return keys;
+      },
+      getOwnPropertyDescriptor(t, k) {
+        const own = Reflect.getOwnPropertyDescriptor(t, k);
+        if (own) return own;
+        // length is a named property (undefined as an own descriptor), as in jsdom
+        if (typeof k !== "string" || !INDEX.test(k)) return undefined;
+        const cell = (t as any)[HANDLE] as Cell;
+        if (Number(k) >= (bridge.get(cell, "length") as number)) return undefined;
+        return { value: bridge.get(cell, k), enumerable: true, configurable: true, writable: false };
       },
     };
 
@@ -327,6 +353,11 @@ export class Bridge {
     }
   }
 
+  /** Give the guest a fresh deadline for the call about to run; 0 is QuickJS's "no limit". */
+  private armDeadline(): void {
+    this.vm.setDeadline(this.timeout === Infinity ? 0 : Date.now() + this.timeout);
+  }
+
   private sendReleases(): void {
     if (this.released.length === 0 || this.closed) return;
     const list = this.released;
@@ -342,7 +373,7 @@ export class Bridge {
     if (runs) {
       // only after: what the host had read is still valid while the operation runs (it is dropped below, before
       // the host sees the answer), and a call that changes nothing then pays no re-read
-      if (this.timeout > 0) this.vm.setDeadline(Date.now() + this.timeout);
+      this.armDeadline();
     }
     const value = this.send("J" + JSON.stringify(request), request[0] === "release");
     if (runs) this.invalidate();
@@ -715,7 +746,7 @@ export class Bridge {
         } else if (k === Symbol.iterator) return () => nodes()[Symbol.iterator]();
         return Reflect.get(t, k, r);
       },
-      has: (t, k) => (typeof k === "string" && INDEX.test(k) ? Number(k) < nodes().length : Reflect.has(t, k)),
+      has: (t, k) => (typeof k === "string" && (k === "length" || (INDEX.test(k) && Number(k) < nodes().length)) ? true : Reflect.has(t, k)),
       ownKeys: () => [...nodes().keys()].map(String),
       getOwnPropertyDescriptor: (t, k) => (typeof k === "string" && INDEX.test(k) && Number(k) < nodes().length ? { value: nodes()[Number(k)], enumerable: true, configurable: true, writable: false } : undefined),
     }));
