@@ -162,6 +162,29 @@ std::string satoru_layout_style_json_val(SatoruInstance* inst, val htmls, int wi
     return satoru_api_layout_json(inst, pages[0], width, height, mediaType, includeInline, true);
 }
 
+// P0 probe: restyle + relayout the document the last layout call left behind; see document::live_probe.
+std::string satoru_live_probe_val(SatoruInstance* inst, int width, int mode) {
+    if (!inst || !inst->doc) return "{}";
+    auto t = inst->doc->live_probe((litehtml::pixel_t)normalize_viewport_width(width), mode);
+    char buf[200];
+    snprintf(buf, sizeof(buf), "{\"clear\":%.2f,\"apply\":%.2f,\"compute\":%.2f,\"tree\":%.2f,\"layout\":%.2f}", t.clear, t.apply, t.compute, t.tree, t.layout);
+    return buf;
+}
+
+// Live layout: open a document, apply attribute ops to it ("ok" or "rebuild"), read the boxes of the document held now.
+void satoru_live_open_val(SatoruInstance* inst, std::string html, int width, int mediaType) {
+    satoru_api_live_open(inst, html, width, mediaType);
+}
+std::string satoru_live_apply_val(SatoruInstance* inst, std::string ops, int width) {
+    return satoru_api_live_apply(inst, ops, normalize_viewport_width(width)) ? "ok" : "rebuild";
+}
+std::string satoru_live_sync_val(SatoruInstance* inst, bool delta) {
+    return satoru_api_live_boxes(inst, delta);
+}
+std::string satoru_live_boxes_val(SatoruInstance* inst) {
+    return satoru_api_layout_json_current(inst, true, true);
+}
+
 void satoru_set_font_map_val(SatoruInstance* inst, val fontMap) {
     if (!inst || fontMap.isUndefined() || fontMap.isNull()) return;
     std::map<std::string, std::string> m;

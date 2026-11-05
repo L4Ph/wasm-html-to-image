@@ -1041,11 +1041,26 @@
   // Live layout (prototype): the host registers `window.__layoutProvider(html) -> boxes JSON` (a synchronous call into the
   // renderer). A layout read then re-measures whenever the DOM moved since the last measurement, so the boxes are never stale.
   var liveLayout = false, refreshing = false;
+  // The host answers `__layoutProvider(html, ops)`: with ops (the journal of attribute changes since the last answer) it
+  // updates the document it holds and returns the boxes, or "rebuild" when it cannot; with html it opens the document anew.
   var ensureLive = function () {
     if (!liveLayout || refreshing) return;
-    if (boxes !== null && g.__native.dom.version() === layoutRevision) return;
+    var dom = g.__native.dom, v = dom.version();
+    if (boxes !== null && v === layoutRevision) return;
     refreshing = true;
-    try { g.__edgeSetLayout(g.__layoutProvider(g.__edgeMarkLayout())); } finally { refreshing = false; }
+    try {
+      var json;
+      if (boxes !== null && dom.journalOk()) {
+        var ops = dom.journalTake();
+        if (ops === "") { layoutRevision = v; return; }
+        var r = g.__layoutProvider("", ops);
+        if (r === "rebuild") { /* fall through to the whole tree */ }
+        else if (r.charAt(0) === "+") { g.__edgeMergeLayout(r.slice(1)); return; }
+        else json = r.slice(1);
+      }
+      if (json === undefined) json = g.__layoutProvider(g.__edgeMarkLayout(), "").slice(1);
+      g.__edgeSetLayout(json);
+    } finally { refreshing = false; }
   };
   var checkLayoutRevision = function () {
     if (liveLayout || boxes === null || staleWarned) return;
@@ -1069,6 +1084,7 @@
     staleWarned = false;
     for (var i = 0; i < a.length && i < b.length; i++) {
       a[i].__qi = i;
+      g.__native.dom.setQid(a[i], i + 1);
       var had = b[i].getAttribute("class");
       b[i].setAttribute("class", "qjsl-" + i + (had ? " " + had : ""));
     }
@@ -1076,6 +1092,7 @@
     for (var j = 0; j < n.length; j++) n[j].remove();
     var html = g.__native.dom.serialize(clone);
     markRevision = g.__native.dom.version();
+    if (liveLayout) g.__native.dom.journalSync(); // the host reads the whole tree now: the journal starts here
     return /^<!DOCTYPE/i.test(html) ? html.replace(/^<!DOCTYPE\s*(?:html)?\s*>/i, "<!DOCTYPE html>") : "<!DOCTYPE html>" + html;
   };
   g.__edgeSetLayout = function (json) {
@@ -1112,9 +1129,17 @@
     var b = boxes && el.__qi !== undefined ? boxes[el.__qi] : null;
     return (b && b[4]) || null;
   };
+  // the host sent only the boxes that changed (null: the element has none now)
+  g.__edgeMergeLayout = function (json) {
+    var delta = JSON.parse(json);
+    for (var k in delta) { if (delta[k] === null) delete boxes[k]; else boxes[k] = delta[k]; }
+    layoutRevision = g.__native.dom.version();
+  };
   g.__edgeEnableLiveLayout = function () {
     liveLayout = true;
+    g.__native.dom.journalOn(true);
     g.__edgeSetLayout("{}"); // installs the layout accessors
     layoutRevision = -1; // nothing measured yet: the first read measures
+    boxes = null;
   };
 })(globalThis);

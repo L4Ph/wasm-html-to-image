@@ -17,6 +17,7 @@ typedef struct {
 
 typedef struct {
     uint8_t type; /* 1 element, 3 text, 8 comment, 9 document, 10 doctype, 11 document fragment */
+    uint32_t qid; /* live layout: the id the renderer knows this element by (0: none), see the journal below */
     uint8_t xml;  /* a document made as an XML document: its createElement keeps the name's case */
     /* links are strong references: parent <-> child cycles are found by gc_mark below */
     JSValue parent, first, last, prev, next;
@@ -141,7 +142,59 @@ static JSValue nd_new(JSContext *c, JSValueConst owner, int type, const char *ta
     return obj;
 }
 
+/* Live-layout journal (doc/design/live-layout-incremental.md): attribute changes of elements that carry a qid, so the
+   renderer can be told what changed instead of reading the whole tree again. nd_jver is the version the journal is complete
+   at: a change it does not hold (a tree edit, a node without a qid, ...) moves nd_version past it, and the reader then
+   rebuilds from the tree. */
+static int nd_jon;
+static long nd_jver;
+typedef struct {
+    uint32_t qid;
+    char *name;
+    int nlen;
+    char *val; /* NULL: the attribute was removed */
+    int vlen;
+} NJ;
+static NJ *nd_j;
+static int nd_jn, nd_jcap;
+
+static void nd_journal_clear(void) {
+    for (int i = 0; i < nd_jn; i++) {
+        free(nd_j[i].name);
+        free(nd_j[i].val);
+    }
+    nd_jn = 0;
+}
+
+static int nd_journal_has_sep(const char *s, size_t len) {
+    for (size_t i = 0; i < len; i++)
+        if ((unsigned char)s[i] == 1 || (unsigned char)s[i] == 2) return 1;
+    return 0;
+}
+
+/* call before nd_version++ : records the change when the journal is complete, otherwise leaves the gap */
+static int nd_journal_ready(ND *n) { return nd_jon && n->type == 1 && n->qid && nd_jver == nd_version; }
+
+static void nd_journal_add(ND *n, const char *name, size_t nlen, const char *val, size_t vlen) {
+    if (nd_journal_has_sep(name, nlen) || (val && nd_journal_has_sep(val, vlen)) || nd_jn >= 100000) return; /* the gap stays */
+    if (nd_jn == nd_jcap) {
+        int cap = nd_jcap ? nd_jcap * 2 : 64;
+        NJ *p = realloc(nd_j, sizeof(NJ) * (size_t)cap);
+        if (!p) return;
+        nd_j = p;
+        nd_jcap = cap;
+    }
+    NJ *e = &nd_j[nd_jn++];
+    e->qid = n->qid;
+    e->name = nd_dup(name, nlen);
+    e->nlen = (int)nlen;
+    e->val = val ? nd_dup(val, vlen) : NULL;
+    e->vlen = val ? (int)vlen : 0;
+    nd_jver = nd_version + 1; /* the caller bumps nd_version right after */
+}
+
 static void nd_set_attr(ND *n, const char *name, size_t nlen, const char *val, size_t vlen) {
+    if (nd_journal_ready(n)) nd_journal_add(n, name, nlen, val, vlen);
     nd_version++;
     for (int i = 0; i < n->nattrs; i++) {
         if ((size_t)n->attrs[i].nlen == nlen && memcmp(n->attrs[i].name, name, nlen) == 0) {

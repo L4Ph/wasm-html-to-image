@@ -26,6 +26,11 @@ emscripten::val satoru_render_val(SatoruInstance* inst, emscripten::val htmls, i
                                   int height, int format, emscripten::val options_val);
 std::string satoru_layout_style_json_val(SatoruInstance* inst, emscripten::val htmls, int width,
                                          int height, int mediaType, bool includeInline);
+std::string satoru_live_probe_val(SatoruInstance* inst, int width, int mode);
+void satoru_live_open_val(SatoruInstance* inst, std::string html, int width, int mediaType);
+std::string satoru_live_apply_val(SatoruInstance* inst, std::string ops, int width);
+std::string satoru_live_boxes_val(SatoruInstance* inst);
+std::string satoru_live_sync_val(SatoruInstance* inst, bool delta);
 std::string satoru_layout_json_val(SatoruInstance* inst, emscripten::val htmls, int width,
                                    int height, int mediaType, bool includeInline);
 void satoru_set_font_map_val(SatoruInstance* inst, emscripten::val fontMap);

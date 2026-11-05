@@ -455,6 +455,7 @@ static JSValue js_nd_remove_attribute(JSContext *ctx, JSValueConst this_val, int
     if (!name) return JS_EXCEPTION;
     NAttr *a = nd_find_attr(n, name, len);
     if (a) {
+        if (nd_journal_ready(n)) nd_journal_add(n, name, len, NULL, 0);
         nd_version++;
         free(a->name);
         free(a->val);
@@ -667,6 +668,55 @@ static JSValue js_dom_serialize(JSContext *ctx, JSValueConst this_val, int argc,
 
 /* for tests: how many nodes are alive, and a garbage collection to free the unreachable ones */
 static JSValue js_dom_version(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) { return JS_NewInt64(ctx, nd_version); }
+/* live-layout journal: on/off (argv[0]), sync (everything so far is known to the reader), ok (nothing but journalled attribute
+   changes since the last sync), take (the changes as text: `qid \1 name \1 0|1 \1 value`, entries joined by \2) */
+static JSValue js_dom_journal_on(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    nd_jon = argc > 0 && JS_ToBool(ctx, argv[0]) > 0;
+    nd_journal_clear();
+    nd_jver = nd_version;
+    return JS_UNDEFINED;
+}
+static JSValue js_dom_journal_sync(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    nd_journal_clear();
+    nd_jver = nd_version;
+    return JS_UNDEFINED;
+}
+static JSValue js_dom_journal_ok(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    return JS_NewBool(ctx, nd_jon && nd_jver == nd_version);
+}
+static JSValue js_dom_journal_take(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    size_t cap = 256, len = 0;
+    for (int i = 0; i < nd_jn; i++) cap += 40 + (size_t)nd_j[i].nlen + (size_t)nd_j[i].vlen;
+    char *buf = malloc(cap);
+    if (!buf) return JS_ThrowOutOfMemory(ctx);
+    for (int i = 0; i < nd_jn; i++) {
+        NJ *e = &nd_j[i];
+        if (i) buf[len++] = '\2';
+        len += (size_t)snprintf(buf + len, 24, "%u", (unsigned)(e->qid - 1));
+        buf[len++] = '\1';
+        memcpy(buf + len, e->name, (size_t)e->nlen);
+        len += (size_t)e->nlen;
+        buf[len++] = '\1';
+        buf[len++] = e->val ? '0' : '1';
+        buf[len++] = '\1';
+        if (e->val) {
+            memcpy(buf + len, e->val, (size_t)e->vlen);
+            len += (size_t)e->vlen;
+        }
+    }
+    JSValue out = JS_NewStringLen(ctx, buf, len);
+    free(buf);
+    nd_journal_clear(); /* nd_jver stays: what was taken is now the reader's */
+    return out;
+}
+/* the id the renderer knows an element by; the page numbers its elements from 0, qid is that number + 1 (0 is "none") */
+static JSValue js_dom_set_qid(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    ND *n = argc > 1 ? nd_of(argv[0]) : NULL;
+    uint32_t v = 0;
+    if (!n || JS_ToUint32(ctx, &v, argv[1])) return JS_UNDEFINED;
+    n->qid = v;
+    return JS_UNDEFINED;
+}
 /* the next node after argv[0] in document order inside root (argv[1]) whose type is in the mask (argv[3]), skipping the
    children of argv[0] when argv[2] is true; null at the end. Traversals (TreeWalker, NodeIterator) step with this. */
 static JSValue js_dom_following(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
@@ -904,6 +954,11 @@ static void nd_register(JSContext *c, JSValueConst native) {
     JS_SetPropertyStr(c, dom, "serialize", JS_NewCFunction(c, js_dom_serialize, "serialize", 1));
     JS_SetPropertyStr(c, dom, "setTagProto", JS_NewCFunction(c, js_dom_set_tag_proto, "setTagProto", 2));
     JS_SetPropertyStr(c, dom, "version", JS_NewCFunction(c, js_dom_version, "version", 0));
+    JS_SetPropertyStr(c, dom, "journalOn", JS_NewCFunction(c, js_dom_journal_on, "journalOn", 1));
+    JS_SetPropertyStr(c, dom, "journalSync", JS_NewCFunction(c, js_dom_journal_sync, "journalSync", 0));
+    JS_SetPropertyStr(c, dom, "journalOk", JS_NewCFunction(c, js_dom_journal_ok, "journalOk", 0));
+    JS_SetPropertyStr(c, dom, "journalTake", JS_NewCFunction(c, js_dom_journal_take, "journalTake", 0));
+    JS_SetPropertyStr(c, dom, "setQid", JS_NewCFunction(c, js_dom_set_qid, "setQid", 2));
     JS_SetPropertyStr(c, dom, "following", JS_NewCFunction(c, js_dom_following, "following", 4));
     JS_SetPropertyStr(c, dom, "liveNodes", JS_NewCFunction(c, js_dom_live, "liveNodes", 0));
     JS_SetPropertyStr(c, dom, "gc", JS_NewCFunction(c, js_dom_gc, "gc", 0));

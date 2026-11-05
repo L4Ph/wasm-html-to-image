@@ -145,6 +145,19 @@ namespace litehtml
 		std::shared_ptr<const element>	get_over_element() const { return m_over_element; }
 
 		void							append_children_from_string(element& parent, const char* str, bool replace_existing);
+
+		// P0 probe of the live-layout design (doc/design/live-layout-incremental.md): redo the style and layout phases
+		// of createFromString on the tree that already exists and report the time of each phase in ms.
+		// mode 0: reapply every stylesheet (what a class / id / attribute change needs)
+		// mode 1: refresh_styles only (re-evaluates the selectors the element already holds)
+		struct live_timing { double clear = 0, apply = 0, compute = 0, tree = 0, layout = 0; };
+		live_timing live_probe(pixel_t max_width, int mode);
+
+		// Live layout (doc/design/live-layout-incremental.md, P1): change one attribute of an element of this document
+		// (value == nullptr removes it). The styles are not recomputed until live_relayout().
+		bool							live_set_attr(const std::shared_ptr<element>& el, const char* name, const char* value);
+		// Restyle only what the changed elements can affect, rebuild the render tree and lay out again.
+		live_timing						live_relayout(const std::vector<std::shared_ptr<element>>& changed, pixel_t max_width);
 		void							dump(dumper& cout);
 
 		void							add_custom_property(const custom_property_definition& def) { m_custom_properties[def.name] = def; }

@@ -269,6 +269,22 @@ void html_tag::set_attr( const char* _name, const char* _val )
         }
 }
 
+void html_tag::remove_attr( const char* _name )
+{
+        if (!_name) return;
+        string name = lowcase(_name);
+        m_attrs.erase(name);
+        if (name == "class")
+        {
+                m_str_classes.clear();
+                m_classes.clear();
+        }
+        else if (name == "id")
+        {
+                m_id = empty_id;
+        }
+}
+
 const char* html_tag::get_attr( const char* name, const char* def ) const
 {
         auto attr = m_attrs.find(name);

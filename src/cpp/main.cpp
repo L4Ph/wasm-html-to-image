@@ -79,6 +79,11 @@ EMSCRIPTEN_BINDINGS(html_to_image) {
     // (外部フォント/画像の解決に必須)。
     function("satoru_collect_resources", &satoru_collect_resources_val, allow_raw_pointers());
     function("satoru_layout_json", &satoru_layout_json_val, allow_raw_pointers());
+    function("satoru_live_open", &satoru_live_open_val, allow_raw_pointers());
+    function("satoru_live_apply", &satoru_live_apply_val, allow_raw_pointers());
+    function("satoru_live_sync", &satoru_live_sync_val, allow_raw_pointers());
+    function("satoru_live_boxes", &satoru_live_boxes_val, allow_raw_pointers());
+    function("satoru_live_probe", &satoru_live_probe_val, allow_raw_pointers());
     function("satoru_layout_style_json", &satoru_layout_style_json_val, allow_raw_pointers());
     function("satoru_get_pending_resources", &satoru_get_pending_resources_val,
              allow_raw_pointers());

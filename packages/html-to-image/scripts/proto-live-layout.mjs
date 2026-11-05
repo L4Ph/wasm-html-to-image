@@ -10,7 +10,8 @@ const WIDTH = 400;
 let calls = 0;
 let spent = 0;
 // html (marked with qjsl-<n> classes) -> { "<n>": [x, y, w, h] }, as measureLayout() builds it, but synchronous
-const provider = (html) => {
+const provider = (html, ops) => {
+  if (ops) return "rebuild"; // this first prototype always opens the document anew
   const t = performance.now();
   const list = JSON.parse(module.satoru_layout_style_json(inst, html, WIDTH, 0, 0, true));
   const boxes = {};
@@ -20,7 +21,7 @@ const provider = (html) => {
   }
   calls++;
   spent += performance.now() - t;
-  return JSON.stringify(boxes);
+  return "=" + JSON.stringify(boxes);
 };
 
 const html = `<!doctype html><html><head><style>

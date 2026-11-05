@@ -48,6 +48,7 @@ namespace litehtml
 		const string_vector& str_classes() const { return m_str_classes; }
 
 		void				set_attr(const char* name, const char* val) override;
+		void				remove_attr(const char* name);
 		const char*			get_attr(const char* name, const char* def = nullptr) const override;
 		void				apply_stylesheet(const litehtml::css& stylesheet) override;
 		void				refresh_styles() override;

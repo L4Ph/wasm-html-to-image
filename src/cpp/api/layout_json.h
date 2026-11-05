@@ -13,6 +13,11 @@
 // Inline boxes (they fragment across lines) are left out except replaced ones (img, svg, ...).
 // With `include_inline`, inline elements are reported too, as the box enclosing all their line fragments.
 // Lays the document out first when it is not ready for these inputs.
+// The same walk over the document the instance holds now, without checking it against any input (live layout).
+std::string satoru_api_layout_json_current(SatoruInstance* inst, bool include_inline, bool include_style);
+void satoru_api_live_open(SatoruInstance* inst, const std::string& html, int width, int mediaType);
+bool satoru_api_live_apply(SatoruInstance* inst, const std::string& ops, int width);
+std::string satoru_api_live_boxes(SatoruInstance* inst, bool delta);
 std::string satoru_api_layout_json(SatoruInstance* inst, const std::string& html, int width,
                                    int height, int mediaType, bool include_inline = false,
                                    bool include_style = false);

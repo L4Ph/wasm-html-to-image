@@ -1,3 +1,5 @@
+#include <algorithm>
+#include <chrono>
 #include "html.h"
 #include "document.h"
 #include "stylesheet.h"
@@ -1775,6 +1777,122 @@ void document::append_children_from_string(element& parent, const char* str, boo
 	// We have to check the tabular elements for missing table elements
 	// and create the anonymous boxes in visual table layout
 	fix_tables_layout();
+}
+
+bool document::live_set_attr(const std::shared_ptr<element>& el, const char* name, const char* value)
+{
+	if (!el || !name || el->get_document().get() != this) return false;
+	auto* tag = dynamic_cast<html_tag*>(el.get());
+	if (!tag) return false;
+	if (value) tag->set_attr(name, value);
+	else tag->remove_attr(name);
+	return true;
+}
+
+document::live_timing document::live_relayout(const std::vector<std::shared_ptr<element>>& changed, pixel_t max_width)
+{
+	live_timing t;
+	if (!m_root) return t;
+	auto now = []() { return std::chrono::steady_clock::now(); };
+	auto ms = [](std::chrono::steady_clock::time_point a, std::chrono::steady_clock::time_point b)
+	{
+		return std::chrono::duration<double, std::milli>(b - a).count();
+	};
+	auto t0 = now();
+	// What a change can reach: the element and its descendants (descendant / child selectors, inheritance); with a selector
+	// that looks at siblings or descendants (+ ~ :has) the whole parent, since a sibling or an ancestor may change too.
+	const bool wide = m_master_css.sibling_sensitive() || m_styles.sibling_sensitive() || m_user_css.sibling_sensitive();
+	std::vector<element::ptr> scopes;
+	for (const auto& el : changed)
+	{
+		element::ptr s = el;
+		if (wide && el->parent()) s = el->parent();
+		bool covered = false;
+		for (const auto& other : scopes)
+			for (element::ptr a = s; a; a = a->parent())
+				if (a == other) { covered = true; break; }
+		if (covered) continue;
+		// drop scopes this one covers
+		scopes.erase(std::remove_if(scopes.begin(), scopes.end(), [&](const element::ptr& o)
+		{
+			for (element::ptr a = o; a; a = a->parent()) if (a == s) return true;
+			return false;
+		}), scopes.end());
+		scopes.push_back(s);
+	}
+	std::function<void(const element::ptr&)> clear = [&](const element::ptr& el)
+	{
+		el->m_used_styles.clear();
+		el->reset_style();
+		for (const auto& c : el->m_children) clear(c);
+	};
+	for (const auto& s : scopes) clear(s);
+	auto t1 = now();
+	for (const auto& s : scopes)
+	{
+		s->apply_stylesheet(m_master_css);
+		s->parse_attributes();
+		s->apply_stylesheet(m_styles);
+		s->apply_stylesheet(m_user_css);
+	}
+	auto t2 = now();
+	for (const auto& s : scopes) s->compute_styles();
+	auto t3 = now();
+	m_tabular_elements.clear();
+	m_root_render = m_root->create_render_item(nullptr);
+	fix_tables_layout();
+	if (m_root_render) m_root_render = m_root_render->init();
+	auto t4 = now();
+	render(max_width);
+	auto t5 = now();
+	t.clear = ms(t0, t1); t.apply = ms(t1, t2); t.compute = ms(t2, t3); t.tree = ms(t3, t4); t.layout = ms(t4, t5);
+	return t;
+}
+
+document::live_timing document::live_probe(pixel_t max_width, int mode)
+{
+	live_timing t;
+	if (!m_root) return t;
+	auto now = []() { return std::chrono::steady_clock::now(); };
+	auto ms = [](std::chrono::steady_clock::time_point a, std::chrono::steady_clock::time_point b)
+	{
+		return std::chrono::duration<double, std::milli>(b - a).count();
+	};
+	auto t0 = now();
+	if (mode == 0)
+	{
+		std::function<void(const element::ptr&)> clear = [&](const element::ptr& el)
+		{
+			el->m_used_styles.clear();
+			el->reset_style();
+			for (const auto& c : el->m_children) clear(c);
+		};
+		clear(m_root);
+	}
+	auto t1 = now();
+	if (mode == 0)
+	{
+		m_root->apply_stylesheet(m_master_css);
+		m_root->parse_attributes();
+		m_root->apply_stylesheet(m_styles);
+		m_root->apply_stylesheet(m_user_css);
+	}
+	else
+	{
+		m_root->refresh_styles();
+	}
+	auto t2 = now();
+	m_root->compute_styles();
+	auto t3 = now();
+	m_tabular_elements.clear();
+	m_root_render = m_root->create_render_item(nullptr);
+	fix_tables_layout();
+	if (m_root_render) m_root_render = m_root_render->init();
+	auto t4 = now();
+	render(max_width);
+	auto t5 = now();
+	t.clear = ms(t0, t1); t.apply = ms(t1, t2); t.compute = ms(t2, t3); t.tree = ms(t3, t4); t.layout = ms(t4, t5);
+	return t;
 }
 
 void document::dump(dumper& cout)

@@ -43,8 +43,12 @@ public:
 class css
 {
 	bool	m_has_container_queries = false;
+	bool	m_sibling_sensitive = false;
 public:
 	bool has_container_queries() const { return m_has_container_queries; }
+	// True when a selector looks at siblings (`+`, `~`) or at descendants (`:has()`), so a change to one element can restyle
+	// a sibling or an ancestor (live layout restyles a wider scope then).
+	bool sibling_sensitive() const { return m_sibling_sensitive; }
 private:
 	css_selector::vector	m_selectors;
 	std::map<string_id, css_selector::vector> m_id_selectors;
@@ -96,8 +100,24 @@ private:
 	bool	evaluate_supports_feature(const css_token& token, shared_ptr<document> doc);
 };
 
+inline bool selector_is_sibling_sensitive(const css_selector& sel)
+{
+	for (const css_selector* s = &sel; s; s = s->m_left.get())
+	{
+		if (s->m_combinator == combinator_adjacent_sibling || s->m_combinator == combinator_general_sibling) return true;
+		for (const auto& attr : s->m_right.m_attrs)
+		{
+			if (attr.name == _has_) return true;
+			for (const auto& inner : attr.selector_list)
+				if (inner && selector_is_sibling_sensitive(*inner)) return true;
+		}
+	}
+	return false;
+}
+
 inline void css::add_selector(const css_selector::ptr& selector, int layer)
 {
+	if (selector_is_sibling_sensitive(*selector)) m_sibling_sensitive = true;
 	selector->m_order = (int)m_selectors.size();
 	selector->m_layer = layer;
 	m_selectors.push_back(selector);

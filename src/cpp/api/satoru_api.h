@@ -6,6 +6,7 @@
 #include <cstdarg>
 #include <cstdint>
 #include <memory>
+#include <unordered_map>
 #include <string>
 #include <vector>
 
@@ -42,6 +43,11 @@ class SatoruInstance {
     bool image_sizes_scanned = false;
     bool needs_relayout = false;
     std::string last_font_face_scan_html;
+
+    // Live layout (api/live_layout.cpp): the elements of the open document by the id the page gave them (`qjsl-<id>`).
+    std::unordered_map<uint32_t, std::weak_ptr<litehtml::element>> live_ids;
+    int live_width = 0;
+    std::unordered_map<uint32_t, std::string> live_prev; // the last boxes sent for each id (for the delta)
 
     // True when `doc` was built and laid out by collect_resources for exactly this
     // input and nothing has changed since (mirrors collect_resources' rebuild/relayout
