@@ -6,7 +6,7 @@ magnitude. Which one is right depends on where the React code runs.
 | Approach | Where React runs | 300-row tree (measured) | Use it for |
 | :--- | :--- | ---: | :--- |
 | Host-driven `react-dom` | Node, DOM in the page | ≈ 90 ms | Tests (Testing Library), incremental updates, event simulation |
-| Host-driven + `transact()` | Node, DOM in the page | ≈ 85–95 ms, no flush storms | Host-driven commits that interleave reads and writes |
+| Host-driven + `transact()` | Node, DOM in the page | ≈ 80–95 ms, level with the plain commit | Host-driven commits that interleave reads and writes |
 | In-page `renderToString` | Inside the page | ≈ 20 ms render, ≈ 22 ms render + parse + serialize | Prerendering / SSR-shaped output: HTML is the product |
 
 Measurements: React 19.3.1, a 300-row tree (1,201 elements + ~600 text nodes: a labelled
@@ -109,3 +109,14 @@ dom.transact(() => {
 Wrap the whole synchronous `act(...)` call, not just `root.render(...)`: React schedules the
 commit inside `act`, so a wrapper that returns before `act` flushes contains nothing. See the
 README's "Transactions" section for the exact semantics.
+
+What to expect: `transact()` buys no speed over the plain commit — about the same time, from 300
+rows (≈ 80 ms either way) to 3,000 items (≈ 380 ms mount either way) — and its value is the
+semantics above (one page call per commit, reads answered from the queue). It gets there because
+a commit is applied in as few page calls as it can be: node creation, tree and attribute calls,
+state-only property writes and `on…` handler assignments are queued, and the queue is applied
+only when something needs the page's answer. Whatever cannot be queued (a method that returns a
+page value, a property read the queue cannot answer) applies the queue first, so a commit that
+interleaves many such reads pays for each of them with a page call — measure before assuming a
+win. Updates of an existing tree read child nodes (`firstChild`, `lastChild`) of nodes the
+host has not seen change, and each such read is a page call in either mode.
