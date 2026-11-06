@@ -484,6 +484,13 @@
       return null;
     },
     live: function () { return live; },
+    // of these objects, the ids of the nodes that are not in a document (the host may stop pinning their wrappers)
+    detached: function (r) {
+      return json(r[1].filter(function (id) {
+        var o = byId[id];
+        return o !== undefined && o !== null && typeof o === "object" && o.isConnected === false;
+      }));
+    },
     // of these functions of the host's, the ones the page no longer holds (the host may let them go)
     deadfns: function (r) {
       return json(r[1].filter(function (id) {

@@ -394,6 +394,8 @@ export class Bridge {
   private released: [number, number][] = [];
   // wrappers the host put its own properties on: they stay until the bridge is disposed
   private readonly pinned = new Set<object>();
+  private pinLimit = 1024;
+  private pinSweeping = false;
   // What reads answered since the page last ran code of its own. Reading a property or calling a pure method again
   // gives the same answer until the page changes (a write, any other call, a job or timer, a listener of the host's
   // that ran): the cache is dropped then.
@@ -447,7 +449,7 @@ export class Bridge {
       },
       set(t, k, v, r) {
         if (k in t) return Reflect.set(t, k, v, r);
-        bridge.pinned.add(r);
+        bridge.pin(r);
         return Reflect.set(t, k, v, t);
       },
       has(t, k) {
@@ -464,7 +466,7 @@ export class Bridge {
       },
       set(t, k, v, r) {
         if (k in t) return Reflect.set(t, k, v, r);
-        bridge.pinned.add(r);
+        bridge.pin(r);
         return Reflect.set(t, k, v, t);
       },
       has(t, k) {
@@ -510,6 +512,43 @@ export class Bridge {
     this.pinned.clear();
     this.fnById.clear();
     this.fnIds.clear();
+  }
+
+  /**
+   * Keep a wrapper the host put its own properties on (React's fiber pointers, say) alive: the page holds the object
+   * for as long as the wrapper lives, so a wrapper nobody else refers to would otherwise be collected and lose them.
+   * Pinned wrappers of nodes that have left the document are let go in sweeps (see sweepPinned), or none of a framework's
+   * removed nodes would ever be freed, in the host or in the page.
+   */
+  private pin(wrapper: object): void {
+    this.pinned.add(wrapper);
+    if (this.pinned.size >= this.pinLimit && !this.txn && !this.pinSweeping && !this.closed) this.sweepPinned();
+  }
+
+  private sweepPinned(): void {
+    this.pinSweeping = true;
+    try {
+      const byId = new Map<number, object[]>();
+      for (const w of this.pinned) {
+        const cell = (w as any)[HANDLE] as Cell | undefined;
+        if (!cell || cell.pending || cell.dead || typeof cell.id !== "number") continue;
+        const list = byId.get(cell.id);
+        if (list) list.push(w);
+        else byId.set(cell.id, [w]);
+      }
+      if (byId.size) {
+        for (const id of this.sendJ(["detached", [...byId.keys()]]) as number[]) for (const w of byId.get(id) ?? []) this.pinned.delete(w);
+      }
+    } finally {
+      this.pinSweeping = false;
+      // the next sweep when the pinned set has doubled since this one: the cost stays proportional to what is added
+      this.pinLimit = Math.max(1024, this.pinned.size * 2);
+    }
+  }
+
+  /** How many wrappers carry host-set properties and are kept alive for them (for tests that look for leaks). */
+  pinnedCount(): number {
+    return this.pinned.size;
   }
 
   /** How many objects of the page the guest keeps alive for the host (for tests that look for leaks). */
@@ -1130,11 +1169,8 @@ export class Bridge {
     // a function of the page that is called, an object made, or a batch run, may change anything
     const runs =
       request[0] === "apply" || request[0] === "new" || request[0] === "del" || request[0] === "batch" || request[0] === "fire" || request[0] === "txn";
-    if (runs) {
-      // only after: what the host had read is still valid while the operation runs (it is dropped below, before
-      // the host sees the answer), and a call that changes nothing then pays no re-read
-      this.armDeadline();
-    }
+    // (the time budget is armed by send(); only after the call is what the host had read dropped: it is still valid
+    // while the operation runs, and a call that changes nothing then pays no re-read)
     const value = this.send("J" + JSON.stringify(request), request[0] === "release");
     if (runs) this.invalidate();
     return value;
@@ -1146,6 +1182,9 @@ export class Bridge {
     if (!noReleases && this.released.length) this.sendReleases();
     if (this.fnById.size >= this.fnLimit) this.pruneFunctions();
     const outer = this.depth === 0;
+    // every call from outside gets a fresh time budget, not only the ones that run code (a long run of plain reads and
+    // writes would otherwise be cut off by the deadline armed at the last such call)
+    if (outer) this.armDeadline();
     this.depth++;
     let result: EvalResult & { jobs?: boolean };
     try {

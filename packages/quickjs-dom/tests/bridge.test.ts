@@ -986,3 +986,36 @@ describe("bridge: functions of the host that the page held", () => {
     el.remove();
   });
 });
+
+describe("bridge: wrappers with host-set properties", () => {
+  it("stay pinned while their node is in the document and are let go once it has left", () => {
+    const d = w.document;
+    const before = bridge.pinnedCount();
+    const kept = d.createElement("p");
+    d.body.appendChild(kept);
+    kept.__fiber = { n: 1 };
+    // enough detached nodes to pass the sweep threshold (1024 pinned)
+    for (let i = 0; i < 1500; i++) d.createElement("span").__fiber = i;
+    expect(bridge.pinnedCount()).toBeLessThan(before + 1500);
+    expect(kept.__fiber).toEqual({ n: 1 }); // a node in the document keeps what the host put on it
+    kept.remove();
+  });
+
+  it("every call from outside gets a fresh time budget, not only the ones that run code", async () => {
+    const short = await createDOM({ html: "<body>" }, { settleMs: 0, timeout: 150 });
+    try {
+      const b = short.bridge();
+      const doc = b.window.document;
+      const start = Date.now();
+      let n = 0;
+      // plain creates and appends for twice the budget: none of them runs code of the page's own, and none may be cut off
+      while (Date.now() - start < 350) {
+        doc.body.appendChild(doc.createElement("i"));
+        n++;
+      }
+      expect(n).toBeGreaterThan(100);
+    } finally {
+      short.close();
+    }
+  });
+});
