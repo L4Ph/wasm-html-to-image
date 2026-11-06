@@ -634,7 +634,8 @@
     var shareKey = null, shareMap = null;
     if (!pseudo && !cands.length) {
       var shareParent = parentStyle || ROOT_STYLE;
-      shareKey = JSON.stringify(ua) + "|" + (inline || "") + "|" + (!parent && doc && doc.documentElement === el);
+      // the viewport too when the declarations can depend on it: this outlives the document's version, not a resize
+      shareKey = JSON.stringify(ua) + "|" + (inline || "") + "|" + (!parent && doc && doc.documentElement === el) + "|" + (inline && inline.indexOf("v") >= 0 ? g.innerWidth + "x" + g.innerHeight : "");
       shareMap = sharedChildren.get(shareParent);
       if (!shareMap) sharedChildren.set(shareParent, (shareMap = {}));
       if (shareMap[shareKey]) return shareMap[shareKey];

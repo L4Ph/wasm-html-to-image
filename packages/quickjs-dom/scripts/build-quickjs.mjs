@@ -31,10 +31,7 @@ const useStackSize = !version || version[0] > 3 || (version[0] === 3 && (version
 const stackFlag = `-s${useStackSize ? "STACK_SIZE" : "TOTAL_STACK"}=${STACK_BYTES}`;
 
 const args = [
-  "-O3",
-  "-flto",
-  // QD_CFLAGS="--profiling-funcs" keeps function names in the wasm for profilers
-  ...(process.env.QD_CFLAGS ? process.env.QD_CFLAGS.split(" ") : []),
+  "-O2",
   "-D_GNU_SOURCE",
   "-DNDEBUG",
   `-I${vendor}`,

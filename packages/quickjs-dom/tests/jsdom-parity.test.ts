@@ -1,3 +1,5 @@
+import v8 from "node:v8";
+import { runInNewContext } from "node:vm";
 import { JSDOM as RealJSDOM } from "jsdom";
 import { afterEach, describe, expect, it } from "vitest";
 import { JSDOM } from "../src/jsdom.js";
@@ -207,7 +209,7 @@ describe.each([
 
     it("rejects a token with a space", () => {
       const { document } = page();
-      expect(() => document.createElement("div").classList.add("a b")).toThrow();
+      expect(() => document.createElement("div").classList.add("a b")).toThrow(expect.objectContaining({ name: "InvalidCharacterError" }));
     });
   });
 
@@ -292,6 +294,104 @@ describe.each([
       document.body.addEventListener("x", () => log.push(2));
       document.body.dispatchEvent(new Event("x"));
       expect(log).toEqual([1]);
+    });
+  });
+
+  describe("what the page's code does, seen from the host", () => {
+    it("reaches the original through a test's wrapper of a page object's method", () => {
+      const window = page();
+      window.eval(`window.api = { m() { return 1 } }`);
+      const original = window.api.m;
+      let calls = 0;
+      window.api.m = function (this: unknown, ...args: unknown[]) {
+        calls++;
+        return original.apply(this, args);
+      };
+      expect(window.api.m()).toBe(1);
+      expect(calls).toBe(1);
+    });
+
+    it("does not take a page method for a pure one by its name", () => {
+      const window = page();
+      window.eval(`window.store = { n: 0, item() { return ++this.n } }`);
+      expect(window.store.item()).toBe(1);
+      expect(window.store.item()).toBe(2);
+    });
+
+    it("sees what a page constructor changed", () => {
+      const window = page();
+      window.eval(`window.Foo = function () { document.body.setAttribute("x", "1") }`);
+      expect(window.document.body.getAttribute("x")).toBe(null);
+      new window.Foo();
+      expect(window.document.body.getAttribute("x")).toBe("1");
+    });
+
+    it("sees what a page setter changed", () => {
+      const window = page();
+      window.eval(`window.o = { v: 0, set x(n) { this.v = n } }`);
+      expect(window.o.v).toBe(0);
+      window.o.x = 5;
+      expect(window.o.v).toBe(5);
+    });
+
+    it("sees a node the page adopted in a timer", async () => {
+      const window = page();
+      const el = window.document.createElement("div");
+      window.held = el;
+      expect(el.ownerDocument).toBe(window.document);
+      window.eval(`window.other = document.implementation.createHTMLDocument("o"); setTimeout(function () { other.adoptNode(held) }, 0)`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(el.ownerDocument).toBe(window.other);
+    });
+
+    it("keeps an on* handler after removeEventListener with no function", () => {
+      const { document } = page();
+      const el = document.createElement("a");
+      let runs = 0;
+      el.onclick = () => runs++;
+      el.click();
+      el.removeEventListener("click", undefined);
+      el.click();
+      expect(runs).toBe(2);
+    });
+  });
+
+  describe("custom elements by selector and by constructor", () => {
+    it("matches an element by a name with a dash", () => {
+      const { document } = page();
+      expect(document.createElement("my-el").matches("my-el")).toBe(true);
+      expect(document.createElement("my-el").matches("my")).toBe(false);
+    });
+
+    it("makes a defined element with new", () => {
+      const window = page();
+      class Made extends window.HTMLElement {
+        hello() { return "hi"; }
+      }
+      window.customElements.define("x-made", Made);
+      const el = new Made();
+      expect(el.localName).toBe("x-made");
+      expect(el.hello()).toBe("hi");
+    });
+  });
+
+  describe("styles shared between elements", () => {
+    it("tells elements apart when their rules, parents or classes differ", () => {
+      const window = page(`<!doctype html><html><head><style>.a { color: red }</style></head><body><div class="a"><p id="one"></p></div><div><p id="two"></p><p id="three"></p></div></body></html>`);
+      const color = (id: string) => window.getComputedStyle(window.document.getElementById(id)).color;
+      expect(color("one")).toBe("rgb(255, 0, 0)");
+      const plain = color("three");
+      expect(color("two")).toBe(plain);
+      window.document.getElementById("two").className = "a";
+      expect(color("two")).toBe("rgb(255, 0, 0)");
+      expect(color("three")).toBe(plain);
+      window.document.getElementById("two").className = "";
+      expect(color("two")).toBe(plain);
+      const style = window.document.createElement("style");
+      style.textContent = "#three { color: blue }";
+      window.document.head.appendChild(style);
+      expect(color("three")).toBe("rgb(0, 0, 255)");
+      expect(color("two")).toBe(plain);
     });
   });
 
@@ -394,20 +494,149 @@ describe("the page's jobs with deferJobs (the vitest environment)", () => {
 
 describe("the engine timeout", () => {
   it("does not count the time the host spends between calls", async () => {
-    const dom = new JSDOM("<!doctype html><body><p id='p' a='1'></p></body>", { engine: { timeout: 30 } } as never);
+    const dom = new JSDOM("<!doctype html><body><p id='p' a='1'></p></body>", { engine: { timeout: 300 } } as never);
     open.push(dom as never);
     const window = dom.window as any;
     const p = window.document.getElementById("p");
-    await new Promise((resolve) => setTimeout(resolve, 60));
+    expect(p).not.toBe(null);
+    await new Promise((resolve) => setTimeout(resolve, 350));
     // reads only, none of them run page code of its own; QuickJS looks at the clock every so many operations
-    for (let i = 0; i < 20000; i++) expect(p.getAttribute("x" + i)).toBe(null);
+    let nulls = 0;
+    for (let i = 0; i < 20000; i++) if (p.getAttribute("x" + i) === null) nulls++;
+    expect(nulls).toBe(20000);
     expect(window.getComputedStyle(p).display).toBe("block");
   });
 
+  it("does not count the time a host listener takes during the page's dispatch", () => {
+    const dom = new JSDOM("<!doctype html><body></body>", { runScripts: "dangerously", engine: { timeout: 300 } } as never);
+    open.push(dom as never);
+    const window = dom.window as any;
+    window.document.body.addEventListener("x", () => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 350));
+    window.eval(`document.body.addEventListener("x", function () { for (var i = 0, s = 0; i < 200000; i++) s += i })`);
+    expect(() => window.document.body.dispatchEvent(new window.Event("x"))).not.toThrow();
+  });
+
   it("still stops a page that runs too long", () => {
-    const dom = new JSDOM("<!doctype html><body></body>", { runScripts: "dangerously", engine: { timeout: 30 } } as never);
+    const dom = new JSDOM("<!doctype html><body></body>", { runScripts: "dangerously", engine: { timeout: 300 } } as never);
     open.push(dom as never);
     expect(() => (dom.window as any).eval("for (;;) {}")).toThrow(/interrupted/);
+  });
+});
+
+describe("the reads the host keeps (a getter that counts how often the page is asked)", () => {
+  const counted = () => {
+    const dom = new JSDOM("<!doctype html><body><p id='p'></p></body>", { runScripts: "dangerously" });
+    open.push(dom as never);
+    const window = dom.window as any;
+    window.eval(`window.n = 0; Object.defineProperty(document.getElementById("p"), "probe", { get: function () { return ++window.n } })`);
+    return { window, p: window.document.getElementById("p") };
+  };
+
+  it("are kept across window.getComputedStyle", () => {
+    const { window, p } = counted();
+    expect(p.probe).toBe(1);
+    window.getComputedStyle(p);
+    expect(p.probe).toBe(1);
+  });
+
+  it("are dropped by a write", () => {
+    const { window, p } = counted();
+    expect(p.probe).toBe(1);
+    p.setAttribute("a", "1");
+    expect(p.probe).toBe(2);
+    expect(window.eval("n")).toBe(2);
+  });
+});
+
+describe("what a page keeps, and a host's facade hides", () => {
+  it("leaves getAnimations to the page; only the jsdom-shaped facade hides it", () => {
+    const dom = new JSDOM("<!doctype html><body></body>", { runScripts: "dangerously" });
+    open.push(dom as never);
+    expect((dom.window as any).eval(`typeof document.body.getAnimations`)).toBe("function");
+  });
+
+  it("recomputes a viewport unit after the viewport changed", () => {
+    const dom = new JSDOM("<!doctype html><body><p id='p' style='width:50vw'></p></body>", { runScripts: "dangerously" });
+    open.push(dom as never);
+    const window = dom.window as any;
+    const p = window.document.getElementById("p");
+    window.innerWidth = 1000;
+    window.document.body.setAttribute("a", "1");
+    expect(window.getComputedStyle(p).width).toBe("500px");
+    window.innerWidth = 400;
+    window.document.body.setAttribute("a", "2");
+    expect(window.getComputedStyle(p).width).toBe("200px");
+  });
+});
+
+describe("a listener removed by a host's AbortSignal", () => {
+  it("runs no more, also when the host let go of its wrapper of the node", async () => {
+    const dom = new JSDOM("<!doctype html><body></body>", { runScripts: "dangerously" });
+    open.push(dom as never);
+    const window = dom.window as any;
+    const controller = new AbortController();
+    let runs = 0;
+    window.document.body.addEventListener("x", () => runs++, { signal: controller.signal });
+    window.document.body.dispatchEvent(new window.Event("x"));
+    controller.abort();
+    window.document.body.dispatchEvent(new window.Event("x"));
+    expect(runs).toBe(1);
+  });
+
+  it("does not throw when the signal aborts after the page closed", () => {
+    const dom = new JSDOM("<!doctype html><body></body>", { runScripts: "dangerously" });
+    const controller = new AbortController();
+    (dom.window as any).document.body.addEventListener("x", () => {}, { signal: controller.signal });
+    (dom.window as any).close();
+    const uncaught: unknown[] = [];
+    const onError = (e: unknown) => uncaught.push(e);
+    process.on("uncaughtException", onError);
+    try {
+      controller.abort();
+    } finally {
+      process.off("uncaughtException", onError);
+    }
+    expect(uncaught).toEqual([]);
+  });
+});
+
+describe("after a major GC (wrappers the host let go of)", () => {
+  v8.setFlagsFromString("--expose-gc");
+  const gc = runInNewContext("gc") as () => void;
+  const collect = async () => {
+    for (let i = 0; i < 3; i++) {
+      gc();
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  };
+
+  it("gives a node read again its class", async () => {
+    const dom = new JSDOM("<!doctype html><body></body>", { runScripts: "dangerously" });
+    open.push(dom as never);
+    const window = dom.window as any;
+    window.document.body.appendChild(window.document.createElement("section"));
+    expect(window.document.body.lastChild.localName).toBe("section");
+    window.document.body.setAttribute("a", "1");
+    gc();
+    const again = window.document.body.lastChild;
+    expect(again).toBeInstanceOf(window.HTMLElement);
+    expect(again.localName).toBe("section");
+  });
+
+  it("keeps a value defined on a node nothing holds", async () => {
+    const dom = new JSDOM("<!doctype html><body></body>", { runScripts: "dangerously" });
+    open.push(dom as never);
+    const window = dom.window as any;
+    const id = (() => {
+      const el = window.document.createElement("div");
+      el.id = "held";
+      window.document.body.appendChild(el);
+      Object.defineProperty(el, "mine", { value: 7, configurable: true });
+      return el.id as string;
+    })();
+    window.document.body.setAttribute("a", "1");
+    await collect();
+    expect(window.document.getElementById(id).mine).toBe(7);
   });
 });
 

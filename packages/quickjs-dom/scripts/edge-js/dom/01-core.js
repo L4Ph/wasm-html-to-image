@@ -290,6 +290,7 @@
     if (opts.signal) opts.signal.addEventListener("abort", function () { removeListener.call(node, type, fn, { capture: capture }); });
   };
   var removeListener = function (type, fn, opts) {
+    if (fn == null) return; // an on* handler's slot has no function, and is not this one
     var all = LISTENERS.get(this), list = all && all[type], capture = !!listenerOptions(opts).capture;
     if (!list) return;
     if (!list.idx) {
@@ -658,6 +659,7 @@
   });
   def(P.Element, "hasPointerCapture", function () { return false; });
   def(P.Element, "checkVisibility", function () { return true; });
+  def(P.Element, "getAnimations", function () { return []; });
   def(P.Element, "animate", function () {
     var done = Promise.resolve();
     return { finished: done, ready: done, playState: "finished", currentTime: 0, effect: null, timeline: null,

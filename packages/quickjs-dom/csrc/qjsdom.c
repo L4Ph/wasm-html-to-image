@@ -645,8 +645,8 @@ EXPORT("qd_rpc") int qd_rpc(const char *req, size_t len) {
 slow:
     if (rc < 0) rc = rpc_slow(fn, req, len);
     /* The page's jobs (promise reactions, MutationObserver deliveries) do not run here: this call is one step of the
-       host's synchronous code, and a browser runs them only when that code has finished. The host runs them in a
-       microtask of its own (qd_jobs) when told some are waiting. */
+       host's synchronous code, and a browser runs them only when that code has finished. The host decides when (qd_jobs,
+       see Bridge.send) when told some are waiting. */
     if (JS_IsJobPending(rt)) rc |= 2;
     return rc;
 }

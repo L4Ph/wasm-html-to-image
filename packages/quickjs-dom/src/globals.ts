@@ -20,6 +20,15 @@ const KEEP = new Set([
  */
 const HIDDEN = new Set(["ImageData"]);
 
+const encodingKnown = (label: string): boolean => {
+  try {
+    new TextDecoder(label);
+    return true;
+  } catch {
+    return false;
+  }
+};
+
 /** A FileReader of the host's Blobs, for what Node has not got (the page's cannot read them). */
 class HostFileReader {
   static readonly EMPTY = 0;
@@ -56,10 +65,10 @@ class HostFileReader {
     this.result = null;
     this.aborted = false;
     this.fire("loadstart");
-    blob.arrayBuffer().then(
-      (bytes) => {
+    blob.arrayBuffer().then(convert).then(
+      (result) => {
         if (this.aborted) return;
-        this.result = convert(bytes);
+        this.result = result;
         this.readyState = 2;
         this.fire("load");
         this.fire("loadend");
@@ -77,10 +86,11 @@ class HostFileReader {
     this.read(blob, (bytes) => bytes);
   }
   readAsText(blob: Blob, encoding?: string): void {
-    this.read(blob, (bytes) => new TextDecoder(encoding).decode(bytes));
+    // an encoding that is not one reads as UTF-8, as in jsdom
+    this.read(blob, (bytes) => new TextDecoder(encoding && encodingKnown(encoding) ? encoding : "utf-8").decode(bytes));
   }
   readAsBinaryString(blob: Blob): void {
-    this.read(blob, (bytes) => String.fromCharCode(...new Uint8Array(bytes)));
+    this.read(blob, (bytes) => Buffer.from(bytes).toString("latin1"));
   }
   readAsDataURL(blob: Blob): void {
     this.read(blob, (bytes) => `data:${blob.type || "application/octet-stream"};base64,${Buffer.from(bytes).toString("base64")}`);
@@ -121,9 +131,15 @@ export function installWindow(global: Record<string, any>, win: Record<string, a
   const hostDispatch = (global.EventTarget as typeof EventTarget | undefined)?.prototype.dispatchEvent;
   if (HostEvent && hostDispatch) {
     global.EventTarget.prototype.dispatchEvent = function (this: EventTarget, event: Event) {
-      if (event instanceof HostEvent) return hostDispatch.call(this, event);
-      const page = event as Event;
-      return hostDispatch.call(this, new HostEvent(page.type, { bubbles: page.bubbles, cancelable: page.cancelable }));
+      // Node refuses what is no event
+      if (event instanceof HostEvent || !((event as object) instanceof (win.Event as typeof Event))) return hostDispatch.call(this, event);
+      const page = event as Event & { detail?: unknown; data?: unknown };
+      const copy = new HostEvent(page.type, { bubbles: page.bubbles, cancelable: page.cancelable, composed: page.composed }) as Event & { detail?: unknown; data?: unknown };
+      if (page.detail !== undefined) Object.defineProperty(copy, "detail", { value: page.detail });
+      if (page.data !== undefined) Object.defineProperty(copy, "data", { value: page.data });
+      const proceeded = hostDispatch.call(this, copy);
+      if (!proceeded) page.preventDefault();
+      return proceeded;
     };
   }
   const hostEventTarget = global.EventTarget;
@@ -184,7 +200,7 @@ export function installWindow(global: Record<string, any>, win: Record<string, a
           super();
           if (form === undefined || form === null) return;
           new win.FormData(form, submitter).forEach((value: unknown, name: string) => {
-            // ponytail: a file of the page arrives as an empty File; read its bytes when a test needs them
+            // the page has no bytes of a file input's files (a test sets those on the host's wrapper): name only
             if (typeof value === "string") this.append(name, value);
             else this.append(name, new File([], String((value as { name?: string })?.name ?? "")));
           });

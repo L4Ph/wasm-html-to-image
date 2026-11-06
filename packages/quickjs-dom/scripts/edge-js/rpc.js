@@ -7,7 +7,7 @@
   var byId = [undefined], sent = [0], free = [], live = 0, byObj = new Map();
   // id of a function of the host's -> the function that calls it from here. A plain object, not a Map: QuickJS hashes
   // the sequential integer ids of a Map badly (a set costs 2-4 us, ~20x an object's), and every new listener paid it.
-  var callbacks = Object.create(null), callbackCount = 0;
+  var callbacks = Object.create(null);
   var protoNames = null, ctorNames = null, ctorByName = null, interfaces = null;
 
   // The language's and the runtime's own globals. They are non-enumerable like the page's defineProperty-installed
@@ -124,7 +124,8 @@
     var id = byObj.get(v);
     if (id !== undefined && infos[id] !== undefined) {
       sent[id]++;
-      return "h" + id;
+      // whole: the host may have lost its wrapper to GC before it told this side, and it builds a new one from this
+      return infos[id];
     }
     if (v === g || typeof v === "function") return null;
     var cls = classOf(v);
@@ -193,7 +194,6 @@
       if (Array.isArray(v)) return null;
       var hs = handleString(v);
       if (hs !== null) return hs;
-      if (v instanceof Date) return null;
     }
     return tokenOf(enc(v));
   };
@@ -251,7 +251,6 @@
     if (!f) {
       f = function () { return callHost(id, this, arguments); };
       f.__hostFn = id;
-      if (ref === undefined) callbackCount++;
       callbacks[id] = new WeakRef(f);
     }
     return f;
@@ -312,7 +311,7 @@
           // a list of objects of known classes (the nodes of a query) goes as their handles, one after the other
           var parts = [];
           for (var i = 0; i < v.length; i++) {
-            var item = v[i], s = item !== null && typeof item === "object" && !Array.isArray(item) && !(item instanceof Date) ? handleString(item) : null;
+            var item = v[i], s = item !== null && typeof item === "object" && !Array.isArray(item) ? handleString(item) : null;
             if (s === null) { for (var j = 0; j < parts.length; j++) release1(parts[j]); parts = null; break; }
             parts.push(s);
           }
@@ -420,11 +419,10 @@
       return json(r[1].filter(function (id) {
         var ref = callbacks[id];
         if (ref && ref.deref()) return false;
-        if (ref !== undefined) { delete callbacks[id]; callbackCount--; }
+        delete callbacks[id];
         return true;
       }));
     },
-    liveFns: function () { return callbackCount; },
   };
 
   // qd_rpc makes a function token with this (no JSON for a listener, the one object argument nearly every page passes)

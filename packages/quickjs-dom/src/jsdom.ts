@@ -180,7 +180,9 @@ export class JSDOM {
       stylesheets: options.resources === "usable" && cssFileLoading,
       visual: options.pretendToBeVisual ?? false,
     });
+    // jsdom has no getAnimations, and libraries take it to mean animations will finish (Base UI's dialogs wait for them)
     const bridge = this.page.dom.bridge({ timeout });
+    bridge.hide("getAnimations");
     bridge.deferJobs = options.deferJobs ?? false;
     this.bridgeWindow = bridge.window;
     // the page's `window.close()` ends the page

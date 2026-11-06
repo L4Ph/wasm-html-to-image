@@ -72,6 +72,11 @@ const PURE_CALLS = new Set([
   "getComputedStyle", "getPropertyValue", "getPropertyPriority",
 ]);
 
+/**
+ * Functions of the page reached as values (read off the window or el.style) that only read. A narrower list than
+ * PURE_CALLS: there the name is of a method of a known interface, here it can be any page object's (store.item()).
+ */
+const PURE_FUNCTIONS = new Set(["getComputedStyle", "getPropertyValue", "getPropertyPriority"]);
 /** Calls that make a node and put it in the document they were called on: the answer's ownerDocument is the target. */
 const CREATES = new Set(["createElement", "createElementNS", "createTextNode", "createComment", "createDocumentFragment"]);
 
@@ -81,7 +86,10 @@ const INSERTS = new Set([
   "insertAdjacentElement", "adoptNode",
 ]);
 
-/** Calls that neither run page code nor move a node to another document, so what the host knows of owners holds. */
+/**
+ * Calls that move no node to another document, so what the host knows of owners holds. Of the page's code they can
+ * only run a custom element's attributeChangedCallback, and adopting a node from there is taken not to happen.
+ */
 const KEEPS_OWNERS = new Set([
   ...CREATES, "setAttribute", "setAttributeNS", "removeAttribute", "removeAttributeNS", "toggleAttribute", "removeChild",
   "addEventListener", "removeEventListener",
@@ -111,7 +119,8 @@ function analyzeSelector(sel: string): SelectorCheck {
     let valid = true;
     for (const b of branches) {
       const trimmed = b.trim();
-      const match = /^([a-zA-Z0-9]+)/.exec(trimmed);
+      // the whole name or nothing: my-el, a\\:b and svg|rect have a tag this cannot tell, and the page is asked
+      const match = /^([a-zA-Z0-9]+)(?=$|[.#:[])/.exec(trimmed);
       if (!match) {
         valid = false;
         break;
@@ -261,7 +270,7 @@ export class Bridge {
       get(t, k, r) {
         if (k in t) return Reflect.get(t, k, r);
         const cell = (t as any)[HANDLE] as Cell;
-        return typeof k === "string" ? bridge.get(cell, k) : undefined;
+        return typeof k === "string" && !bridge.hidden.has(k) ? bridge.get(cell, k) : undefined;
       },
       set(t, k, v, r) {
         if (k in t) {
@@ -287,16 +296,12 @@ export class Bridge {
     };
 
     this.indexedClassProxyHandler = {
+      ...this.classProxyHandler,
       get(t, k, r) {
         const cell = (t as any)[HANDLE] as Cell;
         if (typeof k === "string" && INDEX.test(k)) return bridge.get(cell, k);
         if (k in t) return Reflect.get(t, k, r);
         return typeof k === "string" ? bridge.get(cell, k) : undefined;
-      },
-      set(t, k, v, r) {
-        if (k in t) return Reflect.set(t, k, v, r);
-        bridge.pinned.add(r);
-        return Reflect.set(t, k, v, t);
       },
       has(t, k) {
         const cell = (t as any)[HANDLE] as Cell;
@@ -350,6 +355,11 @@ export class Bridge {
 
   /** The page may have changed: forget what was read. (Called by whoever ran code in the page.) */
   invalidate(): void {
+    this.dropReads();
+    this.docGen++;
+  }
+
+  private dropReads(): void {
     if (this.reads.size) this.reads.clear();
     if (this.callReads.size) this.callReads.clear();
   }
@@ -427,24 +437,18 @@ export class Bridge {
     if (this.released.length === 0 || this.closed) return;
     const list = this.released;
     this.released = [];
-    this.invalidate(); // a released id may be given to another object
+    this.dropReads(); // a released id may be given to another object
     this.sendJ(["release", list]);
   }
 
   /** An operation in the form of a JSON array: [op, ...]. */
   private sendJ(request: unknown[]): unknown {
     // a function of the page that is called, an object made, or a batch run, may change anything
-    const runs = request[0] === "apply" || request[0] === "new" || request[0] === "del" || request[0] === "batch" || request[0] === "fire";
-    if (runs) {
-      // only after: what the host had read is still valid while the operation runs (it is dropped below, before
-      // the host sees the answer), and a call that changes nothing then pays no re-read
-      this.armDeadline();
-    }
+    const runs = request[0] === "apply" || request[0] === "construct" || request[0] === "new" || request[0] === "del" || request[0] === "batch" || request[0] === "fire";
     const value = this.send("J" + JSON.stringify(request), request[0] === "release");
-    if (runs) {
-      this.invalidate();
-      this.docGen++;
-    }
+    // only after: what the host had read is still valid while the operation runs, and a call that changes nothing
+    // then pays no re-read
+    if (runs) this.invalidate();
     return value;
   }
 
@@ -461,7 +465,6 @@ export class Bridge {
       this.armDeadline();
       this.vm.jobs();
       this.invalidate();
-      this.docGen++;
       this.onCall?.();
     });
   }
@@ -484,7 +487,6 @@ export class Bridge {
           this.vm.jobs();
           if (outer) {
             this.invalidate();
-            this.docGen++;
           }
         }
       }
@@ -522,6 +524,15 @@ export class Bridge {
       default:
         throw this.error(JSON.parse(r.slice(1)) as ErrorInfo);
     }
+  }
+
+  private making: Function | undefined;
+  private readonly hidden = new Set<string>();
+
+  /** A member of the page's objects the host is not to see: a library decides by its presence (getAnimations). */
+  hide(member: string): void {
+    this.hidden.add(member);
+    for (const cls of this.classes.values()) delete cls.prototype[member];
   }
 
   private readonly handleTails = new Map<string, Omit<Handle, "i">>();
@@ -600,7 +611,6 @@ export class Bridge {
     return value;
   }
 
-  /** What is known of `cell` since the page last ran code. Emptied as a whole, so it holds no wrapper alive for long. */
   /** The items of a list of the page (Testing Library goes through each input's `labels`), until the page changes. */
   private items(cell: Cell): unknown[] {
     const reads = this.readsOf(cell);
@@ -609,6 +619,7 @@ export class Bridge {
     return list;
   }
 
+  /** What is known of `cell` since the page last ran code. Emptied as a whole, so it holds no wrapper alive for long. */
   private readsOf(cell: Cell): Map<string, unknown> {
     let m = this.reads.get(cell);
     if (!m) this.reads.set(cell, (m = new Map()));
@@ -642,7 +653,13 @@ export class Bridge {
   }
 
   private set(cell: Cell, key: string, value: unknown): void {
+    this.dropReads();
+    this.write(cell, key, value);
+    // and after: the page's setter may have changed anything, and may have called a host listener that read
     this.invalidate();
+  }
+
+  private write(cell: Cell, key: string, value: unknown): void {
     if (typeof value === "string" && !value.includes("\u0001") && !value.includes("\u0002")) {
       this.send("s" + cell.id + "\u0001" + key + "\u0001\u0003" + value);
     } else {
@@ -689,6 +706,10 @@ export class Bridge {
       if (op === "__customElement") return { observed: Class.observedAttributes ?? [] };
       if (op === "construct") {
         bridge.pinned.add(this); // its prototype and fields live on this wrapper
+        if (bridge.making === Class) {
+          Object.setPrototypeOf(this, Class.prototype);
+          return undefined;
+        }
         bridge.upgrading = this;
         try {
           Reflect.construct(Class, [], Class);
@@ -711,7 +732,11 @@ export class Bridge {
       const { signal, ...options } = args[2] as { signal: AbortSignal };
       if (signal.aborted) return undefined;
       const [type, listener] = args;
-      signal.addEventListener("abort", () => this.call(cell, "removeEventListener", [type, listener, options]), { once: true });
+      // the wrapper, not the id: held by the listener, so the id stays this node's until the abort
+      const target = this.wrappers.get(cell.id)?.deref() as EventTarget;
+      signal.addEventListener("abort", () => {
+        if (!this.closed) target.removeEventListener(type as string, listener as EventListener, options);
+      }, { once: true });
       args = [type, listener, options];
     }
     if (key === "matches" && cell.t === 1 && typeof cell.l === "string" && typeof args[0] === "string") {
@@ -733,7 +758,7 @@ export class Bridge {
       // decided before the call: it reads what is known of the owners of the target and the arguments
       const keeps = KEEPS_OWNERS.has(key) || (INSERTS.has(key) && this.sameOwner(cell, args));
       const value = this.send("c" + cell.id + "\u0001" + key + "\u0001" + encoded);
-      this.invalidate();
+      this.dropReads();
       // anything else may run page code or adopt a node into another document
       if (!keeps) this.docGen++;
       else if (CREATES.has(key) && cell.t === 9) this.ownedBy(value, cell);
@@ -867,10 +892,13 @@ export class Bridge {
       // defaultView, say): the page must see a construction, not a call, or its classes throw
       if (new.target) return bridge.sendJ(["construct", cell.id, args.map((a) => bridge.encode(a))]);
       // read as `obj.method` and called on `obj`: a method call, with its compact request and its cached reads
-      if (cell.key !== undefined && cell.of !== undefined && this && (this as any)[HANDLE] === cell.of) return bridge.call(cell.of, cell.key, args);
+      // (only while the name still holds this function: a test's wrapper of the method calls the original through here)
+      if (cell.key !== undefined && cell.of !== undefined && this && (this as any)[HANDLE] === cell.of && (!PURE_CALLS.has(cell.key) || PURE_FUNCTIONS.has(cell.key)) && bridge.get(cell.of, cell.key) === f) {
+        return bridge.call(cell.of, cell.key, args);
+      }
       const request = ["apply", cell.id, bridge.encode(this), args.map((a) => bridge.encode(a))];
       // window.getComputedStyle per element is how Testing Library looks for hidden nodes: it must not drop the reads
-      if (cell.key !== undefined && PURE_CALLS.has(cell.key)) return bridge.send("J" + JSON.stringify(request));
+      if (cell.key !== undefined && PURE_FUNCTIONS.has(cell.key)) return bridge.send("J" + JSON.stringify(request));
       return bridge.sendJ(request);
     };
     Object.defineProperty(f, HANDLE, { value: cell });
@@ -1011,6 +1039,17 @@ export class Bridge {
             Object.setPrototypeOf(el, new.target.prototype);
             return el;
           }
+          if (new.target !== cls && bridge.customElements.has(new.target)) {
+            // new of a defined element: the page makes it by its name, and this constructor goes on with it
+            const page = bridge.window as any;
+            const tag = page.customElements.getName(new.target);
+            bridge.making = new.target;
+            try {
+              return page.document.createElement(tag);
+            } finally {
+              bridge.making = undefined;
+            }
+          }
           const made = bridge.sendJ(["new", name, args.map((a) => bridge.encode(a))]) as object;
           if (new.target !== cls && made && typeof made === "object") {
             // a subclass of the host's (class FakeList extends EventTarget): its members are on this wrapper, which must stay
@@ -1027,6 +1066,7 @@ export class Bridge {
       for (const [k, v] of Object.entries(s.st)) Object.defineProperty(cls, k, { value: v, enumerable: true });
       for (const [k, v] of Object.entries(s.consts)) Object.defineProperty(cls.prototype, k, { value: v, enumerable: true });
       for (const [k, kind] of Object.entries(s.props)) {
+        if (this.hidden.has(k)) continue;
         if (kind === 3) {
           Object.defineProperty(cls.prototype, k, {
             value: { [k]: function (this: any, ...args: unknown[]) { return bridge.call(this[HANDLE], k, args); } }[k],
@@ -1098,6 +1138,8 @@ export class Bridge {
       // no invalidation here: a write the listener made has already dropped the cache, and dropping reads that
       // were taken after it would only make the next listener read them again
       this.depth--;
+      // the time the listener took is not the page's
+      this.armDeadline();
     }
   }
 
