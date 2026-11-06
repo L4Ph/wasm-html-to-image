@@ -218,7 +218,9 @@ export class Bridge {
   // What reads answered since the page last ran code of its own. Reading a property or calling a pure method again
   // gives the same answer until the page changes (a write, any other call, a job or timer, a listener of the host's
   // that ran): the cache is dropped then.
-  private readonly reads = new Map<string, unknown>();
+  private readonly reads = new Map<Cell, Map<string, unknown>>();
+  /** The same for pure methods: per node, method and arguments (a dynamic wrapper reads a method as a property too). */
+  private readonly callReads = new Map<Cell, Map<string, Map<string, unknown>>>();
   /** Moves on whenever a node may have changed document; an ownerDocument the host kept is good only for its own generation. */
   private docGen = 0;
   private jobsQueued = false;
@@ -349,6 +351,7 @@ export class Bridge {
   /** The page may have changed: forget what was read. (Called by whoever ran code in the page.) */
   invalidate(): void {
     if (this.reads.size) this.reads.clear();
+    if (this.callReads.size) this.callReads.clear();
   }
 
   /** Collect the handles of wrappers that were garbage collected (they are sent with the next call anyway). */
@@ -587,12 +590,19 @@ export class Bridge {
     // React asks every event target for this one (getEventTarget); only an SVG <use> has it, and for anything
     // else the property does not exist. Answering it here is the same answer the page would give, without a call.
     if (key === "correspondingUseElement" && cell.t === 1 && cell.l !== "use") return undefined;
-    const k = cell.id + "\u0001" + key;
-    if (this.reads.has(k)) return this.reads.get(k);
+    const known = this.reads.get(cell);
+    const had = known?.get(key);
+    if (had !== undefined || known?.has(key)) return had;
     const value = this.send("g" + cell.id + "\u0001" + key);
-    if (this.reads.size > 100000) this.reads.clear();
-    this.reads.set(k, value);
+    this.readsOf(cell).set(key, value);
     return value;
+  }
+
+  /** What is known of `cell` since the page last ran code. Emptied as a whole, so it holds no wrapper alive for long. */
+  private readsOf(cell: Cell): Map<string, unknown> {
+    let m = this.reads.get(cell);
+    if (!m) this.reads.set(cell, (m = new Map()));
+    return m;
   }
 
   private encodeToken(a: unknown): string | null {
@@ -699,8 +709,15 @@ export class Bridge {
       if (check.alwaysTrue) return true;
       if (check.tagRequired && !check.tagRequired.has(cell.l.toLowerCase())) return false;
     }
+    const pure = PURE_CALLS.has(key);
+    // a read asked before, with one string (a selector, an attribute's name): no encoding, and a key whose hash V8 has
+    const single = pure && args.length === 1 && typeof args[0] === "string" && args[0].charCodeAt(0) >= 32 ? args[0] : undefined;
+    if (single !== undefined) {
+      const had = this.callReads.get(cell)?.get(key)?.get(single);
+      if (had !== undefined) return had;
+    }
     const encoded = this.encodeArgs(args);
-    if (!PURE_CALLS.has(key)) {
+    if (!pure) {
       // the drop after is what makes the calls that follow see the page's new state; dropping before as well
       // only threw away reads that were still good, so it is not done
       // decided before the call: it reads what is known of the owners of the target and the arguments
@@ -712,10 +729,14 @@ export class Bridge {
       else if (CREATES.has(key) && cell.t === 9) this.ownedBy(value, cell);
       return value;
     }
-    const k = cell.id + "\u0001" + key + "\u0001" + encoded;
-    if (this.reads.has(k)) return this.reads.get(k);
+    let own = this.callReads.get(cell);
+    if (!own) this.callReads.set(cell, (own = new Map()));
+    let reads = own.get(key);
+    if (!reads) own.set(key, (reads = new Map()));
+    const lookup = single ?? encoded;
+    if (reads.has(lookup)) return reads.get(lookup);
     const value = this.send("c" + cell.id + "\u0001" + key + "\u0001" + encoded);
-    this.reads.set(k, value);
+    reads.set(lookup, value);
     return value;
   }
 
@@ -927,11 +948,11 @@ export class Bridge {
     const have = (cell.cols ??= {})[key];
     if (have) return have;
     const nodes = (): unknown[] => {
-      const k = cell.id + "\u0001*" + key;
-      let list = this.reads.get(k) as unknown[] | undefined;
+      const k = "*" + key;
+      let list = this.reads.get(cell)?.get(k) as unknown[] | undefined;
       if (!list) {
         list = this.send("k" + cell.id + "\u0001" + (key === "children" ? "1" : "0")) as unknown[];
-        this.reads.set(k, list);
+        this.readsOf(cell).set(k, list);
       }
       return list;
     };
