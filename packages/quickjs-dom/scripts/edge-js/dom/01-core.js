@@ -1110,6 +1110,8 @@
     });
   }
 
+  // Array methods whose callback receives the list itself as an argument.
+  var LIST_ARG_METHODS = { forEach: 1, map: 1, filter: 1, find: 1, findIndex: 1, findLast: 1, findLastIndex: 1, some: 1, every: 1, flatMap: 1, reduce: 1, reduceRight: 1 };
   // HTMLCollection / NodeList are live: a read-through proxy that re-reads the C answer when any tree or attribute
   // has changed since (D.version()). It is not an Array (as in a browser) but has the length, indices, item,
   // namedItem and the array methods.
@@ -1121,7 +1123,7 @@
       return cache;
     };
     var kindProto = kind && W[kind] && W[kind].prototype;
-    return new Proxy(kindProto ? Object.create(kindProto) : {}, {
+    var proxy = new Proxy(kindProto ? Object.create(kindProto) : {}, {
       get: function (_, k) {
         if (k === "item") return function (i) { return arr()[i] || null; };
         if (k === "namedItem") return function (name) {
@@ -1147,7 +1149,19 @@
           if (namedItem) { var r2 = namedItem(k, a2); if (r2 !== undefined) return r2; }
           for (var j = 0; j < a2.length; j++) if (a2[j].getAttribute("id") === k || a2[j].getAttribute("name") === k) return a2[j];
         }
-        return typeof v2 === "function" ? v2.bind(a2) : v2;
+        if (typeof v2 !== "function") return v2;
+        if (!LIST_ARG_METHODS[k]) return v2.bind(a2);
+        // array methods that pass the list to their callback: the callback must see the
+        // collection, not the cached snapshot array behind it (see staticNodeList's forEach)
+        return function () {
+          var args = Array.prototype.slice.call(arguments), cb = args[0];
+          if (typeof cb === "function") args[0] = function () {
+            var a = Array.prototype.slice.call(arguments);
+            if (a[a.length - 1] === a2) a[a.length - 1] = proxy;
+            return cb.apply(this, a);
+          };
+          return v2.apply(a2, args);
+        };
       },
       has: function (_, k) { return k in arr(); },
       ownKeys: function () { return Reflect.ownKeys(arr()).filter(function (k) { return k !== "length"; }); },
@@ -1160,6 +1174,7 @@
         return { value: d.value, enumerable: d.enumerable, configurable: true, writable: false };
       },
     });
+    return proxy;
   };
   // querySelectorAll answers a static NodeList. The C side already gives a snapshot (a plain array); this is the thin
   // wrapper collection() uses on the host: the interface's prototype (so instanceof NodeList holds), length and
@@ -1169,13 +1184,20 @@
     if (!W.NodeList) return nodes;
     var proto = W.NodeList.prototype;
     var index = /^(?:0|[1-9][0-9]*)$/;
-    return new Proxy(Object.create(proto), {
+    var proxy = new Proxy(Object.create(proto), {
       get: function (t, k, r) {
         if (typeof k === "string") {
           if (k === "length") return nodes.length;
           if (index.test(k)) return nodes[Number(k)];
           if (k === "item") return function (i) { return i >= 0 && i < nodes.length ? nodes[i] : null; };
-          if (k === "forEach" || k === "entries" || k === "keys" || k === "values") return Array.prototype[k].bind(nodes);
+          if (k === "forEach") return function (cb, thisArg) {
+            if (typeof cb !== "function") throw new TypeError("NodeList.forEach: callback is not a function");
+            // the list argument is the NodeList itself, not the snapshot array: a browser passes
+            // the list, and a host callback encodes its arguments per call — the raw array would
+            // be serialized in full on every invocation (a quadratic sweep)
+            for (var i = 0; i < nodes.length; i++) cb.call(thisArg, nodes[i], i, proxy);
+          };
+          if (k === "entries" || k === "keys" || k === "values") return Array.prototype[k].bind(nodes);
         } else if (k === Symbol.iterator) {
           return function () { return nodes[Symbol.iterator](); };
         } else if (k === Symbol.toStringTag) {
@@ -1195,6 +1217,7 @@
         return undefined;
       },
     });
+    return proxy;
   };
   var staticQuery = function (proto) {
     var d = Object.getOwnPropertyDescriptor(proto, "querySelectorAll");
