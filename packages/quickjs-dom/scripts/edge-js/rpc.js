@@ -102,17 +102,22 @@
   };
   var infos = []; // id -> the handle in the string form of an answer (see reply)
   var SEP = "\u0001";
-  var infoOf = function (v, id, cls) {
-    if (cls === undefined && (cls = classOf(v)) === null) return null;
+  // What follows the id in a handle string, by class and name: a page makes thousands of nodes of a few kinds.
+  var infoTails = Object.create(null);
+  var tailOf = function (v, cls) {
     var nt = v.nodeType;
-    if (typeof nt === "number") {
-      if (nt === 1) {
-        var tn = v.tagName;
-        return "h" + id + SEP + cls + SEP + "1" + SEP + tn + SEP + v.localName + SEP + tn;
-      }
-      return "h" + id + SEP + cls + SEP + nt + SEP + v.nodeName;
+    if (typeof nt !== "number") return SEP + cls + SEP;
+    if (nt !== 1) {
+      var nn = v.nodeName, byNode = infoTails[cls] || (infoTails[cls] = Object.create(null));
+      return byNode[nn] || (byNode[nn] = SEP + cls + SEP + nt + SEP + nn);
     }
-    return "h" + id + SEP + cls + SEP;
+    // the local name is compared: an HTML element made with createElementNS can share a tag name and class with
+    // one made with createElement and differ only in the case of its local name
+    var tag = v.tagName, local = v.localName, byTag = infoTails[cls] || (infoTails[cls] = Object.create(null)), known = byTag[tag];
+    if (known !== undefined && known.l === local) return known.s;
+    var tail = SEP + cls + SEP + "1" + SEP + tag + SEP + local + SEP + tag;
+    byTag[tag] = { l: local, s: tail };
+    return tail;
   };
   // the handle of an object whose class is known, as a string; null for anything else
   var handleString = function (v) {
@@ -124,15 +129,12 @@
     if (v === g || typeof v === "function") return null;
     var cls = classOf(v);
     if (cls === null) return null;
-    id = idFor(v);
-    var s = infoOf(v, id, cls);
-    if (s === null) {
-      sent[id]--;
-      if (sent[id] === 0) { byObj.delete(v); byId[id] = undefined; free.push(id); live--; }
-      return null;
+    if (id === undefined) {
+      id = free.length ? free.pop() : byId.length;
+      byObj.set(v, id); byId[id] = v; sent[id] = 0; live++;
     }
-    infos[id] = s;
-    return s;
+    sent[id]++;
+    return (infos[id] = "h" + id + tailOf(v, cls));
   };
   var handle = function (v, fn) {
     var id = idFor(v);
@@ -288,8 +290,12 @@
       case "undefined": return "U";
       default:
         if (v === null) return "N";
+        // nodes before any instanceof (QuickJS calls Symbol.hasInstance for it), but after arrays: a list like cssRules
+        // is an array with the prototype of an interface, and crosses as an array
+        var isList = Array.isArray(v), hs = isList ? null : handleString(v);
+        if (hs !== null) return hs;
         if (v instanceof Raw) return v.s;
-        if (Array.isArray(v)) {
+        if (isList) {
           // a list of objects of known classes (the nodes of a query) goes as their handles, one after the other
           var parts = [];
           for (var i = 0; i < v.length; i++) {
@@ -299,10 +305,6 @@
           }
           if (parts) return "a" + parts.join("\u0002");
           return "j" + JSON.stringify(enc(v));
-        }
-        if (!(v instanceof Date)) {
-          var hs = handleString(v);
-          if (hs !== null) return hs;
         }
         var e = enc(v);
         if (e !== null && typeof e === "object" && e.$ === "h") return "h" + e.i + SEP + (e.c || "") + SEP + (e.t === undefined ? "" : e.t) + SEP + (e.n || "");

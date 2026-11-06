@@ -519,6 +519,8 @@ export class Bridge {
     }
   }
 
+  private readonly handleTails = new Map<string, Omit<Handle, "i">>();
+
   private handleOf(s: string): unknown {
     const sep = s.indexOf("\u0001");
     if (sep < 0) {
@@ -535,8 +537,15 @@ export class Bridge {
       (known as any)[HANDLE].count++;
       return known;
     }
-    const [i, c, t, n, l, g] = s.split("\u0001");
-    return this.wrapper({ i: Number(i), c: c || undefined, t: t === undefined || t === "" ? undefined : Number(t), n, l, g });
+    // what follows the id repeats per kind of node: it is taken apart once
+    const tail = s.slice(sep + 1);
+    let p = this.handleTails.get(tail);
+    if (!p) {
+      const [c, t, n, l, g] = tail.split("\u0001");
+      p = { c: c || undefined, t: t === undefined || t === "" ? undefined : Number(t), n, l, g };
+      this.handleTails.set(tail, p);
+    }
+    return this.newWrapper({ i: Number(s.slice(0, sep)), c: p.c, t: p.t, n: p.n, l: p.l, g: p.g });
   }
 
   private error(info: ErrorInfo): Error {
@@ -804,6 +813,10 @@ export class Bridge {
       (known as any)[HANDLE].count++;
       return known;
     }
+    return this.newWrapper(h);
+  }
+
+  private newWrapper(h: Handle): unknown {
     const cell: Cell = { id: h.i, count: 1, t: h.t, n: h.n, l: h.l, g: h.g };
     let w: any;
     const cls = h.c ? this.cls(h.c) : undefined;
