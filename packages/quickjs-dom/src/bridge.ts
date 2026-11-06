@@ -472,6 +472,8 @@ export class Bridge {
     if (!noReleases && this.released.length) this.sendReleases();
     if (this.fnById.size >= this.fnLimit) this.pruneFunctions();
     const outer = this.depth === 0;
+    // the limit is on one run of the page: the time the host spent since the last call is not the page's
+    if (outer) this.armDeadline();
     this.depth++;
     let result: EvalResult & { jobs?: boolean };
     try {

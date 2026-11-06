@@ -392,6 +392,25 @@ describe("the page's jobs with deferJobs (the vitest environment)", () => {
   });
 });
 
+describe("the engine timeout", () => {
+  it("does not count the time the host spends between calls", async () => {
+    const dom = new JSDOM("<!doctype html><body><p id='p' a='1'></p></body>", { engine: { timeout: 30 } } as never);
+    open.push(dom as never);
+    const window = dom.window as any;
+    const p = window.document.getElementById("p");
+    await new Promise((resolve) => setTimeout(resolve, 60));
+    // reads only, none of them run page code of its own; QuickJS looks at the clock every so many operations
+    for (let i = 0; i < 20000; i++) expect(p.getAttribute("x" + i)).toBe(null);
+    expect(window.getComputedStyle(p).display).toBe("block");
+  });
+
+  it("still stops a page that runs too long", () => {
+    const dom = new JSDOM("<!doctype html><body></body>", { runScripts: "dangerously", engine: { timeout: 30 } } as never);
+    open.push(dom as never);
+    expect(() => (dom.window as any).eval("for (;;) {}")).toThrow(/interrupted/);
+  });
+});
+
 describe("a host function the page calls with something a token cannot carry", () => {
   it("still gets it, and the nodes it was given stay usable", () => {
     const dom = new JSDOM("<!doctype html><body><p id='p'></p></body>", {
