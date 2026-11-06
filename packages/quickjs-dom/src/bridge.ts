@@ -40,6 +40,8 @@ interface Cell {
   /** the wrapper itself, for a placeholder (it is in no wrappers map until the flush adopts it) */
   self?: unknown;
   t?: number;
+  /** the page-code generation (Bridge.codeGen) at which this element, made by createElement, was known to have no children and nothing since touched it */
+  ek?: number;
   n?: string;
   /** localName and tagName of an element: they never change, so they come with the handle. */
   l?: string;
@@ -415,6 +417,11 @@ export class Bridge {
   private txnFlushing = false;
   /** The reads that depend on the shape of the tree only (see STRUCT_KEYS): a change of attributes leaves them be. */
   private readonly sreads = new Map<string, unknown>();
+  /** The function the host last set as an `on…` handler of each element ("id\u0001set:onclick"): the same one set again is dropped.
+   * Unlike sreads it survives changes of the tree, which cannot alter a handler. */
+  private readonly handlers = new Map<string, unknown>();
+  /** Counts the times page code may have run (see invalidate): what was known of a node's children is good within one. */
+  private codeGen = 0;
   /** Whether the page has custom elements (their callbacks run page code on an attribute change): 0 = ask, 1 = none, 2 = yes (final). */
   private ce = 0;
   // functions of the host that the page holds: id <-> function
@@ -562,6 +569,12 @@ export class Bridge {
     if (this.setMemo.size) this.setMemo.clear();
     if (this.styleObjs.size) this.styleObjs.clear();
     if (this.sreads.size) this.sreads.clear();
+    // the handlers the host set are the page's own until page code runs: a change of the tree cannot touch them
+    // (only a custom element's callbacks could, and `ce` says there are none)
+    if (!(keepCe && this.ce === 1)) {
+      if (this.handlers.size) this.handlers.clear();
+      this.codeGen++;
+    }
     if (!keepCe && this.ce === 1) this.ce = 0;
     // what a node's ownerDocument was (`Cell.od`) is good until a node may have moved to another document
     if (!keepOd) this.odGen++;
@@ -1316,6 +1329,7 @@ export class Bridge {
       }
       return value;
     }
+    if (cell.ek === this.codeGen && !this.txn && (key === "firstChild" || key === "lastChild" || key === "firstElementChild" || key === "lastElementChild")) return null;
     const k = cell.id + "\u0001" + key;
     const store = key === "style" && cell.t === 1 ? this.styleObjs : STRUCT_KEYS.has(key) ? this.sreads : this.reads;
     if (store.has(k)) return store.get(k);
@@ -1357,9 +1371,9 @@ export class Bridge {
     if (cell.t === 1 && ON_HANDLER.test(key)) {
       const memo = cell.id + "\u0001set:" + key;
       if (typeof value === "function") {
-        if (this.sreads.get(memo) === value) return;
+        if (this.handlers.get(memo) === value) return;
       } else {
-        this.sreads.delete(memo);
+        this.handlers.delete(memo);
       }
     }
     // a repeat of a state-only write with the value already in the page (written by the host
@@ -1382,6 +1396,7 @@ export class Bridge {
       }
     }
     if (cell.pending && !this.txn) throw new Error("quickjs-dom: this node's creation did not complete");
+    if (cell.ek !== undefined && !memoizable && !(cell.t === 1 && ON_HANDLER.test(key))) cell.ek = undefined;
     // inside a transaction, a state-only write is queued, not sent; the flush applies it.
     // textContent is queueable too, even though it is not a fine set on the direct path (it
     // replaces the node's children, so the direct path must invalidate structurally): inside
@@ -1453,8 +1468,8 @@ export class Bridge {
       }
     }
     if (cell.t === 1 && typeof value === "function" && ON_HANDLER.test(key)) {
-      if (this.sreads.size > 100000) this.sreads.clear();
-      this.sreads.set(cell.id + "\u0001set:" + key, value);
+      if (this.handlers.size > 100000) this.handlers.clear();
+      this.handlers.set(cell.id + "\u0001set:" + key, value);
     }
     if (memoizable) {
       let per = this.setMemo.get(cell.id);
@@ -1526,6 +1541,7 @@ export class Bridge {
     } else if (cell.pending) {
       throw new Error("quickjs-dom: this node's creation did not complete");
     }
+    if (cell.ek !== undefined && !ATTR_CALLS.has(key) && !LISTENER_CALLS.has(key) && !PURE_CALLS.has(key)) cell.ek = undefined;
     const encoded = this.encodeArgs(args);
     if (cell.t === 9 ? CREATE_CALLS.has(key) : cell.t === 1 ? ATTR_CALLS.has(key) || LISTENER_CALLS.has(key) : false) {
       // nothing that was read can have changed (a new node is in no tree, a listener is not read), or only an attribute did
@@ -1537,6 +1553,8 @@ export class Bridge {
           if (made && self) {
             made.od = self;
             made.odg = this.odGen;
+            // a node just made has no children, and only calls on it (or page code) can give it any
+            if (made.t === 1 && !this.txn) made.ek = this.codeGen;
           }
         }
         if (cell.t === 1 && !LISTENER_CALLS.has(key)) {
@@ -1546,7 +1564,7 @@ export class Bridge {
           this.setMemo.delete(cell.id);
           // setAttribute("onclick", "...") replaces the handler the host set
           const attr = typeof args[0] === "string" ? args[0].toLowerCase() : "";
-          if (attr.startsWith("on")) this.sreads.delete(cell.id + "\u0001set:" + attr);
+          if (attr.startsWith("on")) this.handlers.delete(cell.id + "\u0001set:" + attr);
         }
         return value;
       }

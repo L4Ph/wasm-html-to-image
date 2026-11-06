@@ -1019,3 +1019,47 @@ describe("bridge: wrappers with host-set properties", () => {
     }
   });
 });
+
+describe("bridge: reads and writes the host can answer without the page", () => {
+  it("a node just made has no children until something gives it some", () => {
+    const d = w.document;
+    const el = d.createElement("div");
+    expect(el.firstChild).toBeNull();
+    expect(el.lastElementChild).toBeNull();
+    el.appendChild(d.createElement("b"));
+    expect(el.firstChild.nodeName).toBe("B");
+    const viaText = d.createElement("p");
+    viaText.textContent = "x";
+    expect(viaText.firstChild.nodeValue).toBe("x");
+    const viaHtml = d.createElement("p");
+    viaHtml.innerHTML = "<i>y</i>";
+    expect(viaHtml.firstElementChild.localName).toBe("i");
+    // page code that adds a child (here through a function of the page) is seen
+    const viaPage = d.createElement("section");
+    expect(viaPage.firstChild).toBeNull();
+    const add = w.Function("p", "p.appendChild(p.ownerDocument.createElement('u'))");
+    add(viaPage);
+    expect(viaPage.firstChild.nodeName).toBe("U");
+  });
+
+  it("an on… handler set again is not sent again, and a changed one is", async () => {
+    const d = w.document;
+    const b = d.createElement("button");
+    d.body.appendChild(b);
+    let hits = 0;
+    const f = () => hits++;
+    b.onclick = f;
+    d.body.appendChild(d.createElement("i")); // a change of the tree must not make the host forget the handler
+    b.onclick = f;
+    b.click();
+    expect(hits).toBe(1);
+    const g = () => (hits += 10);
+    b.onclick = g;
+    b.click();
+    expect(hits).toBe(11);
+    b.setAttribute("onclick", "void 0");
+    b.onclick = g; // setAttribute replaced it: it must be written again
+    b.click();
+    expect(hits).toBe(21);
+  });
+});
