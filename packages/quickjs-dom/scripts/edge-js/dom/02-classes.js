@@ -38,10 +38,11 @@
 
   // subclasses: the init dictionary's members become properties (with the defaults a browser gives them)
   var subclass = function (name, parent, defaults) {
+    var members = Object.keys(defaults);
     var C = { [name]: function (type, init) {
       parent.call(this, type, init);
       init = init || {};
-      for (var k in defaults) this[k] = k in init ? init[k] : defaults[k];
+      for (var i = 0; i < members.length; i++) { var k = members[i]; this[k] = k in init ? init[k] : defaults[k]; }
     } }[name];
     C.prototype = Object.create(parent.prototype, { constructor: { value: C, writable: true, configurable: true } });
     Object.setPrototypeOf(C, parent);

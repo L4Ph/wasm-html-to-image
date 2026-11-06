@@ -187,19 +187,32 @@
     return e;
   };
 
+  // a value as a token of a callback; null: it needs the JSON form (nothing of it is counted as sent then)
+  var tokenFor = function (v) {
+    if (typeof v === "object" && v !== null) {
+      if (Array.isArray(v)) return null;
+      var hs = handleString(v);
+      if (hs !== null) return hs;
+      if (v instanceof Date) return null;
+    }
+    return tokenOf(enc(v));
+  };
   var callHost = function (id, self, args) {
-    var selfEnc = enc(self), list = Array.prototype.map.call(args, enc);
     // A callback whose values are all handles, strings, numbers, booleans or null/undefined (an event listener)
     // goes as compact tokens; anything else falls back to the JSON form both sides already understand.
-    var toks = tokenOf(selfEnc);
-    if (toks !== null) {
-      toks = [toks];
-      for (var i = 0; i < list.length; i++) {
-        var t = tokenOf(list[i]);
-        if (t === null) { toks = null; break; }
-        toks.push(t);
+    var toks = [tokenFor(self)];
+    if (toks[0] === null) toks = null;
+    else for (var i = 0; i < args.length; i++) {
+      var t = tokenFor(args[i]);
+      if (t === null) {
+        for (var j = 0; j < toks.length; j++) if (toks[j].charCodeAt(0) === 104) release1(toks[j]);
+        toks = null;
+        break;
       }
+      toks.push(t);
     }
+    var selfEnc, list;
+    if (!toks) { selfEnc = enc(self); list = Array.prototype.map.call(args, enc); }
     var reply = g.__host.callback(String(id), toks ? "\u0005" + toks.join("\u0002") : JSON.stringify([selfEnc, list]));
     if (reply === undefined) throw new Error("the host has no function " + id);
     if (reply.charCodeAt(0) === 6) return tokenValue(reply.slice(1));
@@ -311,7 +324,7 @@
         return "j" + JSON.stringify(e);
     }
   };
-  var release1 = function (s) { var id = +s.slice(1, s.indexOf(SEP)); if (sent[id] > 0) sent[id]--; };
+  var release1 = function (s) { var end = s.indexOf(SEP), id = +(end < 0 ? s.slice(1) : s.slice(1, end)); if (sent[id] > 0) sent[id]--; };
   var json = function (v) { return new Raw("k" + JSON.stringify(v)); }; // plain data, not to be decoded
 
   var ops = {

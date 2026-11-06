@@ -330,6 +330,7 @@
     // an attribute handler claims its slot the first time a dispatch reaches its node
     if (phase !== 1 && node.nodeType === 1 && node.hasAttribute && node.hasAttribute("on" + ev.type)) ensureHandlerEntry(node, ev.type);
     var all = LISTENERS.get(node), list = all && all[ev.type];
+    if (phase === 1 && !list) return; // only listeners run in the capture pass, and nothing can see this node as current
     ev.currentTarget = node;
     ev.eventPhase = phase;
     if (seenTarget) { ev.target = seenTarget; ev.srcElement = seenTarget; }
@@ -374,7 +375,8 @@
     }
   };
   var parentOf = function (n) {
-    if (n.parentNode) return n.parentNode;
+    var p = n.parentNode;
+    if (p) return p;
     if (n.nodeType === 9) return n.defaultView && n.defaultView !== n ? n.defaultView : null;
     return null;
   };
@@ -382,16 +384,18 @@
     if (!ev || typeof ev.type !== "string") throw new TypeError("The event provided is not an Event.");
     // the propagation path crosses a shadow boundary only for a composed event (parentOf steps
     // from a shadow root to its host); the last node inside the tree is where it stops otherwise
-    var path = [], n = this;
+    var path = [], n = this, hasShadow = false;
     for (; n; n = parentOf(n)) {
       path.push(n);
-      if (n.nodeType === 11 && n.host && !ev.composed) break;
+      if (n.nodeType === 11 && n.host) {
+        hasShadow = true;
+        if (!ev.composed) break;
+      }
     }
     // what a listener sees as the target: the first node of its own tree's stretch of the path —
     // a listener outside a shadow tree sees the host, not the node inside. Without a shadow boundary
     // every listener sees the dispatch target itself, so no second array is made.
-    var seen = null, hasShadow = false;
-    for (var i = 0; i < path.length; i++) if (path[i].nodeType === 11 && path[i].host) { hasShadow = true; break; }
+    var seen = null, i;
     if (hasShadow) {
       seen = [];
       var seg = 0;
