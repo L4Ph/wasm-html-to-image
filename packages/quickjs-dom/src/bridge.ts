@@ -49,6 +49,8 @@ interface Cell {
   /** A function read as a property of an object of the page: that object and the name it was read under. */
   of?: Cell;
   key?: string;
+  /** The host defined a getter or setter on this wrapper: a write must reach it with the wrapper as `this`. */
+  ownAccessor?: boolean;
 }
 
 /** A handle as the guest sends it. */
@@ -260,7 +262,13 @@ export class Bridge {
         return typeof k === "string" ? bridge.get(cell, k) : undefined;
       },
       set(t, k, v, r) {
-        if (k in t) return Reflect.set(t, k, v, r);
+        if (k in t) {
+          // An own data property (React's props on a node, written on every commit). With the proxy as the receiver,
+          // Reflect.set would go through the defineProperty trap below; an object inheriting from the wrapper must.
+          const cell = (t as any)[HANDLE] as Cell;
+          if (!cell.ownAccessor && Object.hasOwn(t, k) && bridge.wrappers.get(cell.id)?.deref() === r) return Reflect.set(t, k, v, t);
+          return Reflect.set(t, k, v, r);
+        }
         bridge.pinned.add(r);
         return Reflect.set(t, k, v, t);
       },
@@ -269,7 +277,9 @@ export class Bridge {
       },
       // what the host defines stays on this wrapper, so the wrapper must stay (as for a set)
       defineProperty(t, k, d) {
-        bridge.pinned.add(bridge.wrappers.get((t as any)[HANDLE].id)?.deref() ?? t);
+        const cell = (t as any)[HANDLE] as Cell;
+        if (d.get || d.set) cell.ownAccessor = true;
+        bridge.pinned.add(bridge.wrappers.get(cell.id)?.deref() ?? t);
         return Reflect.defineProperty(t, k, d);
       },
     };
