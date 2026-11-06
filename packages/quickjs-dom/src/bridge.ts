@@ -191,15 +191,15 @@ const TXN_CALLS = new Set([
 /** Properties of an element whose assignment changes an attribute or a value, runs no code and moves no node. */
 const FINE_SET_KEYS = new Set([
   "className", "id", "title", "lang", "dir", "hidden", "disabled", "checked", "value", "defaultValue", "defaultChecked", "href", "src", "type", "name", "placeholder",
-  "htmlFor", "tabIndex", "draggable", "spellcheck", "readOnly", "required", "selected", "multiple", "rel", "target", "alt", "width", "height",
+  "htmlFor", "tabIndex", "draggable", "spellcheck", "readOnly", "required", "selected", "multiple", "rel", "target", "alt", "width", "height", "slot",
 ]);
 /** The same for a text or comment node. */
 const TEXT_SET_KEYS = new Set(["nodeValue", "data", "textContent"]);
 const ON_HANDLER = /^on[a-z]+$/;
 
 /**
- * Functions of the page reached as values (read off the window or el.style) that only read. A narrower list than
- * PURE_CALLS: there the name is of a method of a known interface, here it can be any page object's (store.item()).
+ * Methods of a dynamic wrapper (el.style) that only read. A narrower list than PURE_CALLS: there the name is of a
+ * method of a known interface, here it can be any page object's (store.item()).
  */
 const PURE_FUNCTIONS = new Set(["getComputedStyle", "getPropertyValue", "getPropertyPriority"]);
 interface SelectorCheck {
@@ -428,6 +428,17 @@ export class Bridge {
    * properties are written, so an attribute-only change (invalidateAttrs) must not drop these — a run of
    * style writes otherwise pays a fresh crossing per write just to re-read the same object. */
   private readonly styleObjs = new Map<string, unknown>();
+  /** `getComputedStyle(el)` answers, keyed by the function and its arguments: the page keeps one declaration object
+   * per element, so an attribute-only change (invalidateAttrs) cannot change which object this is, and a frame that
+   * asks again (a click's visibility and pointer-event checks) pays no crossing. Its values are read through the
+   * ordinary `reads` cache and dropped as usual. */
+  private readonly pureFnCalls = new Map<string, unknown>();
+  /** Functions the page answers that run no page code and change nothing (getComputedStyle): calling one through
+   * `apply` must not drop what the host has read, as a pure method call does not. */
+  private readonly pureFns = new Set<number>();
+  /** Reads whose answer page code alone can change (`window.getComputedStyle`, a function object): an attribute-only
+   * change keeps them, and so does a tree change with no page code (`codeGen` says when code last could have run). */
+  private readonly stableReads = new Map<string, { gen: number; value: unknown }>();
   /** The last value the host wrote for each fine (state-only) property of a cell, per cell: a framework
    * re-render sets the same className / value / text again on most nodes, and the write is a pure function
    * of that value, so an identical repeat can be dropped entirely. The memo for a cell is dropped when an
@@ -611,6 +622,8 @@ export class Bridge {
     // (only a custom element's callbacks could, and `ce` says there are none)
     if (!(keepCe && this.ce === 1)) {
       if (this.handlers.size) this.handlers.clear();
+      // page code may have replaced what these answered; attribute-only and tree-only changes cannot
+      if (this.stableReads.size) this.stableReads.clear();
       this.codeGen++;
     }
     if (!keepCe && this.ce === 1) this.ce = 0;
@@ -1209,6 +1222,11 @@ export class Bridge {
     if (this.released.length === 0 || this.closed) return;
     const list = this.released;
     this.released = [];
+    // an id may be given to another object: a function id marked pure would then exempt a different function,
+    // and a declaration keyed by an element's old id would be that other object's
+    if (this.pureFns.size) this.pureFns.clear();
+    if (this.pureFnCalls.size) this.pureFnCalls.clear();
+    if (this.stableReads.size) this.stableReads.clear();
     this.invalidate(); // a released id may be given to another object
     this.sendJ(["release", list]);
   }
@@ -1217,9 +1235,16 @@ export class Bridge {
   private sendJ(request: unknown[]): unknown {
     // anything else the host asks the page for sees the page after the transaction's queue
     if (this.txn && request[0] !== "txn" && request[0] !== "release") this.flushTxn();
-    // a function of the page that is called, an object made, or a batch run, may change anything
+    // a function of the page that is called, an object made, or a batch run, may change anything (except
+    // getComputedStyle, which the host marked when it read the function: it computes and returns an object)
     const runs =
-      request[0] === "apply" || request[0] === "construct" || request[0] === "new" || request[0] === "del" || request[0] === "batch" || request[0] === "fire" || request[0] === "txn";
+      request[0] === "construct" ||
+      request[0] === "new" ||
+      request[0] === "del" ||
+      request[0] === "batch" ||
+      request[0] === "fire" ||
+      request[0] === "txn" ||
+      (request[0] === "apply" && !(this.pureFns.size && this.pureFns.has(request[1] as number)));
     // (the time budget is armed by send(); only after the call is what the host had read dropped: it is still valid
     // while the operation runs, and a call that changes nothing then pays no re-read)
     const value = this.send("J" + JSON.stringify(request), request[0] === "release");
@@ -1419,7 +1444,8 @@ export class Bridge {
     }
     if (cell.ek === this.codeGen && !this.txn && (key === "firstChild" || key === "lastChild" || key === "firstElementChild" || key === "lastElementChild")) return null;
     const k = cell.id + "\u0001" + key;
-    const store = key === "style" && cell.t === 1 ? this.styleObjs : STRUCT_KEYS.has(key) ? this.sreads : this.reads;
+    const style = key === "style" && cell.t === 1;
+    const store = style ? this.styleObjs : STRUCT_KEYS.has(key) ? this.sreads : this.reads;
     if (store.has(k)) return store.get(k);
     const value = this.send("g" + cell.id + "\u0001" + key);
     if (store.size > 100000) store.clear();
@@ -1433,6 +1459,18 @@ export class Bridge {
     let list = this.reads.get(k) as unknown[] | undefined;
     if (!list) this.reads.set(k, (list = this.sendJ(["array", cell.id]) as unknown[]));
     return list;
+  }
+
+  /** The window's getComputedStyle function, kept across attribute-only and tree-only changes (see stableReads). */
+  private stableWindowFn(cell: Cell, key: string): unknown {
+    const sk = cell.id + "\u0001" + key;
+    const cached = this.stableReads.get(sk);
+    if (cached && cached.gen === this.codeGen) return cached.value;
+    const value = this.send("g" + cell.id + "\u0001" + key);
+    this.stableReads.set(sk, { gen: this.codeGen, value });
+    const fn = value && (typeof value === "object" || typeof value === "function") ? ((value as any)[HANDLE] as Cell | undefined) : undefined;
+    if (fn && fn.c === "Function") this.pureFns.add(fn.id);
+    return value;
   }
 
   private encodeToken(a: unknown): string | null {
@@ -1832,13 +1870,22 @@ export class Bridge {
       if (cell.key !== undefined && cell.of !== undefined && this && (this as any)[HANDLE] === cell.of && (!PURE_CALLS.has(cell.key) || PURE_FUNCTIONS.has(cell.key)) && bridge.get(cell.of, cell.key) === f) {
         return bridge.call(cell.of, cell.key, args);
       }
-      const request = ["apply", cell.id, bridge.encode(this), args.map((a) => bridge.encode(a))];
-      // window.getComputedStyle per element is how Testing Library looks for hidden nodes: it must not drop the reads
-      if (cell.key !== undefined && PURE_FUNCTIONS.has(cell.key)) return bridge.send("J" + JSON.stringify(request));
-      return bridge.sendJ(request);
+      if (bridge.pureFns.has(cell.id)) return bridge.callPureFn(cell, this, args);
+      return bridge.sendJ(["apply", cell.id, bridge.encode(this), args.map((a) => bridge.encode(a))]);
     };
     Object.defineProperty(f, HANDLE, { value: cell });
     return f;
+  }
+
+  /** A call of a function known to run no page code (see `pureFns`), remembered by its arguments: getComputedStyle
+   * answers the same declaration object for the same element every time. */
+  private callPureFn(cell: Cell, self: unknown, args: unknown[]): unknown {
+    const k = cell.id + "\u0001" + this.encodeArgs(args);
+    if (this.pureFnCalls.has(k)) return this.pureFnCalls.get(k);
+    const value = this.sendJ(["apply", cell.id, this.encode(self), args.map((a) => this.encode(a))]);
+    if (this.pureFnCalls.size > 100000) this.pureFnCalls.clear();
+    this.pureFnCalls.set(k, value);
+    return value;
   }
 
   /**
@@ -1872,13 +1919,18 @@ export class Bridge {
           return undefined;
         }
         if (k === "then") return undefined;
-        if (isWindow && typeof k === "string" && this.schemaByName.has(k)) return this.cls(k);
+        if (isWindow && typeof k === "string") {
+          if (this.schemaByName.has(k)) return this.cls(k);
+          // getComputedStyle is a function object of the window: neither an attribute nor a tree change replaces
+          // it (only page code can), so it outlives the caches that attribute-only changes drop
+          if (k === "getComputedStyle") return this.stableWindowFn(cell, k);
+        }
         const value = this.get(cell, k);
-        if (typeof value === "function") {
+        // not the window's: a test wraps those (window.fetch = ...) and keeps the original to call on
+        if (!isWindow && typeof value === "function") {
           const fn = (value as any)[HANDLE] as Cell | undefined;
           if (fn) {
-            // not the window's: a test wraps those (window.fetch = ...) and keeps the original to call on
-            if (!isWindow) fn.of = cell;
+            fn.of = cell;
             fn.key = k;
           }
         }
