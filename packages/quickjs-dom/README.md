@@ -470,6 +470,11 @@ propagates. Page-side effects of the queued operations (mutation records, custom
 callbacks) happen when the queue is applied, in order; a page exception surfaces from the
 flush with the index of the operation that failed, and the operations before it stand.
 
+For framework-shaped workloads — React in particular — see
+[docs/react-rendering.md](docs/react-rendering.md): when to drive the framework from the
+host (with `transact()` around commits), and when to run it inside the page instead
+(prerendering), which is several times faster because no operation crosses the bridge.
+
 #### `PageLogEntry` Types
 
 ```ts
