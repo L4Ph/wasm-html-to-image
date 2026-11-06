@@ -659,6 +659,15 @@ export class Bridge {
       if (failedAt >= 0 && i >= failedAt) {
         op.placeholder.cell.dead = true;
         op.placeholder.cell.pending = false;
+        // the identity facts the placeholder was pre-filled with go too: the class getters
+        // answer them locally, and a node that was never created has no answers — every
+        // access must reach the dead check in get/set/call instead
+        op.placeholder.cell.t = undefined;
+        op.placeholder.cell.n = undefined;
+        op.placeholder.cell.l = undefined;
+        op.placeholder.cell.g = undefined;
+        op.placeholder.cell.u = undefined;
+        op.placeholder.cell.c = undefined;
       } else if (line && line !== "-") {
         this.adoptPlaceholder(op.placeholder, line);
         // the node exists in the page now: the fresh-node derivations and the shadow child
@@ -1232,6 +1241,9 @@ export class Bridge {
         }
         this.flushTxn();
       }
+      // a placeholder has no page-side answer for anything the queue cannot answer itself:
+      // apply the queue so the node exists, then read it like any other
+      if (!local && cell.pending) this.flushTxn();
       // a read the queue cannot have changed falls through and is served as usual: the page's
       // current answer for it is the answer after the queue too
     } else if (cell.pending) {
