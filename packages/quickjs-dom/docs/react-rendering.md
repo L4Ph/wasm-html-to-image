@@ -1,6 +1,6 @@
 # Rendering React with wasm-quickjs-dom
 
-There are three ways to render a React tree with this package, and they differ by an order of
+There are four ways to render a React tree with this package, and they differ by an order of
 magnitude. Which one is right depends on where the React code runs.
 
 | Approach | Where React runs | 300-row tree (measured) | Use it for |
@@ -8,6 +8,7 @@ magnitude. Which one is right depends on where the React code runs.
 | Host-driven `react-dom` | Node, DOM in the page | ≈ 90 ms | Tests (Testing Library), incremental updates, event simulation |
 | Host-driven + `transact()` | Node, DOM in the page | ≈ 80–95 ms, level with the plain commit | Host-driven commits that interleave reads and writes |
 | In-page `renderToString` | Inside the page | ≈ 20 ms render, ≈ 22 ms render + parse + serialize | Prerendering / SSR-shaped output: HTML is the product |
+| In-page client render (`createRoot`) | Inside the page | ≈ 45 ms render, ≈ 40 ms full-tree update | Running the app itself in the page: interactive state, page scripts, hydration |
 
 Measurements: React 19.3.1, a 300-row tree (1,201 elements + ~600 text nodes: a labelled
 span, an `<input defaultValue>`, and a button per row), this machine's medians. The host-driven
@@ -88,8 +89,47 @@ Notes:
   lose their XML-style trailing slash (`<input/>` → `<input>`), as in any HTML serializer.
 - Hydration is a page-side concern: ship the client bundle to the browser as usual. If the
   page itself must become interactive inside wasm-quickjs-dom (to run its scripts), load the
-  client bundle as a page script instead and let it hydrate the prerendered markup — the DOM
-  work still happens entirely in the page.
+  client bundle in the page and hydrate there instead — see the next section.
+
+## Client rendering and hydration inside the page
+
+When the page itself has to run the app — interactive state, timers, the app's own scripts,
+or a pipeline (layout, screenshots) that needs the live tree rather than a string — bundle
+`react-dom/client` for the page the same way as the server bundle above and drive
+`createRoot` / `hydrateRoot` from page code. A complete runnable example that reproduces
+every number below is `scripts/guest-react-example.mjs`.
+
+Measured on the same 300-row tree (the app there also carries a click counter, so
+interactivity is checked, not assumed):
+
+| Quantity | Measured |
+| :--- | ---: |
+| Client-only bundle (`react-dom/client`, production) | 704 KiB, eval ≈ 90 ms per page |
+| Client + server bundle | 1,244 KiB, eval ≈ 165 ms per page |
+| `createRoot` render (flushSync) | ≈ 45 ms |
+| Update re-render, every row's text changes | ≈ 40 ms |
+| `hydrateRoot` over the `renderToString` markup | ≈ 1 ms to schedule |
+
+What was verified, not just timed:
+
+- The client-rendered tree serializes identically to the `renderToString` output, modulo
+  the void-element slash (`<input value="value 0">` vs `<input value="value 0"/>`).
+- State works after both a client render and a hydration: a button click increments the
+  counter, after hydration exactly as after a fresh render.
+- Hydration is incremental, as in a browser: `hydrateRoot` returns after scheduling
+  (≈ 1 ms above); the tree hydrates as React's scheduler runs, and an interaction forces
+  hydration of the subtree it touches.
+
+Two behavioural notes, both inherited from React rather than from this package:
+
+- State updates queued by a page event are applied when React's scheduler next runs, not
+  synchronously inside `dispatchEvent` / `click()`. Code that dispatches an event and
+  immediately reads the result can observe the pre-update tree. When a test needs the
+  update synchronously, wrap the dispatch in `flushSync` (from `react-dom`), as the
+  example does.
+- The client render is roughly 2× the `renderToString` time for the same tree — it builds
+  the live tree, attaches listeners and keeps state — and roughly 2× faster than driving
+  the same render from the host. If the deliverable is only HTML, prerender instead.
 
 ## Host-driven rendering: use `transact()` for commits
 
