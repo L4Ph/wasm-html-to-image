@@ -5,7 +5,9 @@
   var D = g.__native.dom;
   // handle table: arrays by id (a Map keyed by small integers is slow in QuickJS), ids of let-go objects are reused
   var byId = [undefined], sent = [0], free = [], live = 0, byObj = new Map();
-  var callbacks = new Map(); // id of a function of the host's -> the function that calls it from here
+  // id of a function of the host's -> the function that calls it from here. A plain object, not a Map: QuickJS hashes
+  // the sequential integer ids of a Map badly (a set costs 2-4 us, ~20x an object's), and every new listener paid it.
+  var callbacks = Object.create(null);
   var protoNames = null, ctorNames = null, ctorByName = null, interfaces = null;
 
   // The language's and the runtime's own globals. They are non-enumerable like the page's defineProperty-installed
@@ -100,37 +102,40 @@
   };
   var infos = []; // id -> the handle in the string form of an answer (see reply)
   var SEP = "\u0001";
-  var infoOf = function (v, id, cls) {
-    if (cls === undefined && (cls = classOf(v)) === null) return null;
+  // What follows the id in a handle string, by class and name: a page makes thousands of nodes of a few kinds.
+  var infoTails = Object.create(null);
+  var tailOf = function (v, cls) {
     var nt = v.nodeType;
-    if (typeof nt === "number") {
-      if (nt === 1) {
-        var tn = v.tagName;
-        return "h" + id + SEP + cls + SEP + "1" + SEP + tn + SEP + v.localName + SEP + tn;
-      }
-      return "h" + id + SEP + cls + SEP + nt + SEP + v.nodeName;
+    if (typeof nt !== "number") return SEP + cls + SEP;
+    if (nt !== 1) {
+      var nn = v.nodeName, byNode = infoTails[cls] || (infoTails[cls] = Object.create(null));
+      return byNode[nn] || (byNode[nn] = SEP + cls + SEP + nt + SEP + nn);
     }
-    return "h" + id + SEP + cls + SEP;
+    // the local name is compared: an HTML element made with createElementNS can share a tag name and class with
+    // one made with createElement and differ only in the case of its local name
+    var tag = v.tagName, local = v.localName, byTag = infoTails[cls] || (infoTails[cls] = Object.create(null)), known = byTag[tag];
+    if (known !== undefined && known.l === local) return known.s;
+    var tail = SEP + cls + SEP + "1" + SEP + tag + SEP + local + SEP + tag;
+    byTag[tag] = { l: local, s: tail };
+    return tail;
   };
   // the handle of an object whose class is known, as a string; null for anything else
   var handleString = function (v) {
     var id = byObj.get(v);
     if (id !== undefined && infos[id] !== undefined) {
       sent[id]++;
-      return "h" + id;
+      // whole: the host may have lost its wrapper to GC before it told this side, and it builds a new one from this
+      return infos[id];
     }
     if (v === g || typeof v === "function") return null;
     var cls = classOf(v);
     if (cls === null) return null;
-    id = idFor(v);
-    var s = infoOf(v, id, cls);
-    if (s === null) {
-      sent[id]--;
-      if (sent[id] === 0) { byObj.delete(v); byId[id] = undefined; free.push(id); live--; }
-      return null;
+    if (id === undefined) {
+      id = free.length ? free.pop() : byId.length;
+      byObj.set(v, id); byId[id] = v; sent[id] = 0; live++;
     }
-    infos[id] = s;
-    return s;
+    sent[id]++;
+    return (infos[id] = "h" + id + tailOf(v, cls));
   };
   var handle = function (v, fn) {
     var id = idFor(v);
@@ -245,7 +250,9 @@
       case "string": return e.indexOf(SEP) < 0 && e.indexOf("\u0002") < 0 ? "s" + e : null;
       default:
         if (e === null) return "N";
-        return e.$ === "h" ? "h" + e.i : null;
+        // with its class: the host may see this object for the first time here, and makes its wrapper from what it gets
+        if (e.$ !== "h") return null;
+        return e.c ? "h" + e.i + "\u0001" + e.c + "\u0001" + (e.t === undefined ? "" : e.t) + "\u0001" + (e.n || "") : "h" + e.i;
     }
   };
   var tokenValue = function (t) {
@@ -257,15 +264,16 @@
       case 110: return +t.slice(1); // n
       case 115: return t.slice(1); // s
       case 104: return target(+t.slice(1)); // h
+      case 102: return hostFunction(+t.slice(1)); // f
       default: return undefined;
     }
   };
   var hostFunction = function (id) {
-    var ref = callbacks.get(id), f = ref && ref.deref();
+    var ref = callbacks[id], f = ref && ref.deref();
     if (!f) {
       f = function () { return callHost(id, this, arguments); };
       f.__hostFn = id;
-      callbacks.set(id, new WeakRef(f));
+      callbacks[id] = new WeakRef(f);
     }
     return f;
   };
@@ -316,28 +324,33 @@
       case "undefined": return "U";
       default:
         if (v === null) return "N";
+        // nodes before any instanceof (QuickJS calls Symbol.hasInstance for it), but after arrays: a list like cssRules
+        // is an array with the prototype of an interface, and crosses as an array
+        var isList = Array.isArray(v), hs = isList ? null : handleString(v);
+        if (hs !== null) return hs;
         if (v instanceof Raw) return v.s;
-        if (Array.isArray(v)) {
+        if (isList) {
           // a list of objects of known classes (the nodes of a query) goes as their handles, one after the other
           var parts = [];
           for (var i = 0; i < v.length; i++) {
-            var item = v[i], s = item !== null && typeof item === "object" && !Array.isArray(item) && !(item instanceof Date) ? handleString(item) : null;
+            var item = v[i], s = item !== null && typeof item === "object" && !Array.isArray(item) ? handleString(item) : null;
             if (s === null) { for (var j = 0; j < parts.length; j++) release1(parts[j]); parts = null; break; }
             parts.push(s);
           }
           if (parts) return "a" + parts.join("\u0002");
           return "j" + JSON.stringify(enc(v));
         }
-        if (!(v instanceof Date)) {
-          var hs = handleString(v);
-          if (hs !== null) return hs;
-        }
         var e = enc(v);
-        if (e !== null && typeof e === "object" && e.$ === "h") return "h" + e.i + SEP + (e.c || "") + SEP + (e.t === undefined ? "" : e.t) + SEP + (e.n || "");
+        if (e !== null && typeof e === "object" && e.$ === "h") {
+          var classless = "h" + e.i + SEP + (e.c || "") + SEP + (e.t === undefined ? "" : e.t) + SEP + (e.n || "");
+          // an object with no class (el.style, a dataset): read again and again, it skips all of the above next time
+          if (!e.c) infos[e.i] = classless;
+          return classless;
+        }
         return "j" + JSON.stringify(e);
     }
   };
-  var release1 = function (s) { var id = +s.slice(1, s.indexOf(SEP)); if (sent[id] > 0) sent[id]--; };
+  var release1 = function (s) { var end = s.indexOf(SEP), id = +(end < 0 ? s.slice(1) : s.slice(1, end)); if (sent[id] > 0) sent[id]--; };
   var json = function (v) { return new Raw("k" + JSON.stringify(v)); }; // plain data, not to be decoded
 
   var ops = {
@@ -494,14 +507,16 @@
     // of these functions of the host's, the ones the page no longer holds (the host may let them go)
     deadfns: function (r) {
       return json(r[1].filter(function (id) {
-        var ref = callbacks.get(id);
+        var ref = callbacks[id];
         if (ref && ref.deref()) return false;
-        callbacks.delete(id);
+        delete callbacks[id];
         return true;
       }));
     },
-    liveFns: function () { return callbacks.size; },
   };
+
+  // qd_rpc makes a function token with this (no JSON for a listener, the one object argument nearly every page passes)
+  g.__rpcHostFunction = hostFunction;
 
   var callMethod = function (id, key, args) {
     var o = target(id), f = o[key];

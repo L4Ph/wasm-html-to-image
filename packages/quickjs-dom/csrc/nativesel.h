@@ -462,6 +462,24 @@ static int sel_is_control(ND *n) {
            sel_is_tag(n, "option") || sel_is_tag(n, "optgroup") || sel_is_tag(n, "fieldset");
 }
 
+/* :disabled per the HTML spec: its own attribute, or a disabled fieldset around it, unless it is inside that fieldset's
+   first legend */
+static int sel_is_disabled(ND *n) {
+    if (!sel_is_control(n)) return 0;
+    if (nd_find_attr(n, "disabled", 8)) return 1;
+    if (sel_is_tag(n, "option") || sel_is_tag(n, "optgroup")) return 0;
+    ND *child = n;
+    for (ND *a = JS_IsNull(n->parent) ? NULL : nd_of(n->parent); a && a->type == 1; child = a, a = JS_IsNull(a->parent) ? NULL : nd_of(a->parent)) {
+        if (!sel_is_tag(a, "fieldset") || !nd_find_attr(a, "disabled", 8)) continue;
+        if (!sel_is_tag(child, "legend")) return 1;
+        ND *first = NULL;
+        for (ND *k = JS_IsNull(a->first) ? NULL : nd_of(a->first); k; k = JS_IsNull(k->next) ? NULL : nd_of(k->next))
+            if (k->type == 1 && sel_is_tag(k, "legend")) { first = k; break; }
+        if (first != child) return 1;
+    }
+    return 0;
+}
+
 /* the 1-based position among the element siblings (of the same type if `type`), counting from the end if `last` */
 static int sel_position(ND *n, int type, int last, int *total) {
     int pos = 0, count = 0;
@@ -540,8 +558,8 @@ static int sel_pseudo(ND *n, const SPseudo *ps) {
     case PS_ROOT: return !JS_IsNull(n->parent) && nd_of(n->parent)->type == 9;
     case PS_SCOPE: return sel_scope ? n == sel_scope : (!JS_IsNull(n->parent) && nd_of(n->parent)->type == 9);
     case PS_CHECKED: return (sel_is_tag(n, "input") && nd_find_attr(n, "checked", 7)) || (sel_is_tag(n, "option") && nd_find_attr(n, "selected", 8));
-    case PS_DISABLED: return sel_is_control(n) && nd_find_attr(n, "disabled", 8) != NULL;
-    case PS_ENABLED: return sel_is_control(n) && !nd_find_attr(n, "disabled", 8);
+    case PS_DISABLED: return sel_is_disabled(n);
+    case PS_ENABLED: return sel_is_control(n) && !sel_is_disabled(n);
     case PS_REQUIRED: return (sel_is_tag(n, "input") || sel_is_tag(n, "select") || sel_is_tag(n, "textarea")) && nd_find_attr(n, "required", 8) != NULL;
     case PS_OPTIONAL: return (sel_is_tag(n, "input") || sel_is_tag(n, "select") || sel_is_tag(n, "textarea")) && !nd_find_attr(n, "required", 8);
     case PS_LINK: return (sel_is_tag(n, "a") || sel_is_tag(n, "area")) && nd_find_attr(n, "href", 4) != NULL;

@@ -56,6 +56,11 @@ interface Cell {
   /** The ownerDocument of a node, as of generation `odg` (see Bridge.odGen). */
   od?: unknown;
   odg?: number;
+  /** A function read as a property of an object of the page: that object and the name it was read under. */
+  of?: Cell;
+  key?: string;
+  /** The host defined a getter or setter on this wrapper: a write must reach it with the wrapper as `this`. */
+  ownAccessor?: boolean;
 }
 
 /** A handle as the guest sends it. */
@@ -192,6 +197,11 @@ const FINE_SET_KEYS = new Set([
 const TEXT_SET_KEYS = new Set(["nodeValue", "data", "textContent"]);
 const ON_HANDLER = /^on[a-z]+$/;
 
+/**
+ * Functions of the page reached as values (read off the window or el.style) that only read. A narrower list than
+ * PURE_CALLS: there the name is of a method of a known interface, here it can be any page object's (store.item()).
+ */
+const PURE_FUNCTIONS = new Set(["getComputedStyle", "getPropertyValue", "getPropertyPriority"]);
 interface SelectorCheck {
   tagRequired?: Set<string>;
   alwaysTrue?: boolean;
@@ -216,7 +226,8 @@ function analyzeSelector(sel: string): SelectorCheck {
     let valid = true;
     for (const b of branches) {
       const trimmed = b.trim();
-      const match = /^([a-zA-Z0-9]+)/.exec(trimmed);
+      // the whole name or nothing: my-el, a\\:b and svg|rect have a tag this cannot tell, and the page is asked
+      const match = /^([a-zA-Z0-9]+)(?=$|[.#:[])/.exec(trimmed);
       if (!match) {
         valid = false;
         break;
@@ -234,6 +245,14 @@ function analyzeSelector(sel: string): SelectorCheck {
   return cached;
 }
 
+/** The clock of deadlines: taken now, because a test's fake timers replace `Date` later. */
+const realNow = Date.now;
+/** Taken now for the same reason: fake timers may replace `queueMicrotask`. */
+const realQueueMicrotask = queueMicrotask;
+/** On the function the page holds for a custom element class of the host: the class. */
+const CUSTOM_CLASS = Symbol("wasm-quickjs-dom.customClass");
+
+export const WIN_CALL = Symbol("wasm-quickjs-dom.windowCall");
 const HANDLE = Symbol("wasm-quickjs-dom.handle");
 const CLASS_NAME = Symbol("wasm-quickjs-dom.class");
 const INDEXED = Symbol("wasm-quickjs-dom.indexed");
@@ -395,6 +414,9 @@ export class Bridge {
   private readonly registry: FinalizationRegistry<Cell>;
   private released: [number, number][] = [];
   // wrappers the host put its own properties on: they stay until the bridge is disposed
+  private jobsQueued = false;
+  /** The element a custom element class of the host is being constructed for (its HTMLElement constructor answers it). */
+  private upgrading: object | undefined;
   private readonly pinned = new Set<object>();
   private pinLimit = 1024;
   private pinSweeping = false;
@@ -424,6 +446,13 @@ export class Bridge {
   private codeGen = 0;
   /** Whether the page has custom elements (their callbacks run page code on an attribute change): 0 = ask, 1 = none, 2 = yes (final). */
   private ce = 0;
+  private readonly customElements = new WeakMap<object, Function>();
+  /**
+   * Whether the page's jobs wait for a microtask of the host instead of running at the end of each call. A test
+   * environment wants this (jsdom's order: nothing of the page interleaves the host's synchronous code); it is off for
+   * the callers that read a page's state right after a call.
+   */
+  deferJobs = false;
   // functions of the host that the page holds: id <-> function
   private readonly fnIds = new Map<Function, number>();
   private readonly fnById = new Map<number, Function>();
@@ -452,29 +481,38 @@ export class Bridge {
       get(t, k, r) {
         if (k in t) return Reflect.get(t, k, r);
         const cell = (t as any)[HANDLE] as Cell;
-        return typeof k === "string" ? bridge.get(cell, k) : undefined;
+        return typeof k === "string" && !bridge.hidden.has(k) ? bridge.get(cell, k) : undefined;
       },
       set(t, k, v, r) {
-        if (k in t) return Reflect.set(t, k, v, r);
+        if (k in t) {
+          // An own data property (React's props on a node, written on every commit). With the proxy as the receiver,
+          // Reflect.set would go through the defineProperty trap below; an object inheriting from the wrapper must.
+          const cell = (t as any)[HANDLE] as Cell;
+          if (!cell.ownAccessor && Object.hasOwn(t, k) && bridge.wrappers.get(cell.id)?.deref() === r) return Reflect.set(t, k, v, t);
+          return Reflect.set(t, k, v, r);
+        }
         bridge.pin(r);
         return Reflect.set(t, k, v, t);
       },
       has(t, k) {
         return Reflect.has(t, k);
       },
+      // what the host defines stays on this wrapper, so the wrapper must stay (as for a set)
+      defineProperty(t, k, d) {
+        const cell = (t as any)[HANDLE] as Cell;
+        if (d.get || d.set) cell.ownAccessor = true;
+        bridge.pin(bridge.wrappers.get(cell.id)?.deref() ?? t);
+        return Reflect.defineProperty(t, k, d);
+      },
     };
 
     this.indexedClassProxyHandler = {
+      ...this.classProxyHandler,
       get(t, k, r) {
         const cell = (t as any)[HANDLE] as Cell;
         if (typeof k === "string" && INDEX.test(k)) return bridge.get(cell, k);
         if (k in t) return Reflect.get(t, k, r);
         return typeof k === "string" ? bridge.get(cell, k) : undefined;
-      },
-      set(t, k, v, r) {
-        if (k in t) return Reflect.set(t, k, v, r);
-        bridge.pin(r);
-        return Reflect.set(t, k, v, t);
       },
       has(t, k) {
         const cell = (t as any)[HANDLE] as Cell;
@@ -1164,7 +1202,7 @@ export class Bridge {
 
   /** Give the guest a fresh deadline for the call about to run; 0 is QuickJS's "no limit". */
   private armDeadline(): void {
-    this.vm.setDeadline(this.timeout === Infinity ? 0 : Date.now() + this.timeout);
+    this.vm.setDeadline(this.timeout === Infinity ? 0 : realNow() + this.timeout);
   }
 
   private sendReleases(): void {
@@ -1181,7 +1219,7 @@ export class Bridge {
     if (this.txn && request[0] !== "txn" && request[0] !== "release") this.flushTxn();
     // a function of the page that is called, an object made, or a batch run, may change anything
     const runs =
-      request[0] === "apply" || request[0] === "new" || request[0] === "del" || request[0] === "batch" || request[0] === "fire" || request[0] === "txn";
+      request[0] === "apply" || request[0] === "construct" || request[0] === "new" || request[0] === "del" || request[0] === "batch" || request[0] === "fire" || request[0] === "txn";
     // (the time budget is armed by send(); only after the call is what the host had read dropped: it is still valid
     // while the operation runs, and a call that changes nothing then pays no re-read)
     const value = this.send("J" + JSON.stringify(request), request[0] === "release");
@@ -1189,6 +1227,23 @@ export class Bridge {
     // through a custom element's callbacks, and `ce` says there are none
     if (runs) this.invalidate(request[0] === "txn" && this.ce === 1);
     return value;
+  }
+
+  /**
+   * The page's jobs run in a microtask of the host, once, after the host's synchronous code: as in a browser, a
+   * MutationObserver sees a whole React commit, and `waitFor` does not re-query the document per mutation.
+   */
+  private scheduleJobs(): void {
+    if (this.jobsQueued) return;
+    this.jobsQueued = true;
+    realQueueMicrotask(() => {
+      this.jobsQueued = false;
+      if (this.closed) return;
+      this.armDeadline();
+      this.vm.jobs();
+      this.invalidate();
+      this.onCall?.();
+    });
   }
 
   /** One request (see rpc.js for its forms) and its answer, decoded. */
@@ -1204,7 +1259,15 @@ export class Bridge {
     let result: EvalResult & { jobs?: boolean };
     try {
       result = this.vm.rpc(request);
-      if (outer && result.jobs) this.invalidate();
+      if (result.jobs) {
+        if (this.deferJobs) this.scheduleJobs();
+        else {
+          this.vm.jobs();
+          if (outer) {
+            this.invalidate();
+          }
+        }
+      }
     } finally {
       this.depth--;
     }
@@ -1241,6 +1304,17 @@ export class Bridge {
     }
   }
 
+  private making: Function | undefined;
+  private readonly hidden = new Set<string>();
+
+  /** A member of the page's objects the host is not to see: a library decides by its presence (getAnimations). */
+  hide(member: string): void {
+    this.hidden.add(member);
+    for (const cls of this.classes.values()) delete cls.prototype[member];
+  }
+
+  private readonly handleTails = new Map<string, Omit<Handle, "i">>();
+
   private handleOf(s: string): unknown {
     const sep = s.indexOf("\u0001");
     if (sep < 0) {
@@ -1252,8 +1326,20 @@ export class Bridge {
       }
       return this.wrapper({ i: id });
     }
-    const [i, c, t, n, l, g] = s.split("\u0001");
-    return this.wrapper({ i: Number(i), c: c || undefined, t: t === undefined || t === "" ? undefined : Number(t), n, l, g });
+    const known = this.wrappers.get(Number(s.slice(0, sep)))?.deref();
+    if (known) {
+      (known as any)[HANDLE].count++;
+      return known;
+    }
+    // what follows the id repeats per kind of node: it is taken apart once
+    const tail = s.slice(sep + 1);
+    let p = this.handleTails.get(tail);
+    if (!p) {
+      const [c, t, n, l, g] = tail.split("\u0001");
+      p = { c: c || undefined, t: t === undefined || t === "" ? undefined : Number(t), n, l, g };
+      this.handleTails.set(tail, p);
+    }
+    return this.newWrapper({ i: Number(s.slice(0, sep)), c: p.c, t: p.t, n: p.n, l: p.l, g: p.g });
   }
 
   private error(info: ErrorInfo): Error {
@@ -1339,6 +1425,14 @@ export class Bridge {
     if (store.size > 100000) store.clear();
     store.set(k, value);
     return value;
+  }
+
+  /** The items of a list of the page (Testing Library goes through each input's `labels`), until the page changes. */
+  private items(cell: Cell): unknown[] {
+    const k = cell.id + "\u0001*array";
+    let list = this.reads.get(k) as unknown[] | undefined;
+    if (!list) this.reads.set(k, (list = this.sendJ(["array", cell.id]) as unknown[]));
+    return list;
   }
 
   private encodeToken(a: unknown): string | null {
@@ -1525,8 +1619,54 @@ export class Bridge {
     return (fn ? "\u0006" : "\u0004") + parts.join("\u0002");
   }
 
+  /**
+   * What the page holds for a custom element class of the host: a function that constructs the class for an element and
+   * calls its lifecycle callbacks (see `upgrade` and `callback` in dom/01-core.js). `undefined` for any other function.
+   */
+  private customElementFunction(Class: any): Function | undefined {
+    const element = this.classes.get("HTMLElement");
+    if (!element || !(Class.prototype instanceof element)) return undefined;
+    let dispatch = this.customElements.get(Class);
+    if (dispatch) return dispatch;
+    const bridge = this;
+    dispatch = function (this: object, op: string, list: unknown[]) {
+      if (op === "__customElement") return { observed: Class.observedAttributes ?? [] };
+      if (op === "construct") {
+        bridge.pin(this); // its prototype and fields live on this wrapper
+        if (bridge.making === Class) {
+          Object.setPrototypeOf(this, Class.prototype);
+          return undefined;
+        }
+        bridge.upgrading = this;
+        try {
+          Reflect.construct(Class, [], Class);
+        } finally {
+          bridge.upgrading = undefined;
+        }
+        return undefined;
+      }
+      const f = Class.prototype[op];
+      return typeof f === "function" ? f.apply(this, list ?? []) : undefined;
+    };
+    Object.defineProperty(dispatch, CUSTOM_CLASS, { value: Class });
+    this.customElements.set(Class, dispatch);
+    return dispatch;
+  }
+
   private call(cell: Cell, key: string, args: unknown[], self?: unknown): unknown {
     if (cell.dead) throw new Error("quickjs-dom: this node was never created (its transaction failed)");
+    if (key === "addEventListener" && args[2] && typeof args[2] === "object" && (args[2] as any).signal && !(args[2] as any).signal[HANDLE]) {
+      // a signal of the host (Node's AbortController) cannot cross: the host removes the listener itself
+      const { signal, ...options } = args[2] as { signal: AbortSignal };
+      if (signal.aborted) return undefined;
+      const [type, listener] = args;
+      // the wrapper, not the id: held by the listener, so the id stays this node's until the abort
+      const target = this.wrappers.get(cell.id)?.deref() as EventTarget;
+      signal.addEventListener("abort", () => {
+        if (!this.closed) target.removeEventListener(type as string, listener as EventListener, options);
+      }, { once: true });
+      args = [type, listener, options];
+    }
     if (key === "matches" && cell.t === 1 && typeof cell.l === "string" && typeof args[0] === "string") {
       const check = analyzeSelector(args[0]);
       if (check.alwaysTrue) return true;
@@ -1616,7 +1756,7 @@ export class Bridge {
         // chain and must travel as its own function, or every subclass arrives as the base class
         const cls = Object.prototype.hasOwnProperty.call(v, CLASS_NAME) ? ((v as any)[CLASS_NAME] as string) : undefined;
         if (cls) return { $: "c", n: cls };
-        return { $: "f", i: this.functionId(v as Function) };
+        return { $: "f", i: this.functionId(this.customElementFunction(v) ?? (v as Function)) };
       }
       default: {
         if (v === null) return null;
@@ -1643,8 +1783,10 @@ export class Bridge {
         return new Date(x.v);
       case "c":
         return this.cls(x.n);
-      case "f":
-        return this.fnById.get(x.i);
+      case "f": {
+        const f = this.fnById.get(x.i) as any;
+        return f?.[CUSTOM_CLASS] ?? f;
+      }
       case "h":
         return this.wrapper(x);
       default: {
@@ -1663,6 +1805,10 @@ export class Bridge {
       (known as any)[HANDLE].count++;
       return known;
     }
+    return this.newWrapper(h);
+  }
+
+  private newWrapper(h: Handle): unknown {
     const cell: Cell = { id: h.i, count: 1, c: h.c, t: h.t, n: h.n, l: h.l, g: h.g };
     let w: any;
     const cls = h.c ? this.cls(h.c) : undefined;
@@ -1681,7 +1827,15 @@ export class Bridge {
       // constructed from here (a class of the page reached as a value — window.File through
       // defaultView, say): the page must see a construction, not a call, or its classes throw
       if (new.target) return bridge.sendJ(["construct", cell.id, args.map((a) => bridge.encode(a))]);
-      return bridge.sendJ(["apply", cell.id, bridge.encode(this), args.map((a) => bridge.encode(a))]);
+      // read as `obj.method` and called on `obj`: a method call, with its compact request and its cached reads
+      // (only while the name still holds this function: a test's wrapper of the method calls the original through here)
+      if (cell.key !== undefined && cell.of !== undefined && this && (this as any)[HANDLE] === cell.of && (!PURE_CALLS.has(cell.key) || PURE_FUNCTIONS.has(cell.key)) && bridge.get(cell.of, cell.key) === f) {
+        return bridge.call(cell.of, cell.key, args);
+      }
+      const request = ["apply", cell.id, bridge.encode(this), args.map((a) => bridge.encode(a))];
+      // window.getComputedStyle per element is how Testing Library looks for hidden nodes: it must not drop the reads
+      if (cell.key !== undefined && PURE_FUNCTIONS.has(cell.key)) return bridge.send("J" + JSON.stringify(request));
+      return bridge.sendJ(request);
     };
     Object.defineProperty(f, HANDLE, { value: cell });
     return f;
@@ -1705,17 +1859,30 @@ export class Bridge {
     Object.defineProperty(target, HANDLE, { value: cell, configurable: true });
     let cachedKeys: Set<string> | null = null;
     return new Proxy(target, {
-      get: (t, k) => {
+      get: (t, k, r) => {
         if (k === HANDLE) return cell;
         // every own name of the page's window (non-enumerable interfaces included), for installWindow
         if (k === WIN_KEYS) return () => this.sendJ(["names", cell.id]) as string[];
+        // a function of the window called as a global: a method call, with its compact request and its cached reads
+        if (k === WIN_CALL) return (key: string, args: unknown[]) => this.call(cell, key, args);
         if (typeof k === "symbol") {
           if (k === Symbol.iterator && this.sendJ(["has", cell.id, "length"])) return () => (this.sendJ(["array", cell.id]) as unknown[])[Symbol.iterator]();
+          // an iterator of the page (what FormData.entries() answers) is its own iterable, as in the language
+          if (k === Symbol.iterator && this.sendJ(["has", cell.id, "next"])) return () => r;
           return undefined;
         }
         if (k === "then") return undefined;
         if (isWindow && typeof k === "string" && this.schemaByName.has(k)) return this.cls(k);
-        return this.get(cell, k);
+        const value = this.get(cell, k);
+        if (typeof value === "function") {
+          const fn = (value as any)[HANDLE] as Cell | undefined;
+          if (fn) {
+            // not the window's: a test wraps those (window.fetch = ...) and keeps the original to call on
+            if (!isWindow) fn.of = cell;
+            fn.key = k;
+          }
+        }
+        return value;
       },
       set: (t, k, v) => {
         if (typeof k === "symbol") return false;
@@ -1801,7 +1968,31 @@ export class Bridge {
       const cls = {
         [name]: function (this: unknown, ...args: unknown[]) {
           if (!new.target) throw new TypeError(`Class constructor ${name} cannot be invoked without 'new'`);
-          return bridge.sendJ(["new", name, args.map((a) => bridge.encode(a))]);
+          if (bridge.upgrading) {
+            // a custom element class of the host, being constructed for the element the page upgrades
+            const el = bridge.upgrading;
+            bridge.upgrading = undefined;
+            Object.setPrototypeOf(el, new.target.prototype);
+            return el;
+          }
+          if (new.target !== cls && bridge.customElements.has(new.target)) {
+            // new of a defined element: the page makes it by its name, and this constructor goes on with it
+            const page = bridge.window as any;
+            const tag = page.customElements.getName(new.target);
+            bridge.making = new.target;
+            try {
+              return page.document.createElement(tag);
+            } finally {
+              bridge.making = undefined;
+            }
+          }
+          const made = bridge.sendJ(["new", name, args.map((a) => bridge.encode(a))]) as object;
+          if (new.target !== cls && made && typeof made === "object") {
+            // a subclass of the host's (class FakeList extends EventTarget): its members are on this wrapper, which must stay
+            Object.setPrototypeOf(made, new.target.prototype);
+            bridge.pinned.add(made);
+          }
+          return made;
         },
       }[name] as any;
       Object.setPrototypeOf(cls.prototype, parent ? parent.prototype : Object.prototype);
@@ -1811,6 +2002,7 @@ export class Bridge {
       for (const [k, v] of Object.entries(s.st)) Object.defineProperty(cls, k, { value: v, enumerable: true });
       for (const [k, v] of Object.entries(s.consts)) Object.defineProperty(cls.prototype, k, { value: v, enumerable: true });
       for (const [k, kind] of Object.entries(s.props)) {
+        if (this.hidden.has(k)) continue;
         if (kind === 3) {
           Object.defineProperty(cls.prototype, k, {
             value: { [k]: function (this: any, ...args: unknown[]) { return bridge.call(this[HANDLE], k, args, this); } }[k],
@@ -1836,7 +2028,7 @@ export class Bridge {
       }
       if (s.it) {
         Object.defineProperty(cls.prototype, Symbol.iterator, {
-          value: function (this: any) { return (bridge.sendJ(["array", this[HANDLE].id]) as unknown[])[Symbol.iterator](); },
+          value: function (this: any) { return bridge.items(this[HANDLE])[Symbol.iterator](); },
           writable: true, configurable: true,
         });
       }
@@ -1882,6 +2074,8 @@ export class Bridge {
       // no invalidation here: a write the listener made has already dropped the cache, and dropping reads that
       // were taken after it would only make the next listener read them again
       this.depth--;
+      // the time the listener took is not the page's
+      this.armDeadline();
     }
   }
 

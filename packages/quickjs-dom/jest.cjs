@@ -49,6 +49,7 @@ class WasmQuickJSDomEnvironment extends TestEnvironment {
       ...jsdomRest,
       ...givenRest,
       pretendToBeVisual: givenVisual ?? jsdomVisual ?? topVisual ?? true,
+      deferJobs: true,
       runScripts: givenRunScripts ?? jsdomRunScripts ?? topRunScripts ?? "dangerously",
       resources: givenResources ?? jsdomResources ?? topResources,
       url: givenUrl ?? jsdomUrl ?? topUrl ?? "http://localhost/",

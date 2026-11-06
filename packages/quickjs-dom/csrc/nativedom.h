@@ -19,6 +19,7 @@ typedef struct {
     uint8_t type; /* 1 element, 3 text, 8 comment, 9 document, 10 doctype, 11 document fragment */
     uint32_t qid; /* live layout: the id the renderer knows this element by (0: none), see the journal below */
     uint8_t xml;  /* a document made as an XML document: its createElement keeps the name's case */
+    uint8_t foreign; /* an element createElementNS made outside HTML, whatever it sits in */
     /* links are strong references: parent <-> child cycles are found by gc_mark below */
     JSValue parent, first, last, prev, next;
     JSValue owner;   /* the document that made the node (null for a document) */

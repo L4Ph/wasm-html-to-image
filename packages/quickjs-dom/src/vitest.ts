@@ -17,6 +17,9 @@ import { installWindow } from "./globals.js";
 import { JSDOM, type JSDOMOptions } from "./jsdom.js";
 import { normalizeTimeout } from "./timeout.js";
 
+/** Taken now: a test file may leave fake timers on, and the teardown must still end. */
+const realSetTimeout = setTimeout;
+
 /** Options this environment adds to {@link JSDOMOptions}. */
 interface EnvironmentOptions extends JSDOMOptions {
   html?: string;
@@ -58,6 +61,7 @@ export default {
       ...jsdomRest,
       ...givenRest,
       pretendToBeVisual: givenVisual ?? jsdomVisual ?? true,
+      deferJobs: true,
       runScripts: givenRunScripts ?? jsdomRunScripts ?? "dangerously",
       resources: givenResources ?? jsdomResources,
       url: givenUrl ?? jsdomUrl ?? options?.url ?? "http://localhost/",
@@ -70,7 +74,7 @@ export default {
       await dom.ready.catch(() => {});
       uninstall();
       dom.close();
-      await new Promise<void>((resolve) => setTimeout(resolve, 0));
+      await new Promise<void>((resolve) => realSetTimeout(resolve, 0));
     };
     if (!awaitReady) return { teardown };
     // priority: wasmQuickjsDom.engine.timeout, then jsdom.engine.timeout; the helper supplies the default 10000

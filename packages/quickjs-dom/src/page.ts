@@ -13,6 +13,11 @@ import type {
   PageInput,
 } from "./types.js";
 
+/** The clock of deadlines and timers: taken now, because a test's fake timers replace `Date` later. */
+const realNow = Date.now;
+/** The host's timers, taken now for the same reason: a page's clock must keep running under a test's fake timers. */
+const realSetTimeout = setTimeout;
+
 export { DEFAULT_TIMEOUT } from "./timeout.js";
 export const DEFAULT_SETTLE_MS = 1000;
 export const MEMORY_LIMIT = 256 * 1024 * 1024;
@@ -53,7 +58,7 @@ function stackLimitFor(wasm: WebAssembly.Module): number {
   return limit;
 }
 
-export const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+export const sleep = (ms: number): Promise<void> => new Promise((resolve) => realSetTimeout(resolve, ms));
 
 // four random words for the page's Math.random (the guest is copied from one start, so it must not keep its own)
 export function randomSeed(): number[] {
@@ -83,13 +88,13 @@ export function openPage(
   const viewportWidth = options.width ?? 800;
   // 0 and Infinity both mean "no limit" (Infinity here); the default 10 s is kept when none is given
   const timeout = normalizeTimeout(opts.timeout);
-  let started = Date.now();
+  let started = realNow();
   // QuickJS reads a deadline of 0 as "no limit", which is how it must hear "Infinity"
   const deadlineOf = () => (timeout === Infinity ? 0 : started + timeout);
   let vmDeadline: ((ms: number) => void) | undefined;
   // every call into the page gets a fresh `timeout`
   const begin = () => {
-    started = Date.now();
+    started = realNow();
     vmDeadline?.(deadlineOf());
   };
   const guard = sharedGuard ?? createGuard(opts.limits);
@@ -139,7 +144,7 @@ export function openPage(
     }
   };
   const text = async (res: Response) => new TextDecoder().decode(await bodyBytes(res));
-  const remaining = () => (timeout === Infinity ? Infinity : Math.max(0, timeout - (Date.now() - started)));
+  const remaining = () => (timeout === Infinity ? Infinity : Math.max(0, timeout - (realNow() - started)));
   // AbortSignal.timeout refuses Infinity (and the largest finite values) with a RangeError: an unlimited call has no
   // abort signal at all, and one bounded beyond what a signal can take keeps its deadline in QuickJS.
   const ABORT_MAX = 2 ** 31 - 1;
@@ -175,7 +180,7 @@ export function openPage(
         log({ type: "rejection", message });
       },
       timer(id, ms) {
-        timers.push({ id, at: Date.now() + ms });
+        timers.push({ id, at: realNow() + ms });
       },
       fetch(id, target, packed) {
         // a plain method, or {m, h, b}: method, headers, body
@@ -390,7 +395,7 @@ export function openPage(
     const step = async (fresh = false) => {
       if (fresh) begin(); // a page that lives on gets a fresh budget each time
       pump();
-      const now = Date.now();
+      const now = realNow();
       const due = timers.filter((t) => t.at <= now).sort((a, b) => a.at - b.at);
       for (const t of due) {
         timers.splice(timers.indexOf(t), 1);
@@ -416,9 +421,9 @@ export function openPage(
         }
         return;
       }
-      const until = Date.now() + Math.min(ms, remaining());
+      const until = realNow() + Math.min(ms, remaining());
       let first = true;
-      while (remaining() > 0 && (Date.now() < until || inflight.size > 0)) {
+      while (remaining() > 0 && (realNow() < until || inflight.size > 0)) {
         if (!first && inflight.size === 0 && !timers.some((t) => t.at <= until)) break;
         first = false;
         await tick();
@@ -481,7 +486,7 @@ export function openPage(
     };
     const nextWake = () => {
       if (closed) return -1;
-      if (timers.length) return Math.max(0, Math.min(...timers.map((t) => t.at)) - Date.now());
+      if (timers.length) return Math.max(0, Math.min(...timers.map((t) => t.at)) - realNow());
       return inflight.size ? 5 : -1;
     };
 

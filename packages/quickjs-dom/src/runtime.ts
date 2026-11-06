@@ -48,6 +48,8 @@ interface Exports {
   _initialize?(): void;
 }
 
+/** The clock of deadlines and timers: taken now, because a test's fake timers replace `Date` later. */
+const realNow = Date.now;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 // What a started instance looks like in memory, per compiled module, so the next one is a copy instead of a start
@@ -105,7 +107,7 @@ export class QuickJSInstance {
       wasi_snapshot_preview1: {
         // the C library asks for a clock, an empty environment and a way to write that goes nowhere
         clock_time_get(_id: number, _precision: bigint, out: number) {
-          new DataView(x.memory.buffer).setBigUint64(out, BigInt(Date.now()) * 1_000_000n, true);
+          new DataView(x.memory.buffer).setBigUint64(out, BigInt(realNow()) * 1_000_000n, true);
           return 0;
         },
         environ_sizes_get(count: number, size: number) {

@@ -166,12 +166,13 @@
     // the tokens are indexed properties of the list (jsdom answers classList[0]); they are read from the
     // attribute every time, so the list is live even when the attribute changes outside the TokenList
     return new Proxy(this, {
+      // every read of a method or of _el comes through here, so names are told from indices by their first character
       get: function (t, k, r) {
-        if (typeof k === "string" && INDEX_KEY.test(k)) return tokens(t._el)[Number(k)];
-        return Reflect.get(t, k, r);
+        if (typeof k === "string" && k.charCodeAt(0) <= 57 && INDEX_KEY.test(k)) return tokens(t._el)[Number(k)];
+        return t[k]; // not Reflect.get with the proxy as receiver: the accessors only read _el, and through t that costs nothing
       },
       has: function (t, k) {
-        return typeof k === "string" && INDEX_KEY.test(k) ? Number(k) < tokens(t._el).length : Reflect.has(t, k);
+        return typeof k === "string" && k.charCodeAt(0) <= 57 && INDEX_KEY.test(k) ? Number(k) < tokens(t._el).length : Reflect.has(t, k);
       },
       ownKeys: function (t) {
         var out = [], ts = tokens(t._el);
@@ -263,19 +264,39 @@
     opts = listenerOptions(opts);
     var all = LISTENERS.get(this);
     if (!all) LISTENERS.set(this, (all = {}));
-    var list = all[type] || (all[type] = []), capture = !!opts.capture;
-    // an index by function keeps the duplicate check (and removal) from walking a list of thousands
-    var idx = list.idx || Object.defineProperty(list, "idx", { value: new Map() }).idx, same = idx.get(fn);
-    if (same) for (var i = 0; i < same.length; i++) if (same[i].capture === capture) return;
+    var list = all[type] || (all[type] = []), capture = !!opts.capture, idx = list.idx, same, i;
+    // an index by function keeps the duplicate check (and removal) from walking a list of thousands; a short list, which
+    // nearly every one is (React adds one per event type to each root), is walked, without the cost of a Map for each
+    if (idx) {
+      same = idx.get(fn);
+      if (same) for (i = 0; i < same.length; i++) if (same[i].capture === capture) return;
+    } else {
+      for (i = 0; i < list.length; i++) if (list[i].fn === fn && list[i].capture === capture && !list[i].removed) return;
+    }
     var entry = { fn: fn, capture: capture, once: !!opts.once, passive: !!opts.passive, removed: false };
     list.push(entry);
-    if (same) same.push(entry); else idx.set(fn, [entry]);
+    if (idx) {
+      if (same) same.push(entry); else idx.set(fn, [entry]);
+    } else if (list.length >= 16) {
+      idx = Object.defineProperty(list, "idx", { value: new Map() }).idx;
+      idx.dead = 0;
+      for (i = 0; i < list.length; i++) {
+        if (list[i].removed) { idx.dead++; continue; }
+        same = idx.get(list[i].fn);
+        if (same) same.push(list[i]); else idx.set(list[i].fn, [list[i]]);
+      }
+    }
     var node = this;
     if (opts.signal) opts.signal.addEventListener("abort", function () { removeListener.call(node, type, fn, { capture: capture }); });
   };
   var removeListener = function (type, fn, opts) {
+    if (fn == null) return; // an on* handler's slot has no function, and is not this one
     var all = LISTENERS.get(this), list = all && all[type], capture = !!listenerOptions(opts).capture;
-    if (!list || !list.idx) return;
+    if (!list) return;
+    if (!list.idx) {
+      for (var n = 0; n < list.length; n++) if (list[n].fn === fn && list[n].capture === capture && !list[n].removed) { list[n].removed = true; return; }
+      return;
+    }
     var same = list.idx.get(fn);
     if (!same) return;
     for (var i = 0; i < same.length; i++) {
@@ -359,7 +380,8 @@
     }
   };
   var parentOf = function (n) {
-    if (n.parentNode) return n.parentNode;
+    var p = n.parentNode;
+    if (p) return p;
     if (n.nodeType === 9) return n.defaultView && n.defaultView !== n ? n.defaultView : null;
     return null;
   };
@@ -367,16 +389,18 @@
     if (!ev || typeof ev.type !== "string") throw new TypeError("The event provided is not an Event.");
     // the propagation path crosses a shadow boundary only for a composed event (parentOf steps
     // from a shadow root to its host); the last node inside the tree is where it stops otherwise
-    var path = [], n = this;
+    var path = [], n = this, hasShadow = false;
     for (; n; n = parentOf(n)) {
       path.push(n);
-      if (n.nodeType === 11 && n.host && !ev.composed) break;
+      if (n.nodeType === 11 && n.host) {
+        hasShadow = true;
+        if (!ev.composed) break;
+      }
     }
     // what a listener sees as the target: the first node of its own tree's stretch of the path —
     // a listener outside a shadow tree sees the host, not the node inside. Without a shadow boundary
     // every listener sees the dispatch target itself, so no second array is made.
-    var seen = null, hasShadow = false;
-    for (var i = 0; i < path.length; i++) if (path[i].nodeType === 11 && path[i].host) { hasShadow = true; break; }
+    var seen = null, i;
     if (hasShadow) {
       seen = [];
       var seg = 0;
@@ -472,11 +496,18 @@
     var p = node.parentNode;
     if (p) record("childList", p, { removedNodes: [node], previousSibling: node.previousSibling, nextSibling: node.nextSibling });
   };
+  // the wrappers stay once installed; with no observer left (waitFor's has disconnected) a mutation has nobody to tell
+  var whileObserved = function (make) {
+    return function (orig) {
+      var observing = make(orig);
+      return function () { return observers.length ? observing.apply(this, arguments) : orig.apply(this, arguments); };
+    };
+  };
   var install = function () {
     if (wrapped) return;
     wrapped = true;
     [P.Node].forEach(function (proto) {
-      wrap(proto, "appendChild", function (orig) {
+      wrap(proto, "appendChild", whileObserved(function (orig) {
         return function (node) {
           var added = kids(node), before = this.lastChild;
           if (node.nodeType !== 11) removedFrom(node);
@@ -484,8 +515,8 @@
           if (added.length) record("childList", this, { addedNodes: added, previousSibling: before });
           return r;
         };
-      });
-      wrap(proto, "insertBefore", function (orig) {
+      }));
+      wrap(proto, "insertBefore", whileObserved(function (orig) {
         return function (node, ref) {
           var added = kids(node), prev = ref ? ref.previousSibling : this.lastChild;
           if (node.nodeType !== 11 && node !== ref) removedFrom(node);
@@ -493,15 +524,15 @@
           if (added.length) record("childList", this, { addedNodes: added, previousSibling: prev, nextSibling: ref || null });
           return r;
         };
-      });
-      wrap(proto, "removeChild", function (orig) {
+      }));
+      wrap(proto, "removeChild", whileObserved(function (orig) {
         return function (node) {
           var prev = node.previousSibling, next = node.nextSibling, r = orig.call(this, node);
           record("childList", this, { removedNodes: [node], previousSibling: prev, nextSibling: next });
           return r;
         };
-      });
-      wrap(proto, "replaceChild", function (orig) {
+      }));
+      wrap(proto, "replaceChild", whileObserved(function (orig) {
         return function (node, old) {
           var added = kids(node), prev = old.previousSibling, next = old.nextSibling;
           if (node.nodeType !== 11 && node !== old) removedFrom(node);
@@ -509,8 +540,8 @@
           record("childList", this, { addedNodes: added, removedNodes: [old], previousSibling: prev, nextSibling: next });
           return r;
         };
-      });
-      wrap(proto, "textContent", function (set) {
+      }));
+      wrap(proto, "textContent", whileObserved(function (set) {
         return function (v) {
           if (this.nodeType === 3 || this.nodeType === 8) {
             var old = this.data;
@@ -523,37 +554,37 @@
           var added = Array.prototype.slice.call(this.childNodes);
           if (removed.length || added.length) record("childList", this, { addedNodes: added, removedNodes: removed });
         };
-      });
+      }));
     });
-    wrap(P.Element, "innerHTML", function (set) {
+    wrap(P.Element, "innerHTML", whileObserved(function (set) {
       return function (v) {
         var removed = Array.prototype.slice.call(this.childNodes);
         set.call(this, v);
         var added = Array.prototype.slice.call(this.childNodes);
         if (removed.length || added.length) record("childList", this, { addedNodes: added, removedNodes: removed });
       };
-    });
-    wrap(P.CharacterData, "data", function (set) {
+    }));
+    wrap(P.CharacterData, "data", whileObserved(function (set) {
       return function (v) {
         var old = this.data;
         set.call(this, v);
         record("characterData", this, { oldValue: old });
       };
-    });
-    wrap(P.Element, "setAttribute", function (orig) {
+    }));
+    wrap(P.Element, "setAttribute", whileObserved(function (orig) {
       return function (name, value) {
         var old = this.getAttribute(name);
         orig.call(this, name, value);
         record("attributes", this, { attributeName: String(name).toLowerCase(), oldValue: old });
       };
-    });
-    wrap(P.Element, "removeAttribute", function (orig) {
+    }));
+    wrap(P.Element, "removeAttribute", whileObserved(function (orig) {
       return function (name) {
         var old = this.getAttribute(name);
         orig.call(this, name);
         if (old !== null) record("attributes", this, { attributeName: String(name).toLowerCase(), oldValue: old });
       };
-    });
+    }));
   };
   var MutationObserver = function MutationObserver(callback) {
     if (typeof callback !== "function") throw new TypeError("The callback provided as parameter 1 is not a function.");
@@ -666,6 +697,8 @@
     return defs.get(el.localName) || (is && defs.get(is) && defs.get(is).extend === el.localName ? defs.get(is) : null);
   };
   var callback = function (el, name, args) {
+    var hostDef = defOf(el);
+    if (hostDef && hostDef.host) { try { hostDef.Class.call(el, name, args || []); } catch (e) { report(e); } return; }
     var f = el[name];
     if (typeof f === "function") { try { f.apply(el, args || []); } catch (e) { report(e); } }
   };
@@ -674,10 +707,15 @@
     var def_ = defOf(el);
     if (!def_) return;
     Object.defineProperty(el, UPGRADED, { value: true });
-    Object.setPrototypeOf(el, def_.Class.prototype);
-    pending = el;
-    try { new def_.Class(); } catch (e) { report(e); }
-    pending = null;
+    if (def_.host) {
+      // a class of the host: its instance is the host's wrapper of this element, the prototype stays the page's
+      try { def_.Class.call(el, "construct"); } catch (e) { report(e); }
+    } else {
+      Object.setPrototypeOf(el, def_.Class.prototype);
+      pending = el;
+      try { new def_.Class(); } catch (e) { report(e); }
+      pending = null;
+    }
     var observed = def_.Class.observedAttributes || [];
     el.getAttributeNames().forEach(function (n) { if (observed.indexOf(n) >= 0) callback(el, "attributeChangedCallback", [n, null, el.getAttribute(n)]); });
     if (el.isConnected) callback(el, "connectedCallback");
@@ -792,7 +830,13 @@
       if (typeof Class !== "function") throw new TypeError("The constructor provided is not a constructor.");
       if (!/^[a-z][^\sA-Z]*-[^\sA-Z]*$/.test(name)) { var e1 = new Error("'" + name + "' is not a valid custom element name."); e1.name = "SyntaxError"; throw e1; }
       if (defs.has(name) || byClass.has(Class)) { var e2 = new Error("The name '" + name + "' has already been used with this registry."); e2.name = "NotSupportedError"; throw e2; }
-      var info = { name: name, Class: Class, extend: options && options.extends };
+      var info = { name: name, Class: Class, extend: options && options.extends, host: false };
+      if (Class.__hostFn !== undefined) {
+        // a function of the host: the host's custom element class answers, any other function has nothing to say
+        var described;
+        try { described = Class.call(undefined, "__customElement"); } catch (e) { described = null; }
+        if (described && described.observed) { info.host = true; Class.observedAttributes = described.observed; }
+      }
       defs.set(name, info);
       byClass.set(Class, info);
       ceInstall();
@@ -817,17 +861,22 @@
   D.HTMLElement = HTMLElementShim;
 
   // style: a CSSStyleDeclaration over the style attribute (camelCase and kebab-case names, cssText)
-  var kebab = function (k) { return k.replace(/[A-Z]/g, function (c) { return "-" + c.toLowerCase(); }); };
+  var kebabNames = Object.create(null); // the property names of CSS and of a page: a bounded set
+  var kebab = function (k) {
+    return kebabNames[k] || (kebabNames[k] = k.replace(/[A-Z]/g, function (c) { return "-" + c.toLowerCase(); }));
+  };
   var parseStyle = function (text) {
     var out = [];
-    String(text || "").split(";").forEach(function (decl) {
-      var i = decl.indexOf(":");
-      if (i < 0) return;
+    if (!text) return out;
+    var decls = String(text).split(";");
+    for (var d = 0; d < decls.length; d++) {
+      var decl = decls[d], i = decl.indexOf(":");
+      if (i < 0) continue;
       var name = decl.slice(0, i).trim().toLowerCase(), value = decl.slice(i + 1).trim();
-      if (!name || !value) return;
+      if (!name || !value) continue;
       for (var j = 0; j < out.length; j++) if (out[j][0] === name) { out.splice(j, 1); break; }
       out.push([name, value]);
-    });
+    }
     return out;
   };
   var StyleDecl = function CSSStyleDeclaration(el) { Object.defineProperty(this, "_el", { value: el }); };
@@ -856,10 +905,18 @@
     if (text || s._el.hasAttribute("style")) s._el.setAttribute("style", text);
     styleCache.set(s, { text: s._el.getAttribute("style"), items: items });
   };
+  // a length of zero serializes with its unit, as in browsers and jsdom's cssstyle
+  var ZERO_LENGTHS = {};
+  ("width height min-width min-height max-width max-height top right bottom left font-size margin margin-top margin-right " +
+    "margin-bottom margin-left padding padding-top padding-right padding-bottom padding-left border-width border-top-width " +
+    "border-right-width border-bottom-width border-left-width").split(" ").forEach(function (k) { ZERO_LENGTHS[k] = 1; });
   var styleSet = function (s, name, value) {
     name = name.indexOf("--") === 0 ? name : kebab(name);
     var items = styleItems(s).filter(function (d) { return d[0] !== name; });
     value = value == null ? "" : String(value);
+    if (value === "0" && ZERO_LENGTHS[name]) value = "0px";
+    // calc() serializes a negative term with the minus sign, as in browsers and jsdom's cssstyle
+    if (value.indexOf("calc(") >= 0) value = value.replace(/\+ -(?=[\d.])/g, "- ");
     if (value !== "") items.push([name, value]);
     styleWrite(s, items);
   };
@@ -1750,21 +1807,11 @@
     }
     return NS.html;
   });
-  // tagName (and with it nodeName) is upper-cased for an HTML element in an HTML document only;
-  // a foreign element keeps its adjusted name (foreignObject), an XML document's its own case.
-  // The native getter upper-cases everything, so the two are answered here.
-  var elementName = function (el) {
-    var ln = el.localName;
-    var d = el.ownerDocument;
-    if (el.namespaceURI === NS.html && d && !(typeof XMLDocument !== "undefined" && d instanceof XMLDocument)) return ln.toUpperCase();
-    return ln;
-  };
-  getter(P.Element, "tagName", function () { return elementName(this); });
-  getter(P.Element, "nodeName", function () { return elementName(this); });
   getter(P.Element, "prefix", function () { return null; });
   def(P.Document, "createElementNS", function (ns, name) {
     var el = this.createElement(String(name));
-    if (ns && ns !== NS.html) Object.defineProperty(el, NSKEY, { value: String(ns) });
+    if (ns && ns !== NS.html) { Object.defineProperty(el, NSKEY, { value: String(ns) }); D.markForeign(el); }
+    if (ns) D.setElementName(el, String(name));
     return el;
   });
   def(P.Element, "setAttributeNS", function (ns, name, value) { this.setAttribute(name, value); });

@@ -607,6 +607,7 @@
     var n = m ? m[1].toLowerCase() : "";
     return /^(before|after|first-line|first-letter|marker|placeholder|selection)$/.test(n) ? n : "";
   };
+  var sharedChildren = new WeakMap(), ROOT_STYLE = {};
   var cascade = function (el, depth, pseudo) {
     var doc = el.ownerDocument, ua = pseudo ? { display: "inline" } : uaStyle(el), order = 0;
     var cands = []; // [prop, value, imp, inline, w, o, hasVar]
@@ -625,8 +626,21 @@
       for (var j = 0; j < r.decls.length; j++) cands.push([r.decls[j][0], r.decls[j][1], r.decls[j][2], false, r.weight, r.order, r.decls[j][3]]);
     }
     var inline = pseudo ? null : el.getAttribute("style");
-    if (inline) parseDeclarations(inline).forEach(function (d) { cands.push([d[0], d[1], d[2], true, 0, ++order, d[3]]); });
     var parent = pseudo ? el : el.parentElement, parentStyle = parent && depth < 200 ? computedOf(parent, depth + 1) : null;
+    // No rule applies: the style follows from the parent's style, the defaults and the style attribute alone. Such
+    // elements share one object, and it outlives a change to the document as long as what it follows from is unchanged:
+    // without style sheets nearly every element is like this, and a read after any change would recompute the whole
+    // chain of ancestors otherwise.
+    var shareKey = null, shareMap = null;
+    if (!pseudo && !cands.length) {
+      var shareParent = parentStyle || ROOT_STYLE;
+      // the viewport too when the declarations can depend on it: this outlives the document's version, not a resize
+      shareKey = JSON.stringify(ua) + "|" + (inline || "") + "|" + (!parent && doc && doc.documentElement === el) + "|" + (inline && inline.indexOf("v") >= 0 ? g.innerWidth + "x" + g.innerHeight : "");
+      shareMap = sharedChildren.get(shareParent);
+      if (!shareMap) sharedChildren.set(shareParent, (shareMap = {}));
+      if (shareMap[shareKey]) return shareMap[shareKey];
+    }
+    if (inline) parseDeclarations(inline).forEach(function (d) { cands.push([d[0], d[1], d[2], true, 0, ++order, d[3]]); });
     var out = {}, k;
     // custom properties inherit, and a declaration may use any of them
     var vars = {}, custom = picker(), plain = picker();
@@ -674,6 +688,7 @@
     out.overflow = out["overflow-x"] === out["overflow-y"] ? out["overflow-x"] : out["overflow-x"] + " " + out["overflow-y"];
     // the display of a floated or absolutely positioned box is block-level
     if ((out.float !== "none" || out.position === "absolute" || out.position === "fixed") && out.display === "inline") out.display = "block";
+    if (shareKey) shareMap[shareKey] = out;
     return out;
   };
 

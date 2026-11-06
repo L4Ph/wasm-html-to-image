@@ -21,6 +21,10 @@ import type { DOMWindow } from "./bridge.js";
 import { normalizeTimeout } from "./timeout.js";
 import type { HappyDOMSettings } from "./types.js";
 
+/** The host's timers, taken now: the page's clock must keep running under a test's fake timers. */
+const realSetTimeout = setTimeout;
+const realClearTimeout = clearTimeout;
+
 export type { DOMWindow };
 export { CookieJar, type Cookie, type CookieJarLike } from "./cookies.js";
 
@@ -75,6 +79,8 @@ export interface JSDOMOptions extends HappyDOMSettings {
    * `document.hasFocus()` is false.
    */
   pretendToBeVisual?: boolean;
+  /** Run the page's jobs in a microtask of the host, not at the end of each call (what the test environments use). */
+  deferJobs?: boolean;
   /**
    * The cookie jar of the page, shared or injected: `document.cookie`, the cookies of the page's
    * requests and the `Set-Cookie` headers of its responses all go through it. Any jar with the
@@ -174,7 +180,10 @@ export class JSDOM {
       stylesheets: options.resources === "usable" && cssFileLoading,
       visual: options.pretendToBeVisual ?? false,
     });
+    // jsdom has no getAnimations, and libraries take it to mean animations will finish (Base UI's dialogs wait for them)
     const bridge = this.page.dom.bridge({ timeout });
+    bridge.hide("getAnimations");
+    bridge.deferJobs = options.deferJobs ?? false;
     this.bridgeWindow = bridge.window;
     // the page's `window.close()` ends the page
     this.bridgeWindow.close = () => this.close();
@@ -236,7 +245,7 @@ export class JSDOM {
   close(): void {
     if (this.closed) return;
     this.closed = true;
-    if (this.timer) clearTimeout(this.timer);
+    if (this.timer) realClearTimeout(this.timer);
     this.page.dom.close();
   }
 
@@ -285,7 +294,7 @@ export class JSDOM {
     if (this.closed || this.timer) return;
     const wait = this.page.nextWake();
     if (wait < 0) return;
-    this.timer = setTimeout(() => {
+    this.timer = realSetTimeout(() => {
       this.timer = undefined;
       this.page.step(true).then(
         () => this.arm(),

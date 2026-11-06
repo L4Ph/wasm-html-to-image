@@ -36,6 +36,7 @@ static double deadline_ms;
 static JSValue cached_rpc_fn = JS_UNDEFINED;
 static JSValue cached_reply_fn = JS_UNDEFINED;
 static JSValue cached_error_fn = JS_UNDEFINED;
+static JSValue cached_host_fn = JS_UNDEFINED;
 static JSValue cached_byid = JS_UNDEFINED;
 static JSContext *cached_ctx = NULL;
 
@@ -44,11 +45,13 @@ static void reset_rpc_cache(void) {
         if (!JS_IsUndefined(cached_rpc_fn)) JS_FreeValue(cached_ctx, cached_rpc_fn);
         if (!JS_IsUndefined(cached_reply_fn)) JS_FreeValue(cached_ctx, cached_reply_fn);
         if (!JS_IsUndefined(cached_error_fn)) JS_FreeValue(cached_ctx, cached_error_fn);
+        if (!JS_IsUndefined(cached_host_fn)) JS_FreeValue(cached_ctx, cached_host_fn);
         if (!JS_IsUndefined(cached_byid)) JS_FreeValue(cached_ctx, cached_byid);
     }
     cached_rpc_fn = JS_UNDEFINED;
     cached_reply_fn = JS_UNDEFINED;
     cached_error_fn = JS_UNDEFINED;
+    cached_host_fn = JS_UNDEFINED;
     cached_byid = JS_UNDEFINED;
     cached_ctx = NULL;
 }
@@ -59,6 +62,7 @@ static void update_rpc_cache(void) {
         cached_ctx = ctx;
         JSValue global = JS_GetGlobalObject(ctx);
         cached_rpc_fn = JS_GetPropertyStr(ctx, global, "__rpc");
+        cached_host_fn = JS_GetPropertyStr(ctx, global, "__rpcHostFunction");
         cached_reply_fn = JS_GetPropertyStr(ctx, global, "__reply");
         cached_error_fn = JS_GetPropertyStr(ctx, global, "__rpcError");
         cached_byid = JS_GetPropertyStr(ctx, global, "__byId");
@@ -412,6 +416,13 @@ static JSValue rpc_decode_token(JSContext *c, JSValueConst byid, const char *p, 
         for (size_t k = 1; k < toklen; k++) hid = hid * 10 + (uint32_t)(p[k] - '0');
         return JS_GetPropertyUint32(c, byid, hid);
     }
+    if (tc == 'f') {
+        double fid = 0;
+        for (size_t k = 1; k < toklen; k++) fid = fid * 10 + (p[k] - '0');
+        JSValue arg = JS_NewFloat64(c, fid);
+        JSValue r = JS_Call(c, cached_host_fn, JS_UNDEFINED, 1, &arg);
+        return r;
+    }
     return JS_UNDEFINED;
 }
 
@@ -633,20 +644,10 @@ EXPORT("qd_rpc") int qd_rpc(const char *req, size_t len) {
     }
 slow:
     if (rc < 0) rc = rpc_slow(fn, req, len);
-    if (rc == 0 && JS_IsJobPending(rt)) {
-        int jobs_ran = 0;
-        for (;;) {
-            JSContext *c;
-            int r = JS_ExecutePendingJob(rt, &c);
-            if (r == 0) break;
-            jobs_ran++;
-            if (r < 0) {
-                JSValue e = JS_GetException(c);
-                JS_FreeValue(c, e);
-            }
-        }
-        if (jobs_ran > 0) rc |= 2;
-    }
+    /* The page's jobs (promise reactions, MutationObserver deliveries) do not run here: this call is one step of the
+       host's synchronous code, and a browser runs them only when that code has finished. The host decides when (qd_jobs,
+       see Bridge.send) when told some are waiting. */
+    if (JS_IsJobPending(rt)) rc |= 2;
     return rc;
 }
 
