@@ -43,9 +43,6 @@ interface Cell {
   /** defaultView of a document: fixed when the document is made. `dvSet` tells "null" from "not read yet". */
   dv?: unknown;
   dvSet?: boolean;
-  /** ownerDocument of a node, and the `docGen` it was known at (it is stale once `docGen` has moved on). */
-  od?: unknown;
-  odGen?: number;
   /** A function read as a property of an object of the page: that object and the name it was read under. */
   of?: Cell;
   key?: string;
@@ -77,24 +74,6 @@ const PURE_CALLS = new Set([
  * PURE_CALLS: there the name is of a method of a known interface, here it can be any page object's (store.item()).
  */
 const PURE_FUNCTIONS = new Set(["getComputedStyle", "getPropertyValue", "getPropertyPriority"]);
-/** Calls that make a node and put it in the document they were called on: the answer's ownerDocument is the target. */
-const CREATES = new Set(["createElement", "createElementNS", "createTextNode", "createComment", "createDocumentFragment"]);
-
-/** Calls that insert the nodes they are given: a node of another document is adopted by the target's document. */
-const INSERTS = new Set([
-  "appendChild", "insertBefore", "replaceChild", "append", "prepend", "before", "after", "replaceWith", "replaceChildren",
-  "insertAdjacentElement", "adoptNode",
-]);
-
-/**
- * Calls that move no node to another document, so what the host knows of owners holds. Of the page's code they can
- * only run a custom element's attributeChangedCallback, and adopting a node from there is taken not to happen.
- */
-const KEEPS_OWNERS = new Set([
-  ...CREATES, "setAttribute", "setAttributeNS", "removeAttribute", "removeAttributeNS", "toggleAttribute", "removeChild",
-  "addEventListener", "removeEventListener",
-]);
-
 interface SelectorCheck {
   tagRequired?: Set<string>;
   alwaysTrue?: boolean;
@@ -223,6 +202,9 @@ export class Bridge {
   private readonly registry: FinalizationRegistry<Cell>;
   private released: [number, number][] = [];
   // wrappers the host put its own properties on: they stay until the bridge is disposed
+  private jobsQueued = false;
+  /** The element a custom element class of the host is being constructed for (its HTMLElement constructor answers it). */
+  private upgrading: object | undefined;
   private readonly pinned = new Set<object>();
   // What reads answered since the page last ran code of its own. Reading a property or calling a pure method again
   // gives the same answer until the page changes (a write, any other call, a job or timer, a listener of the host's
@@ -230,11 +212,6 @@ export class Bridge {
   private readonly reads = new Map<Cell, Map<string, unknown>>();
   /** The same for pure methods: per node, method and arguments (a dynamic wrapper reads a method as a property too). */
   private readonly callReads = new Map<Cell, Map<string, Map<string, unknown>>>();
-  /** Moves on whenever a node may have changed document; an ownerDocument the host kept is good only for its own generation. */
-  private docGen = 0;
-  private jobsQueued = false;
-  /** The element a custom element class of the host is being constructed for (its HTMLElement constructor answers it). */
-  private upgrading: object | undefined;
   private readonly customElements = new WeakMap<object, Function>();
   /**
    * Whether the page's jobs wait for a microtask of the host instead of running at the end of each call. A test
@@ -355,11 +332,6 @@ export class Bridge {
 
   /** The page may have changed: forget what was read. (Called by whoever ran code in the page.) */
   invalidate(): void {
-    this.dropReads();
-    this.docGen++;
-  }
-
-  private dropReads(): void {
     if (this.reads.size) this.reads.clear();
     if (this.callReads.size) this.callReads.clear();
   }
@@ -437,7 +409,7 @@ export class Bridge {
     if (this.released.length === 0 || this.closed) return;
     const list = this.released;
     this.released = [];
-    this.dropReads(); // a released id may be given to another object
+    this.invalidate(); // a released id may be given to another object
     this.sendJ(["release", list]);
   }
 
@@ -593,13 +565,6 @@ export class Bridge {
       cell.dvSet = true;
       return value;
     }
-    if (key === "ownerDocument" && cell.t !== 9) {
-      if (cell.od !== undefined && cell.odGen === this.docGen) return cell.od;
-      const value = this.send("g" + cell.id + "\u0001" + key);
-      cell.od = value;
-      cell.odGen = this.docGen;
-      return value;
-    }
     // React asks every event target for this one (getEventTarget); only an SVG <use> has it, and for anything
     // else the property does not exist. Answering it here is the same answer the page would give, without a call.
     if (key === "correspondingUseElement" && cell.t === 1 && cell.l !== "use") return undefined;
@@ -653,7 +618,7 @@ export class Bridge {
   }
 
   private set(cell: Cell, key: string, value: unknown): void {
-    this.dropReads();
+    this.invalidate();
     this.write(cell, key, value);
     // and after: the page's setter may have changed anything, and may have called a host listener that read
     this.invalidate();
@@ -755,13 +720,8 @@ export class Bridge {
     if (!pure) {
       // the drop after is what makes the calls that follow see the page's new state; dropping before as well
       // only threw away reads that were still good, so it is not done
-      // decided before the call: it reads what is known of the owners of the target and the arguments
-      const keeps = KEEPS_OWNERS.has(key) || (INSERTS.has(key) && this.sameOwner(cell, args));
       const value = this.send("c" + cell.id + "\u0001" + key + "\u0001" + encoded);
-      this.dropReads();
-      // anything else may run page code or adopt a node into another document
-      if (!keeps) this.docGen++;
-      else if (CREATES.has(key) && cell.t === 9) this.ownedBy(value, cell);
+      this.invalidate();
       return value;
     }
     let own = this.callReads.get(cell);
@@ -773,29 +733,6 @@ export class Bridge {
     const value = this.send("c" + cell.id + "\u0001" + key + "\u0001" + encoded);
     reads.set(lookup, value);
     return value;
-  }
-
-  /** Whether the target and every node among `args` are known (this generation) to belong to one document. */
-  private sameOwner(target: Cell, args: unknown[]): boolean {
-    const owner = target.t === 9 ? this.wrappers.get(target.id)?.deref() : target.odGen === this.docGen ? target.od : undefined;
-    if (!owner) return false;
-    for (const a of args) {
-      if (a === null || typeof a !== "object") continue; // text and numbers are not nodes
-      const c = (a as any)[HANDLE] as Cell | undefined;
-      if (!c) return false; // something else the page may hold nodes of
-      if (c.odGen !== this.docGen || c.od !== owner) return false;
-    }
-    return true;
-  }
-
-  /** `node` was just made by `doc`: its ownerDocument is `doc`, with no call. */
-  private ownedBy(node: unknown, doc: Cell): void {
-    const c = node && typeof node === "object" ? ((node as any)[HANDLE] as Cell | undefined) : undefined;
-    const owner = this.wrappers.get(doc.id)?.deref();
-    if (c && owner) {
-      c.od = owner;
-      c.odGen = this.docGen;
-    }
   }
 
   // ---- values ----
