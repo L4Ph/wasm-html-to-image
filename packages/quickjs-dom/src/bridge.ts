@@ -221,6 +221,12 @@ export class Bridge {
    * properties are written, so an attribute-only change (invalidateAttrs) must not drop these — a run of
    * style writes otherwise pays a fresh crossing per write just to re-read the same object. */
   private readonly styleObjs = new Map<string, unknown>();
+  /** The last value the host wrote for each fine (state-only) property of a cell, per cell: a framework
+   * re-render sets the same className / value / text again on most nodes, and the write is a pure function
+   * of that value, so an identical repeat can be dropped entirely. The memo for a cell is dropped when an
+   * attribute write lands on it (attributes back properties), and the whole map goes with any full
+   * invalidation, which is also what a release does before a handle id can be reused. */
+  private readonly setMemo = new Map<number, Map<string, unknown>>();
   /** The reads that depend on the shape of the tree only (see STRUCT_KEYS): a change of attributes leaves them be. */
   private readonly sreads = new Map<string, unknown>();
   /** Whether the page has custom elements (their callbacks run page code on an attribute change): 0 = ask, 1 = none, 2 = yes (final). */
@@ -330,6 +336,7 @@ export class Bridge {
   /** The page may have changed: forget what was read. (Called by whoever ran code in the page.) */
   invalidate(keepCe = false, keepOd = false): void {
     if (this.reads.size) this.reads.clear();
+    if (this.setMemo.size) this.setMemo.clear();
     if (this.styleObjs.size) this.styleObjs.clear();
     if (this.sreads.size) this.sreads.clear();
     if (!keepCe && this.ce === 1) this.ce = 0;
@@ -589,6 +596,25 @@ export class Bridge {
         this.sreads.delete(memo);
       }
     }
+    // a repeat of a state-only write with the value already in the page (written by the host
+    // before, or just read back from it) has nothing to do: skip the crossing entirely
+    const memoizable =
+      (value === null || typeof value === "string" || typeof value === "number" || typeof value === "boolean") &&
+      (cell.t === 1
+        ? FINE_SET_KEYS.has(key) && cell.l !== "select"
+        : cell.t === 3 || cell.t === 8
+          ? TEXT_SET_KEYS.has(key)
+          : cell.c === "CSSStyleDeclaration");
+    if (memoizable) {
+      const per = this.setMemo.get(cell.id);
+      if (per && per.get(key) === value) return;
+      const rk = cell.id + "\u0001" + key;
+      if (this.reads.get(rk) === value && this.reads.has(rk)) {
+        if (per) per.set(key, value);
+        else this.setMemo.set(cell.id, new Map([[key, value]]));
+        return;
+      }
+    }
     if (
       (cell.t === 1
         ? (FINE_SET_KEYS.has(key) || ON_HANDLER.test(key)) && cell.l !== "select"
@@ -613,6 +639,16 @@ export class Bridge {
     if (cell.t === 1 && typeof value === "function" && ON_HANDLER.test(key)) {
       if (this.sreads.size > 100000) this.sreads.clear();
       this.sreads.set(cell.id + "\u0001set:" + key, value);
+    }
+    if (memoizable) {
+      let per = this.setMemo.get(cell.id);
+      if (!per) {
+        per = new Map();
+        this.setMemo.set(cell.id, per);
+      }
+      // a cssText write replaces every declaration, so the cell's other style memos go with it
+      if (key === "cssText") per.clear();
+      per.set(key, value);
     }
   }
 
@@ -671,6 +707,9 @@ export class Bridge {
         }
         if (cell.t === 1 && !LISTENER_CALLS.has(key)) {
           this.invalidateAttrs();
+          // an attribute write on this element can back any of its properties (class/className,
+          // value/defaultValue, checked), so the element's set memos no longer describe the page
+          this.setMemo.delete(cell.id);
           // setAttribute("onclick", "...") replaces the handler the host set
           const attr = typeof args[0] === "string" ? args[0].toLowerCase() : "";
           if (attr.startsWith("on")) this.sreads.delete(cell.id + "\u0001set:" + attr);
