@@ -168,10 +168,29 @@ static void nd_normalize(JSContext *c, JSValueConst node) {
 #define ND_ARG(var, i, what) if (argc <= (i) || !nd_of(argv[i])) return JS_ThrowTypeError(ctx, "Failed to execute '" what "': parameter " #i " is not of type 'Node'."); (void)var
 
 static JSValue js_nd_type(JSContext *ctx, JSValueConst this_val) { ND_THIS(n); return JS_NewInt32(ctx, n->type); }
+/* Whether this is an HTML element of an HTML document: its attribute names are matched lower-cased and its tagName is
+   upper-cased (the DOM spec). Mirrors namespaceURI in scripts/edge-js/dom/01-core.js. */
+static int nd_attr_case_folded(ND *n) {
+    if (n->foreign) return 0;
+    ND *owner = JS_IsNull(n->owner) ? NULL : nd_of(n->owner);
+    if (owner && owner->xml) return 0;
+    if (!n->tag) return 1;
+    if ((n->taglen == 3 && !memcmp(n->tag, "svg", 3)) || (n->taglen == 4 && !memcmp(n->tag, "math", 4))) return 0;
+    for (ND *a = JS_IsNull(n->parent) ? NULL : nd_of(n->parent); a && a->type == 1; a = JS_IsNull(a->parent) ? NULL : nd_of(a->parent)) {
+        if (a->foreign || (a->taglen == 3 && !memcmp(a->tag, "svg", 3)) || (a->taglen == 4 && !memcmp(a->tag, "math", 4))) return 0;
+        if ((a->taglen == 13 && !strncasecmp(a->tag, "foreignObject", 13)) || (a->taglen == 4 && !memcmp(a->tag, "desc", 4)) || (a->taglen == 5 && !memcmp(a->tag, "title", 5))) return 1;
+        if (a->taglen == 14 && !memcmp(a->tag, "annotation-xml", 14)) {
+            NAttr *enc = nd_find_attr(a, "encoding", 8);
+            if (enc && enc->vlen == 9 && !memcmp(enc->val, "text/html", 9)) return 1;
+        }
+    }
+    return 1;
+}
 static JSValue js_nd_node_name(JSContext *ctx, JSValueConst this_val) {
     ND_THIS(n);
     switch (n->type) {
     case 1: {
+        if (!nd_attr_case_folded(n)) return JS_NewStringLen(ctx, n->tag, (size_t)n->taglen);
         char *t = nd_dup(n->tag, (size_t)n->taglen);
         for (int i = 0; i < n->taglen; i++) if (t[i] >= 'a' && t[i] <= 'z') t[i] -= 32;
         JSValue r = JS_NewStringLen(ctx, t, (size_t)n->taglen);
@@ -422,14 +441,28 @@ static JSValue js_nd_normalize(JSContext *ctx, JSValueConst this_val, int argc, 
 }
 
 /* attributes */
+/* `name` as this element stores it: a copy to free when it had to change, or NULL (use `name` as is). No upper-case
+   letter (nearly every call) costs one scan. */
+static char *nd_attr_fold(ND *n, const char *name, size_t len) {
+    size_t i = 0;
+    while (i < len && !(name[i] >= 'A' && name[i] <= 'Z')) i++;
+    if (i == len || !nd_attr_case_folded(n)) return NULL;
+    char *low = malloc(len + 1);
+    if (!low) return NULL;
+    for (i = 0; i < len; i++) low[i] = (name[i] >= 'A' && name[i] <= 'Z') ? (char)(name[i] + 32) : name[i];
+    low[len] = 0;
+    return low;
+}
 static JSValue js_nd_get_attribute(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     ND_THIS(n);
     if (argc < 1) return JS_NULL;
     size_t len;
     const char *name = JS_ToCStringLen(ctx, &len, argv[0]);
     if (!name) return JS_EXCEPTION;
-    NAttr *a = nd_find_attr(n, name, len);
+    char *low = nd_attr_fold(n, name, len);
+    NAttr *a = nd_find_attr(n, low ? low : name, len);
     JSValue r = a ? JS_NewStringLen(ctx, a->val, (size_t)a->vlen) : JS_NULL;
+    free(low);
     JS_FreeCString(ctx, name);
     return r;
 }
@@ -446,7 +479,11 @@ static JSValue js_nd_set_attribute(JSContext *ctx, JSValueConst this_val, int ar
     size_t nl, vl;
     const char *name = JS_ToCStringLen(ctx, &nl, argv[0]);
     const char *val = JS_ToCStringLen(ctx, &vl, argv[1]);
-    if (name && val) nd_set_attr(n, name, nl, val, vl);
+    if (name && val) {
+        char *low = nd_attr_fold(n, name, nl);
+        nd_set_attr(n, low ? low : name, nl, val, vl);
+        free(low);
+    }
     if (name) JS_FreeCString(ctx, name);
     if (val) JS_FreeCString(ctx, val);
     return JS_UNDEFINED;
@@ -457,10 +494,12 @@ static JSValue js_nd_remove_attribute(JSContext *ctx, JSValueConst this_val, int
     size_t len;
     const char *name = JS_ToCStringLen(ctx, &len, argv[0]);
     if (!name) return JS_EXCEPTION;
-    NAttr *a = nd_find_attr(n, name, len);
+    char *low = nd_attr_fold(n, name, len);
+    const char *key = low ? low : name;
+    NAttr *a = nd_find_attr(n, key, len);
     if (a) {
         int jok = nd_jbegin();
-        if (jok) nd_jattr(n, name, len, NULL, 0);
+        if (jok) nd_jattr(n, key, len, NULL, 0);
         nd_jend(jok, 1);
         nd_version++;
         free(a->name);
@@ -468,6 +507,7 @@ static JSValue js_nd_remove_attribute(JSContext *ctx, JSValueConst this_val, int
         memmove(a, a + 1, sizeof(NAttr) * (size_t)(n->nattrs - (int)(a - n->attrs) - 1));
         n->nattrs--;
     }
+    free(low);
     JS_FreeCString(ctx, name);
     return JS_UNDEFINED;
 }
@@ -622,6 +662,13 @@ static JSValue js_doc_adopt(JSContext *ctx, JSValueConst this_val, int argc, JSV
 }
 
 /* the module functions: __native.dom.* */
+static JSValue js_dom_mark_foreign(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)ctx;
+    (void)this_val;
+    ND *n = argc > 0 ? nd_of(argv[0]) : NULL;
+    if (n) n->foreign = 1;
+    return JS_UNDEFINED;
+}
 static JSValue js_dom_create_document(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;
     (void)argc;
@@ -971,6 +1018,7 @@ static void nd_register(JSContext *c, JSValueConst native) {
     JS_SetPropertyStr(c, dom, "ctors", ctors);
     JS_SetPropertyStr(c, dom, "protos", protos);
     JS_SetPropertyStr(c, dom, "serialize", JS_NewCFunction(c, js_dom_serialize, "serialize", 1));
+    JS_SetPropertyStr(c, dom, "markForeign", JS_NewCFunction(c, js_dom_mark_foreign, "markForeign", 1));
     JS_SetPropertyStr(c, dom, "setTagProto", JS_NewCFunction(c, js_dom_set_tag_proto, "setTagProto", 2));
     JS_SetPropertyStr(c, dom, "version", JS_NewCFunction(c, js_dom_version, "version", 0));
     JS_SetPropertyStr(c, dom, "journalOn", JS_NewCFunction(c, js_dom_journal_on, "journalOn", 1));

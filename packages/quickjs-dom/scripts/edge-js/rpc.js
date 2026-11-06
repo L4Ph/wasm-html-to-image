@@ -5,7 +5,9 @@
   var D = g.__native.dom;
   // handle table: arrays by id (a Map keyed by small integers is slow in QuickJS), ids of let-go objects are reused
   var byId = [undefined], sent = [0], free = [], live = 0, byObj = new Map();
-  var callbacks = new Map(); // id of a function of the host's -> the function that calls it from here
+  // id of a function of the host's -> the function that calls it from here. A plain object, not a Map: QuickJS hashes
+  // the sequential integer ids of a Map badly (a set costs 2-4 us, ~20x an object's), and every new listener paid it.
+  var callbacks = Object.create(null), callbackCount = 0;
   var protoNames = null, ctorNames = null, ctorByName = null, interfaces = null;
 
   // The language's and the runtime's own globals. They are non-enumerable like the page's defineProperty-installed
@@ -211,7 +213,9 @@
       case "string": return e.indexOf(SEP) < 0 && e.indexOf("\u0002") < 0 ? "s" + e : null;
       default:
         if (e === null) return "N";
-        return e.$ === "h" ? "h" + e.i : null;
+        // with its class: the host may see this object for the first time here, and makes its wrapper from what it gets
+        if (e.$ !== "h") return null;
+        return e.c ? "h" + e.i + "\u0001" + e.c + "\u0001" + (e.t === undefined ? "" : e.t) + "\u0001" + (e.n || "") : "h" + e.i;
     }
   };
   var tokenValue = function (t) {
@@ -223,15 +227,17 @@
       case 110: return +t.slice(1); // n
       case 115: return t.slice(1); // s
       case 104: return target(+t.slice(1)); // h
+      case 102: return hostFunction(+t.slice(1)); // f
       default: return undefined;
     }
   };
   var hostFunction = function (id) {
-    var ref = callbacks.get(id), f = ref && ref.deref();
+    var ref = callbacks[id], f = ref && ref.deref();
     if (!f) {
       f = function () { return callHost(id, this, arguments); };
       f.__hostFn = id;
-      callbacks.set(id, new WeakRef(f));
+      if (ref === undefined) callbackCount++;
+      callbacks[id] = new WeakRef(f);
     }
     return f;
   };
@@ -392,14 +398,17 @@
     // of these functions of the host's, the ones the page no longer holds (the host may let them go)
     deadfns: function (r) {
       return json(r[1].filter(function (id) {
-        var ref = callbacks.get(id);
+        var ref = callbacks[id];
         if (ref && ref.deref()) return false;
-        callbacks.delete(id);
+        if (ref !== undefined) { delete callbacks[id]; callbackCount--; }
         return true;
       }));
     },
-    liveFns: function () { return callbacks.size; },
+    liveFns: function () { return callbackCount; },
   };
+
+  // qd_rpc makes a function token with this (no JSON for a listener, the one object argument nearly every page passes)
+  g.__rpcHostFunction = hostFunction;
 
   var callMethod = function (id, key, args) {
     var o = target(id), f = o[key];

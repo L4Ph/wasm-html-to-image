@@ -58,6 +58,7 @@ export default {
       ...jsdomRest,
       ...givenRest,
       pretendToBeVisual: givenVisual ?? jsdomVisual ?? true,
+      deferJobs: true,
       runScripts: givenRunScripts ?? jsdomRunScripts ?? "dangerously",
       resources: givenResources ?? jsdomResources,
       url: givenUrl ?? jsdomUrl ?? options?.url ?? "http://localhost/",

@@ -33,9 +33,37 @@
   g.Location = function Location() { throw new TypeError("Illegal constructor"); };
   g.History = function History() { illegal(); };
   Object.assign(g.History.prototype, {
-    pushState: function (s, t, u) { this.state = s; this.length++; this._moveTo?.(u); },
-    replaceState: function (s, t, u) { this.state = s; this._moveTo?.(u); },
-    back: function () {}, forward: function () {}, go: function () {},
+    pushState: function (s, t, u) {
+      this._moveTo?.(u);
+      this.state = s;
+      this._entries.length = this._index + 1;
+      this._entries.push({ state: s, url: g.location.href });
+      this._index++;
+      this.length = this._entries.length;
+    },
+    replaceState: function (s, t, u) {
+      this._moveTo?.(u);
+      this.state = s;
+      this._entries[this._index] = { state: s, url: g.location.href };
+    },
+    back: function () { this.go(-1); },
+    forward: function () { this.go(1); },
+    // the traversal is a task of its own: the entry changes and popstate fires after the caller's code
+    go: function (delta) {
+      var self = this, d = Number(delta) || 0;
+      if (!d) return;
+      setTimeout(function () {
+        var i = self._index + d, entry = self._entries[i];
+        if (!entry) return;
+        var oldURL = g.location.href;
+        self._index = i;
+        self.state = entry.state;
+        self._moveTo(entry.url);
+        g.dispatchEvent(new g.PopStateEvent("popstate", { state: entry.state }));
+        var without = function (u) { var c = u.indexOf("#"); return c < 0 ? u : u.slice(0, c); };
+        if (oldURL !== entry.url && without(oldURL) === without(entry.url)) g.dispatchEvent(new g.HashChangeEvent("hashchange", { oldURL: oldURL, newURL: entry.url }));
+      }, 0);
+    },
   });
   g.Screen = function Screen() { illegal(); };
   g.BarProp = function BarProp() { illegal(); };
@@ -909,6 +937,8 @@
     }
     g.history = Object.create(g.History.prototype);
     Object.assign(g.history, { state: null, length: 1, scrollRestoration: "auto", _moveTo: moveTo });
+    Object.defineProperty(g.history, "_entries", { value: [{ state: null, url: loc.href }] });
+    Object.defineProperty(g.history, "_index", { value: 0, writable: true });
 
     // Screen
     g.screen = Object.create(g.Screen.prototype);

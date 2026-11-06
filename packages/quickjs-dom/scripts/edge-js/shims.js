@@ -409,7 +409,33 @@
     abort() { this.readyState = 2; }
   };
   g.FormData = g.FormData || class {
-    constructor() { this.l = []; }
+    constructor(form, submitter) {
+      this.l = [];
+      if (form === undefined || form === null) return;
+      // the entry list of a form: its named, enabled controls, as a submission would send them
+      var self = this;
+      Array.prototype.forEach.call(form.elements, function (el) {
+        var type = (el.type || "").toLowerCase(), tag = el.localName;
+        if (!el.name || el.matches(":disabled") || tag === "fieldset" || tag === "object" || tag === "output") return;
+        if (tag === "button" || type === "submit" || type === "image" || type === "button" || type === "reset") {
+          if (el === submitter) self.append(el.name, el.value);
+          return;
+        }
+        if ((type === "checkbox" || type === "radio") && !el.checked) return;
+        if (tag === "select") {
+          Array.prototype.forEach.call(el.options, function (o) { if (o.selected && !o.matches(":disabled")) self.append(el.name, o.value); });
+          return;
+        }
+        if (type === "file") {
+          var files = el.files || [];
+          if (!files.length) self.append(el.name, new g.File([], ""));
+          Array.prototype.forEach.call(files, function (f) { self.append(el.name, f); });
+          return;
+        }
+        self.append(el.name, el.value);
+      });
+    }
+    forEach(fn, thisArg) { this.l.slice().forEach(function (e) { fn.call(thisArg, e[1], e[0], this); }, this); }
     append(k, v) { this.l.push([String(k), v]); }
     set(k, v) { this.delete(k); this.append(k, v); }
     get(k) { var e = this.l.find(function (x) { return x[0] === k; }); return e ? e[1] : null; }
