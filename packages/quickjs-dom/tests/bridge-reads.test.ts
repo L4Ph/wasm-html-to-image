@@ -61,6 +61,22 @@ describe("reads that outlast a change of attributes", () => {
     expect(a.textContent).toBe("three");
   });
 
+  it("a slot write reflects and takes the state-only (fine) path", async () => {
+    const w = await open('<body><div id=a></div>');
+    const d = w.document;
+    const a = d.getElementById("a");
+    // a fine write is queueable inside a transaction: it stays out of the page until the flush and is applied in order
+    dom!.bridge().transact(() => {
+      a.slot = "s";
+      a.className = "c";
+    });
+    expect(a.getAttribute("slot")).toBe("s");
+    expect(a.slot).toBe("s");
+    expect(a.className).toBe("c");
+    a.slot = "t";
+    expect(a.getAttribute("slot")).toBe("t");
+  });
+
   it("see a node moved into another document", async () => {
     const w = await open("<body><div id=a></div>");
     const d = w.document;
@@ -113,6 +129,40 @@ describe("custom elements run page code on a change of attributes", () => {
     a.setAttribute("data-n", "2");
     expect(a.firstChild.nodeName).toBe("EM");
     expect(a.childNodes.length).toBe(3);
+  });
+});
+
+describe("getComputedStyle keeps what an attribute change cannot change", () => {
+  it("the declaration object and the function binding survive an attribute-only change; page code still replaces them", async () => {
+    const w = await open("<body><style>.x{color:red}.y{color:blue}</style><div id=a class=x></div>");
+    const d = w.document;
+    const a = d.getElementById("a");
+    const view = d.defaultView;
+    const first = view.getComputedStyle(a);
+    expect(first.getPropertyValue("color")).toBe("rgb(255, 0, 0)");
+    // reading it again through the same window answers the same object without page code
+    expect(view.getComputedStyle(a)).toBe(first);
+    a.className = "y"; // attribute only: no page code runs
+    const again = view.getComputedStyle(a);
+    expect(again).toBe(first); // the identity is not attribute-dependent
+    expect(again.getPropertyValue("color")).toBe("rgb(0, 0, 255)"); // the values are read live
+    // the page may replace the function itself: page code runs, so the host must not serve the old binding
+    await dom!.eval(`window.getComputedStyle = function () { return { marker: "page" } }`);
+    expect((d.defaultView.getComputedStyle(a) as any).marker).toBe("page");
+  });
+
+  it("a select value write is still sent when the same value is already selected", async () => {
+    const w = await open('<body><select id=s><option value=a>A</option><option value=b>B</option></select>');
+    const d = w.document;
+    const s = d.getElementById("s") as HTMLSelectElement;
+    s.value = "a";
+    expect(s.selectedIndex).toBe(0);
+    // the page moves the selection behind the host's back; the same value must be written again (select is
+    // excluded from the same-value memo: its value is not the whole of the state it sets)
+    await dom!.eval('document.getElementById("s").selectedIndex = 1');
+    s.value = "a";
+    expect(s.selectedIndex).toBe(0);
+    expect(s.value).toBe("a");
   });
 });
 
