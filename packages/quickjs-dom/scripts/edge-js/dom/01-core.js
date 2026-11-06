@@ -1755,6 +1755,7 @@
   def(P.Document, "createElementNS", function (ns, name) {
     var el = this.createElement(String(name));
     if (ns && ns !== NS.html) { Object.defineProperty(el, NSKEY, { value: String(ns) }); D.markForeign(el); }
+    if (ns) D.setElementName(el, String(name));
     return el;
   });
   def(P.Element, "setAttributeNS", function (ns, name, value) { this.setAttribute(name, value); });

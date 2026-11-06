@@ -599,6 +599,14 @@ export class Bridge {
   }
 
   /** What is known of `cell` since the page last ran code. Emptied as a whole, so it holds no wrapper alive for long. */
+  /** The items of a list of the page (Testing Library goes through each input's `labels`), until the page changes. */
+  private items(cell: Cell): unknown[] {
+    const reads = this.readsOf(cell);
+    let list = reads.get("*array") as unknown[] | undefined;
+    if (!list) reads.set("*array", (list = this.sendJ(["array", cell.id]) as unknown[]));
+    return list;
+  }
+
   private readsOf(cell: Cell): Map<string, unknown> {
     let m = this.reads.get(cell);
     if (!m) this.reads.set(cell, (m = new Map()));
@@ -885,7 +893,7 @@ export class Bridge {
     Object.defineProperty(target, HANDLE, { value: cell, configurable: true });
     let cachedKeys: Set<string> | null = null;
     return new Proxy(target, {
-      get: (t, k) => {
+      get: (t, k, r) => {
         if (k === HANDLE) return cell;
         // every own name of the page's window (non-enumerable interfaces included), for installWindow
         if (k === WIN_KEYS) return () => this.sendJ(["names", cell.id]) as string[];
@@ -893,6 +901,8 @@ export class Bridge {
         if (k === WIN_CALL) return (key: string, args: unknown[]) => this.call(cell, key, args);
         if (typeof k === "symbol") {
           if (k === Symbol.iterator && this.sendJ(["has", cell.id, "length"])) return () => (this.sendJ(["array", cell.id]) as unknown[])[Symbol.iterator]();
+          // an iterator of the page (what FormData.entries() answers) is its own iterable, as in the language
+          if (k === Symbol.iterator && this.sendJ(["has", cell.id, "next"])) return () => r;
           return undefined;
         }
         if (k === "then") return undefined;
@@ -1040,7 +1050,7 @@ export class Bridge {
       }
       if (s.it) {
         Object.defineProperty(cls.prototype, Symbol.iterator, {
-          value: function (this: any) { return (bridge.sendJ(["array", this[HANDLE].id]) as unknown[])[Symbol.iterator](); },
+          value: function (this: any) { return bridge.items(this[HANDLE])[Symbol.iterator](); },
           writable: true, configurable: true,
         });
       }

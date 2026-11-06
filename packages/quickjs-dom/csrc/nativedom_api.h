@@ -669,6 +669,22 @@ static JSValue js_dom_mark_foreign(JSContext *ctx, JSValueConst this_val, int ar
     if (n) n->foreign = 1;
     return JS_UNDEFINED;
 }
+/* createElementNS keeps the name as given (linearGradient), where createElement lower-cased it */
+static JSValue js_dom_set_element_name(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
+    (void)this_val;
+    ND *n = argc > 1 ? nd_of(argv[0]) : NULL;
+    if (!n || n->type != 1) return JS_UNDEFINED;
+    size_t len;
+    const char *s = JS_ToCStringLen(ctx, &len, argv[1]);
+    if (!s) return JS_EXCEPTION;
+    if ((size_t)n->taglen != len || memcmp(n->tag, s, len) != 0) {
+        free(n->tag);
+        n->tag = nd_dup(s, len);
+        n->taglen = (int)len;
+    }
+    JS_FreeCString(ctx, s);
+    return JS_UNDEFINED;
+}
 static JSValue js_dom_create_document(JSContext *ctx, JSValueConst this_val, int argc, JSValueConst *argv) {
     (void)this_val;
     (void)argc;
@@ -1019,6 +1035,7 @@ static void nd_register(JSContext *c, JSValueConst native) {
     JS_SetPropertyStr(c, dom, "protos", protos);
     JS_SetPropertyStr(c, dom, "serialize", JS_NewCFunction(c, js_dom_serialize, "serialize", 1));
     JS_SetPropertyStr(c, dom, "markForeign", JS_NewCFunction(c, js_dom_mark_foreign, "markForeign", 1));
+    JS_SetPropertyStr(c, dom, "setElementName", JS_NewCFunction(c, js_dom_set_element_name, "setElementName", 2));
     JS_SetPropertyStr(c, dom, "setTagProto", JS_NewCFunction(c, js_dom_set_tag_proto, "setTagProto", 2));
     JS_SetPropertyStr(c, dom, "version", JS_NewCFunction(c, js_dom_version, "version", 0));
     JS_SetPropertyStr(c, dom, "journalOn", JS_NewCFunction(c, js_dom_journal_on, "journalOn", 1));
