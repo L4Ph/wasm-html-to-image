@@ -858,7 +858,10 @@ export class Bridge {
       if (new.target) return bridge.sendJ(["construct", cell.id, args.map((a) => bridge.encode(a))]);
       // read as `obj.method` and called on `obj`: a method call, with its compact request and its cached reads
       if (cell.key !== undefined && cell.of !== undefined && this && (this as any)[HANDLE] === cell.of) return bridge.call(cell.of, cell.key, args);
-      return bridge.sendJ(["apply", cell.id, bridge.encode(this), args.map((a) => bridge.encode(a))]);
+      const request = ["apply", cell.id, bridge.encode(this), args.map((a) => bridge.encode(a))];
+      // window.getComputedStyle per element is how Testing Library looks for hidden nodes: it must not drop the reads
+      if (cell.key !== undefined && PURE_CALLS.has(cell.key)) return bridge.send("J" + JSON.stringify(request));
+      return bridge.sendJ(request);
     };
     Object.defineProperty(f, HANDLE, { value: cell });
     return f;
@@ -895,11 +898,11 @@ export class Bridge {
         if (k === "then") return undefined;
         if (isWindow && typeof k === "string" && this.schemaByName.has(k)) return this.cls(k);
         const value = this.get(cell, k);
-        // not the window's: a test wraps those (window.fetch = ...) and keeps the original to call on
-        if (!isWindow && typeof value === "function") {
+        if (typeof value === "function") {
           const fn = (value as any)[HANDLE] as Cell | undefined;
           if (fn) {
-            fn.of = cell;
+            // not the window's: a test wraps those (window.fetch = ...) and keeps the original to call on
+            if (!isWindow) fn.of = cell;
             fn.key = k;
           }
         }
