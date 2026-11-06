@@ -1185,7 +1185,9 @@ export class Bridge {
     // (the time budget is armed by send(); only after the call is what the host had read dropped: it is still valid
     // while the operation runs, and a call that changes nothing then pays no re-read)
     const value = this.send("J" + JSON.stringify(request), request[0] === "release");
-    if (runs) this.invalidate();
+    // the queued operations of a transaction (tree, attribute and listener calls, state-only writes) run page code only
+    // through a custom element's callbacks, and `ce` says there are none
+    if (runs) this.invalidate(request[0] === "txn" && this.ce === 1);
     return value;
   }
 
@@ -1402,8 +1404,9 @@ export class Bridge {
     // replaces the node's children, so the direct path must invalidate structurally): inside
     // the queue its effect on the tree model is recorded, and it stays out of the set memo —
     // a structural operation queued later in the same transaction could move the text again.
+    const handlerSet = cell.t === 1 && typeof value === "function" && ON_HANDLER.test(key) && cell.l !== "select";
     const queueable =
-      memoizable || (key === "textContent" && cell.t === 1 && (typeof value === "string" || value === null));
+      memoizable || handlerSet || (key === "textContent" && cell.t === 1 && (typeof value === "string" || value === null));
     if (this.txn && queueable && this.txnEncodable(value)) {
       this.txn.ops.push({ kind: "set", cell, key, value });
       this.txn.touched.add(cell);
@@ -1426,6 +1429,11 @@ export class Bridge {
       if (backedAttr) {
         const per = this.txn.attrs.get(cell);
         if (per) per.delete(backedAttr);
+      }
+      if (handlerSet) {
+        if (this.handlers.size > 100000) this.handlers.clear();
+        // (a placeholder has no id yet: its first handler is always written)
+        if (!cell.pending) this.handlers.set(cell.id + "\u0001set:" + key, value);
       }
       if (!cell.pending && memoizable) {
         let per = this.setMemo.get(cell.id);

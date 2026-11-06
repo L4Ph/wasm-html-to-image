@@ -195,3 +195,34 @@ describe("transact: failure and nesting semantics", () => {
     }
   });
 });
+
+describe("transact: handlers and the page-code check", () => {
+  it("queues on… handler writes instead of flushing for each, and the handlers work after the flush", async () => {
+    const dom = await createDOM({ html: "<!doctype html><body></body>" }, { settleMs: 0 });
+    try {
+      const bridge = dom.bridge();
+      const d = bridge.window.document;
+      let hits = 0;
+      const buttons: any[] = [];
+      let flushes = 0;
+      const send = (bridge as any).sendJ.bind(bridge);
+      (bridge as any).sendJ = (req: unknown[]) => {
+        if (req[0] === "txn") flushes++;
+        return send(req);
+      };
+      dom.transact(() => {
+        for (let i = 0; i < 50; i++) {
+          const b = d.createElement("button");
+          b.onclick = () => hits++;
+          d.body.appendChild(b);
+          buttons.push(b);
+        }
+      });
+      expect(flushes).toBe(1);
+      for (const b of buttons) b.click();
+      expect(hits).toBe(50);
+    } finally {
+      dom.close();
+    }
+  });
+});
