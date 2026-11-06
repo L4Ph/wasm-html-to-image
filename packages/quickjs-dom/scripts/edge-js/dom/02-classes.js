@@ -189,9 +189,14 @@
    "spacer span strike strong style sub summary sup table tbody td template textarea tfoot th thead time title tr track tt u ul " +
    "var video wbr xmp").split(" ").forEach(function (n) { KNOWN_HTML_TAGS[n] = true; });
   var isUnknownElement = function (el) {
-    return el && el.nodeType === 1 && el.namespaceURI === XHTML_NS &&
-      !KNOWN_HTML_TAGS[el.localName] && el.localName.indexOf("-") < 0 &&
-      Object.getPrototypeOf(el) === P.HTMLElement;
+    // cheapest answers first: the namespace walk is the dear one, and only an element that is
+    // not a known tag, not a custom-element name and on the plain HTMLElement prototype can be
+    // unknown at all, so it is asked last and only for those (createElement runs this per node)
+    if (!el || el.nodeType !== 1) return false;
+    if (Object.getPrototypeOf(el) !== P.HTMLElement) return false;
+    var name = el.localName;
+    if (KNOWN_HTML_TAGS[name] || name.indexOf("-") >= 0) return false;
+    return el.namespaceURI === XHTML_NS;
   };
   var fixUnknown = function (root) {
     if (!root) return;

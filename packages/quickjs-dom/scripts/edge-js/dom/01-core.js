@@ -836,10 +836,25 @@
   // all named properties, and the bridge's class wrappers would keep host-side sets local.
   D.CSSStyleDeclarationCtor = StyleDecl;
   Object.defineProperty(StyleDecl.prototype, "parentRule", { value: null, writable: true, configurable: true });
-  var styleItems = function (s) { return parseStyle(s._el.getAttribute("style")); };
+  // the parsed declarations are kept in a WeakMap keyed by the declaration, together with
+  // the attribute text they came from: a run of property writes (a framework setting a
+  // style object) otherwise pays a full parse of the attribute per write, and the text
+  // check keeps an outside write of the style attribute (setAttribute, cssText) from
+  // leaving the cache stale. (Not fields on the declaration itself: el.style is a Proxy
+  // whose set trap reads every string key as a style property.)
+  var styleCache = new WeakMap();
+  var styleItems = function (s) {
+    var text = s._el.getAttribute("style");
+    var c = styleCache.get(s);
+    if (c && c.text === text) return c.items;
+    var items = parseStyle(text);
+    styleCache.set(s, { text: text, items: items });
+    return items;
+  };
   var styleWrite = function (s, items) {
     var text = items.map(function (d) { return d[0] + ": " + d[1] + ";"; }).join(" ");
     if (text || s._el.hasAttribute("style")) s._el.setAttribute("style", text);
+    styleCache.set(s, { text: s._el.getAttribute("style"), items: items });
   };
   var styleSet = function (s, name, value) {
     name = name.indexOf("--") === 0 ? name : kebab(name);
@@ -928,8 +943,15 @@
     return m && validDateString(m[1]) && validTimeString(m[2]) ? m[1] + "T" + m[2] : "";
   };
   var sanitizeValue = function (el, v) {
+    // the text-like types are the common case (a controlled input sets value per render):
+    // their only rule is that CR/LF go, and most values have neither — the indexOf scans
+    // answer that without building a replaced string or running the type chain
     var type = el.localName === "input" ? el.type : "";
-    if (type === "number") return /^-?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(v) ? v : "";
+    switch (type) {
+      case "text": case "search": case "tel": case "url": case "email": case "password":
+        return v.indexOf("\n") < 0 && v.indexOf("\r") < 0 ? v : v.replace(/[\r\n]/g, "");
+      case "number": return /^-?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$/.test(v) ? v : "";
+    }
     if (type === "range") {
       // the spec's range sanitisation: an unparsable value becomes the default (midpoint, or
       // the minimum in a reversed range), then the value is clamped to [min, max]
@@ -948,7 +970,6 @@
     if (type === "week") return validWeekString(v) ? v : "";
     if (type === "time") return validTimeString(v) ? v : "";
     if (type === "datetime-local") return normalizeLocalDateAndTimeString(v);
-    if (/^(text|search|tel|url|email|password)$/.test(type)) return v.replace(/[\r\n]/g, "");
     return v;
   };
   var valueDesc = Object.getOwnPropertyDescriptor(P.HTMLElement, "value");

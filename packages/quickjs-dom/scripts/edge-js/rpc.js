@@ -137,6 +137,7 @@
     var out = { $: "h", i: id };
     if (fn) out.c = "Function";
     else if (v === g) out.c = "Window";
+    else if (D.CSSStyleDeclarationCtor && v instanceof D.CSSStyleDeclarationCtor) out.c = "CSSStyleDeclaration";
     else {
       var cls = classOf(v);
       if (cls) {

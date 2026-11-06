@@ -31,6 +31,8 @@ interface InterfaceSchema {
 interface Cell {
   id: number;
   count: number;
+  /** the interface name the guest reported for the object, when it reported one */
+  c?: string;
   t?: number;
   n?: string;
   /** localName and tagName of an element: they never change, so they come with the handle. */
@@ -215,6 +217,10 @@ export class Bridge {
   // gives the same answer until the page changes (a write, any other call, a job or timer, a listener of the host's
   // that ran): the cache is dropped then.
   private readonly reads = new Map<string, unknown>();
+  /** `el.style` answers, kept apart: the declaration object of an element never changes identity when its
+   * properties are written, so an attribute-only change (invalidateAttrs) must not drop these — a run of
+   * style writes otherwise pays a fresh crossing per write just to re-read the same object. */
+  private readonly styleObjs = new Map<string, unknown>();
   /** The reads that depend on the shape of the tree only (see STRUCT_KEYS): a change of attributes leaves them be. */
   private readonly sreads = new Map<string, unknown>();
   /** Whether the page has custom elements (their callbacks run page code on an attribute change): 0 = ask, 1 = none, 2 = yes (final). */
@@ -324,6 +330,7 @@ export class Bridge {
   /** The page may have changed: forget what was read. (Called by whoever ran code in the page.) */
   invalidate(keepCe = false, keepOd = false): void {
     if (this.reads.size) this.reads.clear();
+    if (this.styleObjs.size) this.styleObjs.clear();
     if (this.sreads.size) this.sreads.clear();
     if (!keepCe && this.ce === 1) this.ce = 0;
     // what a node's ownerDocument was (`Cell.od`) is good until a node may have moved to another document
@@ -538,7 +545,7 @@ export class Bridge {
       return value;
     }
     const k = cell.id + "\u0001" + key;
-    const store = STRUCT_KEYS.has(key) ? this.sreads : this.reads;
+    const store = key === "style" && cell.t === 1 ? this.styleObjs : STRUCT_KEYS.has(key) ? this.sreads : this.reads;
     if (store.has(k)) return store.get(k);
     const value = this.send("g" + cell.id + "\u0001" + key);
     if (store.size > 100000) store.clear();
@@ -583,7 +590,11 @@ export class Bridge {
       }
     }
     if (
-      (cell.t === 1 ? (FINE_SET_KEYS.has(key) || ON_HANDLER.test(key)) && cell.l !== "select" : (cell.t === 3 || cell.t === 8) && TEXT_SET_KEYS.has(key)) &&
+      (cell.t === 1
+        ? (FINE_SET_KEYS.has(key) || ON_HANDLER.test(key)) && cell.l !== "select"
+        : cell.t === 3 || cell.t === 8
+          ? TEXT_SET_KEYS.has(key)
+          : cell.c === "CSSStyleDeclaration") &&
       this.fineOk()
     ) this.invalidateAttrs();
     // an assignment runs page code only through a custom element (`ce` says there is none), and moves a node to another
@@ -753,7 +764,7 @@ export class Bridge {
       (known as any)[HANDLE].count++;
       return known;
     }
-    const cell: Cell = { id: h.i, count: 1, t: h.t, n: h.n, l: h.l, g: h.g };
+    const cell: Cell = { id: h.i, count: 1, c: h.c, t: h.t, n: h.n, l: h.l, g: h.g };
     let w: any;
     const cls = h.c ? this.cls(h.c) : undefined;
     if (h.c === "Function") w = this.functionWrapper(cell);
