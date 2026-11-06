@@ -1,6 +1,6 @@
 {
   "name": "vitest-environment-wasm-quickjs-dom",
-  "version": "1.0.8",
+  "version": "1.0.9",
   "description": "The wasm-quickjs-dom environment for Vitest, under the name Vitest looks for: environment: \"wasm-quickjs-dom\"",
   "type": "module",
   "main": "./index.js",
