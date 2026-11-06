@@ -592,6 +592,10 @@ export function openPage(
         if (closed) throw new Error("The DOM is closed.");
         return (bridge ??= new Bridge(vm, { timeout, onCall: () => bridgeActivity(), ...options }));
       },
+      transact<T>(fn: () => T): T {
+        if (closed) throw new Error("The DOM is closed.");
+        return dom.bridge().transact(fn);
+      },
       toOptions<T extends PageInput>(options: T): T {
         const { javascript: _javascript, ...rest } = options;
         return { ...rest, url: undefined, value: serialize(), baseUrl: options.baseUrl ?? baseUrl } as unknown as T;

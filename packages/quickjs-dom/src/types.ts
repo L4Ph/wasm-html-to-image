@@ -233,6 +233,12 @@ export interface QuickJSDOM {
    * the page (an event listener) is called back at once. Made on first use; `close()` ends it.
    */
   bridge(options?: BridgeOptions): Bridge;
+  /**
+   * Run `fn` with the bridge's DOM operations queued and flushed as one transaction (see
+   * {@link Bridge.transact}): the fast way to build or change a lot of the tree from the host —
+   * a framework's render, for instance.
+   */
+  transact<T>(fn: () => T): T;
   /** Free the QuickJS runtime. The page cannot be used afterwards. */
   close(): void;
 }

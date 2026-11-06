@@ -33,6 +33,12 @@ interface Cell {
   count: number;
   /** the interface name the guest reported for the object, when it reported one */
   c?: string;
+  /** a node a transaction has queued the creation of: it has no page id until the transaction flushes */
+  pending?: boolean;
+  /** a node whose creation a failed transaction never reached: using it throws */
+  dead?: boolean;
+  /** the wrapper itself, for a placeholder (it is in no wrappers map until the flush adopts it) */
+  self?: unknown;
   t?: number;
   n?: string;
   /** localName and tagName of an element: they never change, so they come with the handle. */
@@ -84,9 +90,100 @@ const TREE_CALLS = new Set([
 const ATTR_CALLS = new Set(["setAttribute", "setAttributeNS", "removeAttribute", "removeAttributeNS", "toggleAttribute"]);
 /** Calls that register or drop a listener: nothing the host has read changes. */
 const LISTENER_CALLS = new Set(["addEventListener", "removeEventListener"]);
+/** Tags whose interface name is not "HTML" + the capitalised tag + "Element" (for a transaction placeholder's first guess; the flush corrects it). */
+const TAG_INTERFACES: Record<string, string> = {
+  a: "HTMLAnchorElement",
+  ul: "HTMLUListElement",
+  ol: "HTMLOListElement",
+  dl: "HTMLDListElement",
+  img: "HTMLImageElement",
+  br: "HTMLBRElement",
+  hr: "HTMLHRElement",
+  h1: "HTMLHeadingElement",
+  h2: "HTMLHeadingElement",
+  h3: "HTMLHeadingElement",
+  h4: "HTMLHeadingElement",
+  h5: "HTMLHeadingElement",
+  h6: "HTMLHeadingElement",
+  p: "HTMLParagraphElement",
+  td: "HTMLTableCellElement",
+  th: "HTMLTableCellElement",
+  tr: "HTMLTableRowElement",
+  col: "HTMLTableColElement",
+  q: "HTMLQuoteElement",
+  blockquote: "HTMLQuoteElement",
+  textarea: "HTMLTextAreaElement",
+  input: "HTMLInputElement",
+  select: "HTMLSelectElement",
+  option: "HTMLOptionElement",
+  optgroup: "HTMLOptGroupElement",
+  link: "HTMLLinkElement",
+  meta: "HTMLMetaElement",
+  base: "HTMLBaseElement",
+  script: "HTMLScriptElement",
+  style: "HTMLStyleElement",
+  title: "HTMLTitleElement",
+  html: "HTMLHtmlElement",
+  head: "HTMLHeadElement",
+  body: "HTMLBodyElement",
+  div: "HTMLDivElement",
+  span: "HTMLSpanElement",
+  li: "HTMLLIElement",
+  form: "HTMLFormElement",
+  label: "HTMLLabelElement",
+  button: "HTMLButtonElement",
+  fieldset: "HTMLFieldSetElement",
+  legend: "HTMLLegendElement",
+  table: "HTMLTableElement",
+  caption: "HTMLTableCaptionElement",
+  video: "HTMLVideoElement",
+  audio: "HTMLAudioElement",
+  canvas: "HTMLCanvasElement",
+  iframe: "HTMLIFrameElement",
+  object: "HTMLObjectElement",
+  embed: "HTMLEmbedElement",
+  source: "HTMLSourceElement",
+  track: "HTMLTrackElement",
+  area: "HTMLAreaElement",
+  map: "HTMLMapElement",
+  pre: "HTMLPreElement",
+  dialog: "HTMLDialogElement",
+  details: "HTMLDetailsElement",
+  menu: "HTMLMenuElement",
+  template: "HTMLTemplateElement",
+  picture: "HTMLPictureElement",
+  progress: "HTMLProgressElement",
+  meter: "HTMLMeterElement",
+  output: "HTMLOutputElement",
+  data: "HTMLDataElement",
+  time: "HTMLTimeElement",
+  mod: "HTMLModElement",
+  ins: "HTMLModElement",
+  del: "HTMLModElement",
+};
+/** Calls a transaction may queue: they build or rearrange the tree, set attributes, or register listeners, and
+ * either answer nothing or a node among their arguments. (toggleAttribute is absent: it answers a boolean the
+ * host cannot know before the page does.) */
+const TXN_CALLS = new Set([
+  "appendChild",
+  "insertBefore",
+  "removeChild",
+  "replaceChild",
+  "append",
+  "prepend",
+  "before",
+  "after",
+  "replaceWith",
+  "remove",
+  "setAttribute",
+  "setAttributeNS",
+  "removeAttribute",
+  "addEventListener",
+  "removeEventListener",
+]);
 /** Properties of an element whose assignment changes an attribute or a value, runs no code and moves no node. */
 const FINE_SET_KEYS = new Set([
-  "className", "id", "title", "lang", "dir", "hidden", "disabled", "checked", "value", "href", "src", "type", "name", "placeholder",
+  "className", "id", "title", "lang", "dir", "hidden", "disabled", "checked", "value", "defaultValue", "defaultChecked", "href", "src", "type", "name", "placeholder",
   "htmlFor", "tabIndex", "draggable", "spellcheck", "readOnly", "required", "selected", "multiple", "rel", "target", "alt", "width", "height",
 ]);
 /** The same for a text or comment node. */
@@ -173,6 +270,90 @@ export type BatchOp =
   | ["new", string, unknown[]?]
   | ["tree", object | BatchRef, BatchTree];
 
+/** One queued operation of a transaction (see Bridge.transact): the raw arguments are kept and encoded at the flush. */
+interface TxnOp {
+  kind: "call" | "create" | "set";
+  cell: Cell;
+  key: string;
+  args?: unknown[];
+  value?: unknown;
+  placeholder?: { cell: Cell; wrapper: object };
+}
+
+interface TxnState {
+  ops: TxnOp[];
+  /** the last value queued for a state-only property, per cell: a read of it answers from here */
+  written: Map<Cell, Map<string, unknown>>;
+  /** the attributes queued per cell (null: removed): they back the reflected-property reads of a fresh node */
+  attrs: Map<Cell, Map<string, string | null>>;
+  /** the children queued under a placeholder parent, in order: a fresh node's tree is exactly this */
+  kids: Map<Cell, unknown[]>;
+  /** the parent a queued structural call gave a node (null: known to have none) */
+  parentOf: Map<Cell, unknown>;
+  /** placeholder parents whose queued children are not fully known (a string went into append/prepend/…) */
+  noShadow: Set<Cell>;
+  /** every node this transaction has made, adopted or not: nothing but the queue has touched them */
+  fresh: Set<Cell>;
+  /** every cell a queued operation touches (as target, or as a moved child): cached answers for it are not trusted */
+  touched: Set<Cell>;
+  /** cells whose place in the tree a queued operation may have changed (targets, moved children, old and new parents) */
+  treeTouched: Set<Cell>;
+  /** a text-bearing write or a structural operation has been queued: text reads of anything may have moved */
+  textDirty: boolean;
+}
+
+/** Reads that describe a node's place in the tree: only a tree change moves them. */
+const TREE_READ_KEYS = new Set([
+  "firstChild",
+  "lastChild",
+  "firstElementChild",
+  "lastElementChild",
+  "nextSibling",
+  "previousSibling",
+  "nextElementSibling",
+  "previousElementSibling",
+  "childNodes",
+  "children",
+  "parentNode",
+  "parentElement",
+  "isConnected",
+  "childElementCount",
+]);
+
+/** Property → attribute for the reflected properties (the guest's reflectString/reflectBool tables). */
+const REFLECT_STR: Record<string, string> = {
+  className: "class",
+  id: "id",
+  title: "title",
+  lang: "lang",
+  dir: "dir",
+  slot: "slot",
+  href: "href",
+  src: "src",
+  alt: "alt",
+  name: "name",
+  type: "type",
+  rel: "rel",
+  target: "target",
+  placeholder: "placeholder",
+  htmlFor: "for",
+  accessKey: "accesskey",
+  tabIndex: "tabindex",
+};
+const REFLECT_BOOL: Record<string, string> = {
+  hidden: "hidden",
+  disabled: "disabled",
+  required: "required",
+  readOnly: "readonly",
+  multiple: "multiple",
+  autofocus: "autofocus",
+  open: "open",
+};
+/** Attribute → the properties it backs, for dropping queued property values an attribute write supersedes. */
+const ATTR_PROPS: Record<string, string[]> = { value: ["value", "defaultValue"], checked: ["checked", "defaultChecked"] };
+for (const [prop, attr] of Object.entries(REFLECT_STR)) (ATTR_PROPS[attr] ??= []).push(prop);
+for (const [prop, attr] of Object.entries(REFLECT_BOOL)) (ATTR_PROPS[attr] ??= []).push(prop);
+
 /** A tree built by one `["tree", parent, tree]` operation: one bridge call for the whole subtree. */
 export interface BatchTree {
   tag: string;
@@ -227,6 +408,9 @@ export class Bridge {
    * attribute write lands on it (attributes back properties), and the whole map goes with any full
    * invalidation, which is also what a release does before a handle id can be reused. */
   private readonly setMemo = new Map<number, Map<string, unknown>>();
+  /** The running transaction (Bridge.transact), when one is open. */
+  private txn: TxnState | null = null;
+  private txnFlushing = false;
   /** The reads that depend on the shape of the tree only (see STRUCT_KEYS): a change of attributes leaves them be. */
   private readonly sreads = new Map<string, unknown>();
   /** Whether the page has custom elements (their callbacks run page code on an attribute change): 0 = ask, 1 = none, 2 = yes (final). */
@@ -381,6 +565,502 @@ export class Bridge {
     return this.sendJ(["batch", list]) as unknown[];
   }
 
+  // ---- transactions ---------------------------------------------------------------------
+  // A synchronous run of host DOM mutations (a framework's commit phase is the shape) pays a
+  // bridge crossing per operation when it goes one by one. Inside transact(), the queueable
+  // operations — node creation, the structural calls, attribute and listener calls, and the
+  // state-only property writes — are queued instead and flushed as ONE compact transaction
+  // (the "txn" operation of rpc.js) when something needs the page's answer: a read that is
+  // not answered locally, a call that is not queueable, or the end of the scope. A node made
+  // inside is handed out at once as a placeholder whose handle is filled in by the flush;
+  // its tagName/nodeType/localName already answer from the placeholder. Semantics that a
+  // queue cannot keep are the documented price: page side effects of the queued operations
+  // (custom-element callbacks, mutation records) happen at the flush, in order, not at the
+  // line that queued them, and an exception of the page surfaces at the flush, not at the call.
+
+  /** Run `fn` with bridge operations queued and flushed as one transaction (see above). Nested calls join the outer transaction. */
+  transact<T>(fn: () => T): T {
+    if (this.txn) return fn();
+    const state: TxnState = {
+      ops: [],
+      written: new Map(),
+      attrs: new Map(),
+      kids: new Map(),
+      parentOf: new Map(),
+      noShadow: new Set(),
+      fresh: new Set(),
+      touched: new Set(),
+      treeTouched: new Set(),
+      textDirty: false,
+    };
+    this.txn = state;
+    try {
+      const out = fn();
+      this.flushTxn();
+      return out;
+    } catch (e) {
+      // the operations queued before the failure were intended: apply them, as the page
+      // would have seen them had the calls been made one by one, then let the error through
+      try {
+        this.flushTxn();
+      } catch {
+        /* the original error is the one that matters */
+      }
+      throw e;
+    } finally {
+      this.txn = null;
+    }
+  }
+
+  /** Flush the queued operations of the running transaction, if any. */
+  private flushTxn(): void {
+    const state = this.txn;
+    if (!state || state.ops.length === 0) return;
+    if (this.txnFlushing) {
+      // a host function called back while a flush runs, and now needs the page: only safe
+      // when nothing queued refers to a node the running flush has not made yet
+      for (const op of state.ops) {
+        if (op.cell.pending || (op.args ?? []).some((a) => ((a as any)?.[HANDLE] as Cell | undefined)?.pending)) {
+          throw new Error("quickjs-dom: a page callback used a node of the transaction that is still being applied; read it after the transaction ends");
+        }
+      }
+    }
+    const ops = state.ops;
+    state.ops = [];
+    const indexOf = new Map<Cell, number>();
+    ops.forEach((op, i) => {
+      if (op.placeholder) indexOf.set(op.placeholder.cell, i);
+    });
+    const records = ops.map((op) => this.txnRecord(op, indexOf));
+    this.txnFlushing = true;
+    let payload: string;
+    try {
+      payload = this.sendJ(["txn", records.join("\u0005")]) as string;
+    } finally {
+      this.txnFlushing = false;
+    }
+    let failedAt = -1;
+    let failMessage = "";
+    let linesText = payload;
+    if (payload.startsWith("!")) {
+      const bang = payload.indexOf("\u0001");
+      failedAt = Number(payload.slice(1, bang));
+      const rest = payload.slice(bang + 1);
+      const cut = rest.indexOf("\u0005");
+      failMessage = cut < 0 ? rest : rest.slice(0, cut);
+      linesText = cut < 0 ? "" : rest.slice(cut + 1);
+    }
+    const lines = linesText === "" ? [] : linesText.split("\u0005");
+    let li = 0;
+    ops.forEach((op, i) => {
+      if (op.kind === "set") return;
+      const line = lines[li++];
+      if (op.kind !== "create" || !op.placeholder) return;
+      if (failedAt >= 0 && i >= failedAt) {
+        op.placeholder.cell.dead = true;
+        op.placeholder.cell.pending = false;
+      } else if (line && line !== "-") {
+        this.adoptPlaceholder(op.placeholder, line);
+        // the node exists in the page now: the fresh-node derivations and the shadow child
+        // list (maintained only while the parent is unmade) no longer describe it. Its
+        // parentOf entry and the queued-write records stay — those are kept for every op.
+        state.fresh.delete(op.placeholder.cell);
+        state.kids.delete(op.placeholder.cell);
+      }
+    });
+    if (failedAt >= 0) throw new Error(`quickjs-dom: transaction failed at operation ${failedAt}: ${failMessage}`);
+  }
+
+  /** Give a placeholder the handle its creation answered with, and register it like any wrapper. */
+  private adoptPlaceholder(ph: { cell: Cell; wrapper: object }, line: string): void {
+    const parts = line.slice(1).split("\u0001"); // the line keeps handleString's leading "h"
+    const cell = ph.cell;
+    cell.id = Number(parts[0]);
+    if (parts[1]) cell.c = parts[1];
+    cell.t = parts[2] ? Number(parts[2]) : undefined;
+    cell.n = parts[3] || undefined;
+    for (let i = 4; i < parts.length; i++) {
+      if (parts[i].startsWith("l:")) cell.l = parts[i].slice(2);
+      else if (parts[i].startsWith("g:")) cell.g = parts[i].slice(2);
+    }
+    cell.pending = false;
+    cell.odg = this.odGen;
+    const cls = cell.c ? this.cls(cell.c) : undefined;
+    if (cls && Object.getPrototypeOf(ph.wrapper) !== cls.prototype) Object.setPrototypeOf(ph.wrapper, cls.prototype);
+    this.wrappers.set(cell.id, new WeakRef(ph.wrapper as object));
+    this.registry.register(ph.wrapper, cell);
+  }
+
+  /** The compact record of one queued operation, with result references resolved against this flush. */
+  private txnRecord(op: TxnOp, indexOf: Map<Cell, number>): string {
+    const targetOf = (cell: Cell): string => {
+      const i = indexOf.get(cell);
+      return i !== undefined ? "r" + i : "h" + cell.id;
+    };
+    const tokenOf = (a: unknown): string | null => {
+      const cell = a && (typeof a === "object" || typeof a === "function") ? ((a as any)[HANDLE] as Cell | undefined) : undefined;
+      if (cell) return targetOf(cell);
+      return this.encodeToken(a);
+    };
+    const argsOf = (args: unknown[]): string => {
+      if (args.length === 0) return "";
+      if (args.every((a) => typeof a === "string")) return "\u0003" + args.join("\u0002");
+      let fn = false;
+      const parts: string[] = [];
+      for (const a of args) {
+        const tok = tokenOf(a);
+        if (tok === null) throw new Error("quickjs-dom: an argument of a queued operation cannot be encoded");
+        if (tok.charCodeAt(0) === 102) fn = true;
+        parts.push(tok);
+      }
+      return (fn ? "\u0006" : "\u0004") + parts.join("\u0002");
+    };
+    const head = (op.kind === "create" ? "C" : op.kind === "call" ? "c" : "s") + targetOf(op.cell) + "\u0001" + op.key + "\u0001";
+    if (op.kind === "set") {
+      const v = op.value;
+      if (typeof v === "string") return head + "\u0003" + v;
+      const tok = tokenOf(v);
+      if (tok === null) throw new Error("quickjs-dom: a value of a queued set cannot be encoded");
+      return head + (tok.charCodeAt(0) === 102 ? "\u0006" : "\u0004") + tok;
+    }
+    return head + argsOf(op.args ?? []);
+  }
+
+  /** True when a value can travel in a transaction record: a compact token, a page object, or a string free of the record separators. */
+  private txnEncodable(a: unknown): boolean {
+    if (typeof a === "string") return !a.includes("\u0001") && !a.includes("\u0002") && !a.includes("\u0005");
+    if (a && (typeof a === "object" || typeof a === "function") && (a as any)[HANDLE]) return true;
+    return this.encodeToken(a) !== null;
+  }
+
+  /** The wrapper handed out for a node a transaction has queued the creation of (its handle arrives at the flush). */
+  private makePlaceholder(docCell: Cell, doc: unknown, key: string, args: unknown[]): { cell: Cell; wrapper: object } | null {
+    let clsName: string | undefined;
+    let t: number | undefined, n: string | undefined, l: string | undefined, g: string | undefined;
+    if (key === "createTextNode") {
+      clsName = "Text";
+      t = 3;
+      n = "#text";
+    } else if (key === "createComment") {
+      clsName = "Comment";
+      t = 8;
+      n = "#comment";
+    } else if (key === "createDocumentFragment") {
+      clsName = "DocumentFragment";
+      t = 11;
+      n = "#document-fragment";
+    } else if (key === "createElement" || key === "createElementNS") {
+      const ns = key === "createElementNS" ? String(args[0] ?? "") : "";
+      const name = String(key === "createElementNS" ? (args[1] ?? "") : (args[0] ?? ""));
+      const local = name.includes(":") ? name.slice(name.indexOf(":") + 1) : name;
+      t = 1;
+      l = local.toLowerCase();
+      if (ns === "" || ns === "http://www.w3.org/1999/xhtml") {
+        n = g = local.toUpperCase();
+        clsName = TAG_INTERFACES[l] ?? "HTML" + l.charAt(0).toUpperCase() + l.slice(1) + "Element";
+        if (!this.classes.has(clsName) && !this.schemaByName.has(clsName)) clsName = "HTMLElement";
+      } else if (ns === "http://www.w3.org/2000/svg") {
+        n = g = name;
+        clsName = "SVGElement";
+      } else {
+        n = g = name;
+        clsName = "Element";
+      }
+    } else return null;
+    const cls = this.cls(clsName) ?? this.cls("Node");
+    if (!cls) return null;
+    const cell: Cell = { id: -1, count: 1, pending: true, c: clsName, t, n, l, g, od: doc, odg: this.odGen };
+    const wrapper = this.classWrapper(cell, cls);
+    cell.self = wrapper;
+    return { cell, wrapper };
+  }
+
+  /** Queue a call of the running transaction, when it is one of the queueable ones. */
+  private queueCall(cell: Cell, key: string, args: unknown[], self?: unknown): { hit: boolean; value?: unknown } {
+    const state = this.txn;
+    if (!state) return { hit: false };
+    if (cell.t === 9 && CREATE_CALLS.has(key)) {
+      if (!args.every((a) => this.txnEncodable(a))) return { hit: false };
+      const ph = this.makePlaceholder(cell, self, key, args);
+      if (!ph) return { hit: false };
+      state.ops.push({ kind: "create", cell, key, args: [...args], placeholder: ph });
+      state.parentOf.set(ph.cell, null);
+      state.kids.set(ph.cell, []);
+      state.fresh.add(ph.cell);
+      return { hit: true, value: ph.wrapper };
+    }
+    if (cell.t !== 9 && TXN_CALLS.has(key)) {
+      if (!args.every((a) => this.txnEncodable(a))) return { hit: false };
+      state.ops.push({ kind: "call", cell, key, args: [...args] });
+      state.touched.add(cell);
+      for (const a of args) {
+        const ac = a && typeof a === "object" ? ((a as any)[HANDLE] as Cell | undefined) : undefined;
+        if (ac) state.touched.add(ac);
+      }
+      if (ATTR_CALLS.has(key)) {
+        this.setMemo.delete(cell.id);
+        this.txnAttr(state, cell, key, args);
+      } else if (!LISTENER_CALLS.has(key)) {
+        state.treeTouched.add(cell);
+        state.textDirty = true;
+        for (const a of args) {
+          const ac = a && typeof a === "object" ? ((a as any)[HANDLE] as Cell | undefined) : undefined;
+          if (ac) {
+            state.treeTouched.add(ac);
+            const oldParent = state.parentOf.get(ac);
+            const opc = oldParent && typeof oldParent === "object" ? ((oldParent as any)[HANDLE] as Cell | undefined) : undefined;
+            if (opc) state.treeTouched.add(opc);
+          }
+        }
+        this.txnTree(state, cell, self, key, args);
+      }
+      // the structural calls answer a node among their arguments; the rest answer nothing
+      const value =
+        key === "appendChild" || key === "insertBefore" || key === "removeChild" ? args[0] : key === "replaceChild" ? args[1] : undefined;
+      return { hit: true, value };
+    }
+    return { hit: false };
+  }
+
+  /** Record a queued attribute write: it backs the cell's reflected properties from here on. */
+  private txnAttr(state: TxnState, cell: Cell, key: string, args: unknown[]): void {
+    let name: string | undefined;
+    let value: string | null = null;
+    if (key === "setAttribute") {
+      name = String(args[0]).toLowerCase();
+      value = String(args[1]);
+    } else if (key === "setAttributeNS") {
+      name = String(args[1]);
+      value = String(args[2]);
+    } else if (key === "removeAttribute") {
+      name = String(args[0]).toLowerCase();
+    } else if (key === "removeAttributeNS") {
+      name = String(args[1]);
+    } else return;
+    let per = state.attrs.get(cell);
+    if (!per) {
+      per = new Map();
+      state.attrs.set(cell, per);
+    }
+    per.set(name, value);
+    const backed = ATTR_PROPS[name];
+    const w = state.written.get(cell);
+    if (backed && w) for (const prop of backed) w.delete(prop);
+  }
+
+  /** Keep the shadow of a placeholder's children (and every queued node's parent) current for a structural call. */
+  private txnTree(state: TxnState, cell: Cell, self: unknown, key: string, args: unknown[]): void {
+    const cellOf = (w: unknown): Cell | undefined => (w && typeof w === "object" ? ((w as any)[HANDLE] as Cell) : undefined);
+    const detach = (child: unknown): void => {
+      const cc = cellOf(child);
+      if (!cc) return;
+      const parent = state.parentOf.get(cc);
+      const pc = parent ? cellOf(parent) : undefined;
+      const list = pc ? state.kids.get(pc) : undefined;
+      if (list) {
+        const i = list.indexOf(child);
+        if (i >= 0) list.splice(i, 1);
+      }
+      state.parentOf.delete(cc);
+    };
+    const attach = (parent: unknown, parentCell: Cell, child: unknown, at?: number): void => {
+      detach(child);
+      const cc = cellOf(child);
+      if (cc) state.parentOf.set(cc, parent);
+      if (parentCell.pending) {
+        const list = state.kids.get(parentCell) ?? [];
+        if (at === undefined || at < 0 || at > list.length) list.push(child);
+        else list.splice(at, 0, child);
+        state.kids.set(parentCell, list);
+      }
+    };
+    const nodes = (list: unknown[]): boolean => list.every((a) => !!cellOf(a));
+    switch (key) {
+      case "appendChild":
+        attach(self, cell, args[0]);
+        break;
+      case "insertBefore": {
+        const list = state.kids.get(cell);
+        const at = args[1] == null ? -1 : list ? list.indexOf(args[1]) : -1;
+        if (cell.pending && args[1] != null && at < 0) state.noShadow.add(cell);
+        attach(self, cell, args[0], at < 0 ? undefined : at);
+        break;
+      }
+      case "removeChild": {
+        const list = state.kids.get(cell);
+        if (list) {
+          const i = list.indexOf(args[0]);
+          if (i >= 0) list.splice(i, 1);
+        }
+        const cc = cellOf(args[0]);
+        if (cc) state.parentOf.set(cc, null);
+        break;
+      }
+      case "replaceChild": {
+        const list = state.kids.get(cell);
+        const oc = cellOf(args[1]);
+        if (oc) state.parentOf.set(oc, null);
+        if (list) {
+          const i = list.indexOf(args[1]);
+          if (i >= 0) list[i] = args[0];
+        }
+        const nc = cellOf(args[0]);
+        if (nc) state.parentOf.set(nc, self);
+        break;
+      }
+      case "append":
+      case "prepend": {
+        if (!nodes(args)) {
+          if (cell.pending) state.noShadow.add(cell);
+          for (const a of args) {
+            const ac = cellOf(a);
+            if (ac) state.parentOf.set(ac, self);
+          }
+          break;
+        }
+        const list = state.kids.get(cell) ?? [];
+        if (key === "append") for (const a of args) attach(self, cell, a);
+        else args.forEach((a, i) => attach(self, cell, a, i));
+        break;
+      }
+      case "before":
+      case "after":
+      case "replaceWith": {
+        const parent = state.parentOf.get(cell);
+        const pc = parent ? cellOf(parent) : undefined;
+        if (!pc || !nodes(args)) break;
+        const list = state.kids.get(pc);
+        if (!list) break;
+        const i = list.indexOf(self);
+        if (i < 0) break;
+        if (key === "replaceWith") {
+          list.splice(i, 1, ...args);
+          state.parentOf.set(cell, null);
+          for (const a of args) {
+            const ac = cellOf(a);
+            if (ac) state.parentOf.set(ac, parent);
+          }
+        } else {
+          const at = key === "before" ? i : i + 1;
+          args.forEach((a, j) => {
+            detach(a);
+            list.splice(at + j, 0, a);
+            const ac = cellOf(a);
+            if (ac) state.parentOf.set(ac, parent);
+          });
+        }
+        break;
+      }
+      case "remove": {
+        const parent = state.parentOf.get(cell);
+        const pc = parent ? cellOf(parent) : undefined;
+        const list = pc ? state.kids.get(pc) : undefined;
+        if (list) {
+          const i = list.indexOf(self);
+          if (i >= 0) list.splice(i, 1);
+        }
+        state.parentOf.set(cell, null);
+        break;
+      }
+    }
+  }
+
+  /** True when something in the queue could have changed this read's answer: the only reads that must flush. */
+  private txnAffects(cell: Cell, key: string): boolean {
+    const state = this.txn;
+    if (!state) return false;
+    if (key === "textContent" || key === "innerHTML" || key === "outerHTML") return state.textDirty || state.treeTouched.has(cell);
+    if (TREE_READ_KEYS.has(key) || key === "ownerDocument") return state.treeTouched.has(cell);
+    const w = state.written.get(cell);
+    if (w) {
+      if (w.has(key)) return true;
+      // the value family shares state (the attribute, the dirty flag), as does checkedness
+      if ((key === "value" || key === "defaultValue") && (w.has("value") || w.has("defaultValue"))) return true;
+      if ((key === "checked" || key === "defaultChecked") && (w.has("checked") || w.has("defaultChecked"))) return true;
+      // a text write can feed other answers of the same node (a textarea's value, an option's)
+      if (w.has("textContent") || w.has("nodeValue") || w.has("data")) return true;
+    }
+    const at = state.attrs.get(cell);
+    if (at) {
+      for (const name of at.keys()) {
+        const props = ATTR_PROPS[name];
+        if (props && props.includes(key)) return true;
+      }
+    }
+    return false;
+  }
+
+  /** Drop the transaction's model of a cell: an operation that was not queued has changed it in ways the queue did not record. */
+  private txnForget(cell: Cell): void {
+    const state = this.txn;
+    if (!state) return;
+    state.fresh.delete(cell);
+    state.written.delete(cell);
+    state.attrs.delete(cell);
+    state.kids.delete(cell);
+    state.noShadow.add(cell);
+  }
+
+  /** A read the running transaction can answer from what it has queued, without asking the page. */
+  private txnRead(cell: Cell, key: string): { hit: boolean; value?: unknown } {
+    const state = this.txn;
+    if (!state) return { hit: false };
+    const w = state.written.get(cell);
+    if (w && w.has(key)) return { hit: true, value: w.get(key) };
+    // an attribute queued in this transaction backs the reflected properties of any cell:
+    // those getters are the attribute, by the guest's own definition
+    const queuedAttrs = state.attrs.get(cell);
+    if (queuedAttrs) {
+      if (key === "defaultValue" && queuedAttrs.has("value")) return { hit: true, value: queuedAttrs.get("value") ?? "" };
+      const rs = REFLECT_STR[key];
+      if (rs && key !== "type" && key !== "tabIndex" && queuedAttrs.has(rs)) return { hit: true, value: queuedAttrs.get(rs) ?? "" };
+      const rb = REFLECT_BOOL[key];
+      if (rb && queuedAttrs.has(rb)) return { hit: true, value: queuedAttrs.get(rb) !== null };
+    }
+    if (key === "parentNode" && state.parentOf.has(cell)) return { hit: true, value: state.parentOf.get(cell) };
+    if ((key === "nextSibling" || key === "previousSibling") && state.parentOf.has(cell)) {
+      const parent = state.parentOf.get(cell);
+      if (parent === null) return { hit: true, value: null };
+      const pc = (parent as any)[HANDLE] as Cell;
+      const list = state.kids.get(pc);
+      const me = cell.self ?? this.wrappers.get(cell.id)?.deref();
+      if (list && me) {
+        const i = list.indexOf(me);
+        if (i >= 0) return { hit: true, value: key === "nextSibling" ? (list[i + 1] ?? null) : (list[i - 1] ?? null) };
+      }
+      return { hit: false };
+    }
+    const fresh = cell.pending || state.fresh.has(cell);
+    if (!fresh || state.noShadow.has(cell)) return { hit: false };
+    if (ON_HANDLER.test(key)) return { hit: true, value: undefined };
+    if (key === "firstChild" || key === "lastChild") {
+      const kids = state.kids.get(cell);
+      return { hit: true, value: kids && kids.length ? (key === "firstChild" ? kids[0] : kids[kids.length - 1]) : null };
+    }
+    // a fresh node has no page-side state beyond the queue: a property its interface does
+    // not carry is an expando the page never set (the host's own sets live on the wrapper)
+    const cls = cell.c ? this.cls(cell.c) : undefined;
+    if (cls && !(key in cls.prototype) && !(key in cls)) return { hit: true, value: undefined };
+    // the reflected properties of a fresh element: its queued attributes are all it has
+    if (!(cell.c && (cell.c.startsWith("HTML") || cell.c === "Element"))) return { hit: false };
+    const attrs = state.attrs.get(cell);
+    const attr = (name: string): string | null => (attrs && attrs.has(name) ? attrs.get(name)! : null);
+    if (key === "defaultValue" && cell.l !== "textarea") return { hit: true, value: attr("value") ?? "" };
+    if (key === "value" && cell.l !== "textarea" && cell.l !== "select" && !(cell.l === "option" && attr("value") === null)) {
+      // a queued defaultValue write lands as the value attribute, and a fresh control's own
+      // value is still its default (nothing has set the dirty flag)
+      const dv = w?.get("defaultValue");
+      if (typeof dv === "string") return { hit: true, value: dv };
+      return { hit: true, value: attr("value") ?? "" };
+    }
+    if (key === "checked" || key === "defaultChecked") return { hit: true, value: attr("checked") !== null };
+    const rs = REFLECT_STR[key];
+    if (rs) return { hit: true, value: attr(rs) ?? "" };
+    const rb = REFLECT_BOOL[key];
+    if (rb) return { hit: true, value: attr(rb) !== null };
+    return { hit: false };
+  }
+
   /**
    * Dispatch several events at one target in one call, in order: the guest builds each event from `{ type, init }`
    * and runs the ordinary dispatch (capture, target, bubble, `preventDefault`, activation, listeners of the host
@@ -436,8 +1116,11 @@ export class Bridge {
 
   /** An operation in the form of a JSON array: [op, ...]. */
   private sendJ(request: unknown[]): unknown {
+    // anything else the host asks the page for sees the page after the transaction's queue
+    if (this.txn && request[0] !== "txn" && request[0] !== "release") this.flushTxn();
     // a function of the page that is called, an object made, or a batch run, may change anything
-    const runs = request[0] === "apply" || request[0] === "new" || request[0] === "del" || request[0] === "batch" || request[0] === "fire";
+    const runs =
+      request[0] === "apply" || request[0] === "new" || request[0] === "del" || request[0] === "batch" || request[0] === "fire" || request[0] === "txn";
     if (runs) {
       // only after: what the host had read is still valid while the operation runs (it is dropped below, before
       // the host sees the answer), and a call that changes nothing then pays no re-read
@@ -523,6 +1206,37 @@ export class Bridge {
   }
 
   private get(cell: Cell, key: string): unknown {
+    if (cell.dead) throw new Error("quickjs-dom: this node was never created (its transaction failed)");
+    if (this.txn) {
+      // inside a transaction, a read the queue itself can answer (a value it wrote, the tree
+      // it built under a fresh node, a fresh node's reflected properties) goes first
+      const queued = this.txnRead(cell, key);
+      if (queued.hit) return queued.value;
+      // then what the queue cannot change: the handle's own facts; the ownerDocument kept on
+      // the cell, for a cell the queue has not moved (a move within the same document — the
+      // overwhelming case — does not change it); and any cached answer for an untouched cell,
+      // which is still the page's answer because the queue is all that has run since.
+      const local =
+        (key === "nodeType" && cell.t !== undefined) ||
+        ((key === "tagName" || key === "nodeName") && (cell.g !== undefined || (cell.t !== 1 && cell.n !== undefined))) ||
+        (key === "localName" && cell.l !== undefined) ||
+        (key === "namespaceURI" && cell.u !== undefined) ||
+        (key === "defaultView" && cell.dvSet === true) ||
+        (key === "correspondingUseElement" && cell.t === 1 && cell.l !== "use") ||
+        (key === "ownerDocument" && cell.t !== 9 && cell.od !== undefined && !this.txn.treeTouched.has(cell));
+      if (!local && this.txn.ops.length > 0 && this.txnAffects(cell, key)) {
+        if (!this.txn.touched.has(cell)) {
+          const k = cell.id + "\u0001" + key;
+          const store = key === "style" && cell.t === 1 ? this.styleObjs : STRUCT_KEYS.has(key) ? this.sreads : this.reads;
+          if (store.has(k)) return store.get(k);
+        }
+        this.flushTxn();
+      }
+      // a read the queue cannot have changed falls through and is served as usual: the page's
+      // current answer for it is the answer after the queue too
+    } else if (cell.pending) {
+      throw new Error("quickjs-dom: this node's creation did not complete");
+    }
     // These never change for the object they belong to, so they avoid a call every time they are read. The
     // interface has them as accessors, so they must not answer from anywhere else (an element's namespaceURI,
     // a document's defaultView).
@@ -586,6 +1300,7 @@ export class Bridge {
   }
 
   private set(cell: Cell, key: string, value: unknown): void {
+    if (cell.dead) throw new Error("quickjs-dom: this node was never created (its transaction failed)");
     // The same handler set again (React sets `onclick = noop` on every update): the page already has it. What the host
     // knows of the page is dropped whenever page code might have run, and setAttribute("on...") drops it for its key.
     if (cell.t === 1 && ON_HANDLER.test(key)) {
@@ -605,7 +1320,7 @@ export class Bridge {
         : cell.t === 3 || cell.t === 8
           ? TEXT_SET_KEYS.has(key)
           : cell.c === "CSSStyleDeclaration");
-    if (memoizable) {
+    if (memoizable && !cell.pending) {
       const per = this.setMemo.get(cell.id);
       if (per && per.get(key) === value) return;
       const rk = cell.id + "\u0001" + key;
@@ -614,6 +1329,56 @@ export class Bridge {
         else this.setMemo.set(cell.id, new Map([[key, value]]));
         return;
       }
+    }
+    if (cell.pending && !this.txn) throw new Error("quickjs-dom: this node's creation did not complete");
+    // inside a transaction, a state-only write is queued, not sent; the flush applies it.
+    // textContent is queueable too, even though it is not a fine set on the direct path (it
+    // replaces the node's children, so the direct path must invalidate structurally): inside
+    // the queue its effect on the tree model is recorded, and it stays out of the set memo —
+    // a structural operation queued later in the same transaction could move the text again.
+    const queueable =
+      memoizable || (key === "textContent" && cell.t === 1 && (typeof value === "string" || value === null));
+    if (this.txn && queueable && this.txnEncodable(value)) {
+      this.txn.ops.push({ kind: "set", cell, key, value });
+      this.txn.touched.add(cell);
+      if (key === "textContent") {
+        this.txn.treeTouched.add(cell);
+        this.txn.textDirty = true;
+        this.txn.kids.delete(cell);
+        this.txn.noShadow.add(cell);
+      } else if (key === "nodeValue" || key === "data") {
+        this.txn.textDirty = true;
+      }
+      let wq = this.txn.written.get(cell);
+      if (!wq) {
+        wq = new Map();
+        this.txn.written.set(cell, wq);
+      }
+      wq.set(key, value);
+      // a property write is also the attribute's new state for the reflections it backs
+      const backedAttr = REFLECT_STR[key] ?? REFLECT_BOOL[key];
+      if (backedAttr) {
+        const per = this.txn.attrs.get(cell);
+        if (per) per.delete(backedAttr);
+      }
+      if (!cell.pending && memoizable) {
+        let per = this.setMemo.get(cell.id);
+        if (!per) {
+          per = new Map();
+          this.setMemo.set(cell.id, per);
+        }
+        if (key === "cssText") per.clear();
+        per.set(key, value);
+      }
+      return;
+    }
+    // a write that is not queued: the queue goes first (so the page sees the writes in the
+    // order the host made them), and the transaction's model of the cell is dropped
+    if (this.txn) {
+      if (this.txn.ops.length > 0) this.flushTxn();
+      this.txnForget(cell);
+    } else if (cell.pending) {
+      this.flushTxn();
     }
     if (
       (cell.t === 1
@@ -687,10 +1452,28 @@ export class Bridge {
   }
 
   private call(cell: Cell, key: string, args: unknown[], self?: unknown): unknown {
+    if (cell.dead) throw new Error("quickjs-dom: this node was never created (its transaction failed)");
     if (key === "matches" && cell.t === 1 && typeof cell.l === "string" && typeof args[0] === "string") {
       const check = analyzeSelector(args[0]);
       if (check.alwaysTrue) return true;
       if (check.tagRequired && !check.tagRequired.has(cell.l.toLowerCase())) return false;
+    }
+    if (this.txn) {
+      const q = this.queueCall(cell, key, args, self);
+      if (q.hit) return q.value;
+      // not queueable: the queue goes first, so the page this call sees is up to date, and
+      // the transaction's model of everything the call may have changed is dropped
+      this.flushTxn();
+      this.txnForget(cell);
+      for (const a of args) {
+        const ac = a && typeof a === "object" ? ((a as any)[HANDLE] as Cell | undefined) : undefined;
+        if (ac) {
+          this.txnForget(ac);
+          this.txn?.parentOf.delete(ac);
+        }
+      }
+    } else if (cell.pending) {
+      throw new Error("quickjs-dom: this node's creation did not complete");
     }
     const encoded = this.encodeArgs(args);
     if (cell.t === 9 ? CREATE_CALLS.has(key) : cell.t === 1 ? ATTR_CALLS.has(key) || LISTENER_CALLS.has(key) : false) {

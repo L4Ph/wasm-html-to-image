@@ -212,6 +212,17 @@ export class JSDOM {
     return this.page.dom.serialize();
   }
 
+  /**
+   * Run `fn` with DOM operations from the host queued and flushed as one bridge transaction:
+   * building or changing a lot of the tree (a framework's render, say) costs one bridge call
+   * for the run instead of one per operation. Reads that need the page flush the queue first,
+   * so the function's own logic sees a consistent tree. Not a jsdom API — jsdom has no bridge
+   * to save — but the tests and tools that drive this facade are exactly the ones that pay it.
+   */
+  transact<T>(fn: () => T): T {
+    return this.page.dom.transact(fn);
+  }
+
   /** jsdom keeps source locations of nodes when asked; this does not. */
   nodeLocation(): never {
     throw new Error("nodeLocation() is not supported: the parser does not keep source locations.");

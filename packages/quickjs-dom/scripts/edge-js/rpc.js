@@ -402,6 +402,66 @@
       }
       return out;
     },
+    // A transaction of mutations in one call, in the bridge's compact spelling (not JSON per
+    // operation — that is what batch pays, and why batch is not faster per operation): records
+    // apart by \u0005, fields by \u0001 — "c<target>\u0001<method>\u0001<args>" (the args in the
+    // call spelling: \u0003 strings, \u0004/\u0006 tokens, or JSON), "C" the same for a document
+    // creation call, whose handle the host is waiting for, and "s<target>\u0001<key>\u0001<value>".
+    // A target or token "r<i>" is the answer of operation i. The answer is one line per call
+    // operation, apart by \u0005: the created node's handle for a "C", "-" for any other call
+    // (its answer is a node the host already holds, or nothing). On a failure the answer is
+    // "!<index>\u0001<message>" followed by the lines of the operations before it; the ones
+    // before it stand, as they would have had the host made the calls itself.
+    txn: function (r) {
+      var records = String(r[1]).split("\u0005"), results = [], lines = [];
+      var resolve = function (tok) { return tok.charCodeAt(0) === 114 ? results[+tok.slice(1)] : target(+tok.slice(1)); };
+      var token = function (tok) {
+        var tc = tok.charCodeAt(0);
+        if (tc === 78) return null;
+        if (tc === 84) return true;
+        if (tc === 70) return false;
+        if (tc === 110) return +tok.slice(1);
+        if (tc === 115) return tok.slice(1);
+        if (tc === 104) return target(+tok.slice(1));
+        if (tc === 102) return hostFunction(+tok.slice(1));
+        if (tc === 114) return results[+tok.slice(1)];
+        return undefined;
+      };
+      var argsOf = function (a) {
+        if (!a) return [];
+        var c = a.charCodeAt(0);
+        if (c === 3) return a.slice(1).split("\u0002");
+        if (c === 4 || c === 6) return a.slice(1).split("\u0002").map(token);
+        return decAll(JSON.parse(a));
+      };
+      var valueOf = function (a) {
+        var c = a.charCodeAt(0);
+        if (c === 3) return a.slice(1);
+        if (c === 4 || c === 6) return token(a.slice(1));
+        return dec(JSON.parse(a));
+      };
+      for (var i = 0; i < records.length; i++) {
+        var rec = records[i];
+        if (!rec) { results.push(undefined); continue; }
+        var kind = rec.charCodeAt(0), i1 = rec.indexOf(SEP), i2 = rec.indexOf(SEP, i1 + 1);
+        try {
+          var tok = rec.slice(1, i1);
+          var tgt = tok.charCodeAt(0) === 114 ? results[+tok.slice(1)] : target(+tok.slice(1));
+          var key = rec.slice(i1 + 1, i2), rest = rec.slice(i2 + 1);
+          if (kind === 115) { // s — the common case (a plain string value) stays inline
+            tgt[key] = rest.charCodeAt(0) === 3 ? rest.slice(1) : valueOf(rest);
+            results.push(undefined);
+          } else { // c / C
+            var res = tgt[key].apply(tgt, argsOf(rest));
+            results.push(res);
+            lines.push(kind === 67 ? handleString(res) || "-" : "-");
+          }
+        } catch (e) {
+          return json("!" + i + SEP + (e && e.message !== undefined ? String(e.message) : String(e)) + "\u0005" + lines.join("\u0005"));
+        }
+      }
+      return json(lines.join("\u0005"));
+    },
     // A sequence of events at one target in one call: the guest makes each one and runs the ordinary dispatch,
     // so bubbling, cancelation, activation and listeners (the host's included) behave exactly as when the host
     // dispatches them itself.

@@ -436,10 +436,39 @@ Creates a new isolated QuickJS + C DOM instance, loads the HTML, executes script
 | `settle` | `(ms?: number) => Promise<void>` | Advances timers and network requests for up to `ms` (defaults to `settleMs`) or until idle. |
 | `serialize` | `() => string` | Serializes the current DOM tree back to an HTML string. |
 | `bridge` | `(options?: BridgeOptions) => Bridge` | Returns `{ window }`, giving the host synchronous proxy access to page DOM objects. |
+| `transact` | `<T>(fn: () => T) => T` | Runs `fn` as one bridge transaction (see below). |
 | `toOptions` | `<T>(options: T) => T` | Populates `value` (serialized HTML) and `baseUrl` on a renderer options object (e.g., for `wasm-html-to-image`). |
 | `markForLayout` | `() => string` | Returns serialized HTML with `qjsl-<n>` classes injected on elements for layout measurement. |
 | `setLayout` | `(boxes: Record<number, [x, y, w, h]>) => void` | Injects measured `[x, y, width, height]` bounding boxes back into the DOM. |
 | `close` | `() => void` | Frees the QuickJS WebAssembly instance. Must be called when done. |
+
+#### Transactions: batching host-side DOM work
+
+Every property write or method call made through the bridge (`dom.window`, or the
+`wasm-quickjs-dom/jsdom` facade) normally crosses into the page one at a time. When a block of
+host code performs many mutations in a row — a framework commit phase is the classic case —
+wrap it in `transact` (on `QuickJSDOM`, and on the `JSDOM` facade class):
+
+```ts
+dom.transact(() => {
+  const li = document.createElement("li");
+  li.className = "row";
+  li.textContent = "hello";
+  list.appendChild(li);
+});
+```
+
+Creations, state-only property writes (`className`, `value`, `textContent`, style properties,
+reflected attributes, …), attribute calls and structural calls (`appendChild`, `insertBefore`,
+`remove`, …) are queued and applied to the page in one call, in order. Nodes created inside
+the transaction are usable immediately (their tag name, node type and tree position are known
+host-side); their remaining properties resolve when the queue is applied. Reads the queue can
+answer — a value it wrote, a fresh node's children, a reflected property — are served locally;
+any other operation applies the queue first, so the code always observes a consistent page.
+If the callback throws, the operations queued so far are still applied before the error
+propagates. Page-side effects of the queued operations (mutation records, custom-element
+callbacks) happen when the queue is applied, in order; a page exception surfaces from the
+flush with the index of the operation that failed, and the operations before it stand.
 
 #### `PageLogEntry` Types
 
