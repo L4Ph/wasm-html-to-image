@@ -320,7 +320,12 @@
           return "j" + JSON.stringify(enc(v));
         }
         var e = enc(v);
-        if (e !== null && typeof e === "object" && e.$ === "h") return "h" + e.i + SEP + (e.c || "") + SEP + (e.t === undefined ? "" : e.t) + SEP + (e.n || "");
+        if (e !== null && typeof e === "object" && e.$ === "h") {
+          var classless = "h" + e.i + SEP + (e.c || "") + SEP + (e.t === undefined ? "" : e.t) + SEP + (e.n || "");
+          // an object with no class (el.style, a dataset): read again and again, it skips all of the above next time
+          if (!e.c) infos[e.i] = classless;
+          return classless;
+        }
         return "j" + JSON.stringify(e);
     }
   };

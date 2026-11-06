@@ -166,12 +166,13 @@
     // the tokens are indexed properties of the list (jsdom answers classList[0]); they are read from the
     // attribute every time, so the list is live even when the attribute changes outside the TokenList
     return new Proxy(this, {
+      // every read of a method or of _el comes through here, so names are told from indices by their first character
       get: function (t, k, r) {
-        if (typeof k === "string" && INDEX_KEY.test(k)) return tokens(t._el)[Number(k)];
-        return Reflect.get(t, k, r);
+        if (typeof k === "string" && k.charCodeAt(0) <= 57 && INDEX_KEY.test(k)) return tokens(t._el)[Number(k)];
+        return t[k]; // not Reflect.get with the proxy as receiver: the accessors only read _el, and through t that costs nothing
       },
       has: function (t, k) {
-        return typeof k === "string" && INDEX_KEY.test(k) ? Number(k) < tokens(t._el).length : Reflect.has(t, k);
+        return typeof k === "string" && k.charCodeAt(0) <= 57 && INDEX_KEY.test(k) ? Number(k) < tokens(t._el).length : Reflect.has(t, k);
       },
       ownKeys: function (t) {
         var out = [], ts = tokens(t._el);
@@ -848,17 +849,22 @@
   D.HTMLElement = HTMLElementShim;
 
   // style: a CSSStyleDeclaration over the style attribute (camelCase and kebab-case names, cssText)
-  var kebab = function (k) { return k.replace(/[A-Z]/g, function (c) { return "-" + c.toLowerCase(); }); };
+  var kebabNames = Object.create(null); // the property names of CSS and of a page: a bounded set
+  var kebab = function (k) {
+    return kebabNames[k] || (kebabNames[k] = k.replace(/[A-Z]/g, function (c) { return "-" + c.toLowerCase(); }));
+  };
   var parseStyle = function (text) {
     var out = [];
-    String(text || "").split(";").forEach(function (decl) {
-      var i = decl.indexOf(":");
-      if (i < 0) return;
+    if (!text) return out;
+    var decls = String(text).split(";");
+    for (var d = 0; d < decls.length; d++) {
+      var decl = decls[d], i = decl.indexOf(":");
+      if (i < 0) continue;
       var name = decl.slice(0, i).trim().toLowerCase(), value = decl.slice(i + 1).trim();
-      if (!name || !value) return;
+      if (!name || !value) continue;
       for (var j = 0; j < out.length; j++) if (out[j][0] === name) { out.splice(j, 1); break; }
       out.push([name, value]);
-    });
+    }
     return out;
   };
   var StyleDecl = function CSSStyleDeclaration(el) { Object.defineProperty(this, "_el", { value: el }); };
